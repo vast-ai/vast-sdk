@@ -1,4 +1,4 @@
-# Vast.AI Magic Comes To Python!
+# Vast.ai Magic Comes To Python!
 It's everything you love from the [Vast.ai cli](https://github.com/vast-ai/vast-python) tool, wrapped neatly in an easy-to-use Python interface!
 
 ## What's in the pip?
@@ -19,12 +19,14 @@ python: `vastai.cast(  spell='abracadabra')`
 Well what about them? You get jsonable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
 
 ### Alright, but what about an API key, what's the catch?
-You can provide it in the class instantiation: `vastai_sdk.VastAI("My-magnificen-key")`
+You can provide it in the class instantiation: `vastai.VastAI("My-magnificent-key")`
 
 OR, if you leave it blank it will look for a key in the same place as the cli, right there in your friendly `$HOME` directory.
 
 ### Introspection, `__doc__`, `__sig__`?
-Yes, yes, and yes. It's all in there. Your vscode, emacs, ipython, and neovim sessions will fly as your fingertips tab away.
+Yes, yes, and yes. It's all in there. 
+
+Your vscode, emacs, ipython, and neovim sessions will fly as your fingertips tab away.
 
 ### Help, support, all that stuff
 Sure. Just head over to GitHub issues.
