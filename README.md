@@ -35,7 +35,7 @@ Type "help", "copyright", "credits" or "license" for more information.
 This is easy, you got this! 
 
 ### What about the return values?
-Well what about them? You get jsonable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
+JSONable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
 
 ### Alright, but what about an API key, what's the catch?
 You can provide it in the class instantiation: `vastai.VastAI("My-magnificent-key")`
