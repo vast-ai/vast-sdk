@@ -1,5 +1,5 @@
 # 🪄 Vast.ai Magic Comes To Python!
-It's everything you love from the [Vast.ai cli](https://github.com/vast-ai/vast-python) tool, wrapped neatly in an easy-to-use Python interface!
+It's everything you love from the [Vast.ai CLI](https://github.com/vast-ai/vast-python) tool, wrapped neatly in an easy-to-use Python interface!
 
 ## 📦 What's in the pip?
 Why, it’s not just an SDK—it’s an entire development philosophy in a single import statement! With just a humble `pip install`, you unlock:
@@ -9,11 +9,30 @@ Why, it’s not just an SDK—it’s an entire development philosophy in a singl
  * 🌍 **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
 
 ## 📚 Documentation, Support, And More!
-Under the hood we are using what the [cli tool](https://github.com/vast-ai/vast-python) uses and so the documentation is the same. The arguments are the same. 
+Under the hood we are using what the [CLI tool](https://github.com/vast-ai/vast-python) uses and so the documentation is the same. The arguments are the same. 
 
 🐚 shell: `vastai cast --spell='abracadabra'` 
 
 🐍 python: `vastai.cast(spell='abracadabra')`
+
+Welll, almost.
+```python
+import vastai_sdk
+vastai = vastai_sdk.VastAI()
+```
+
+Try something like this:
+
+```python
+$ pip install vastai-sdk
+$ python
+Python 3.11.2 (main, Aug 26 2024, 07:20:54) [GCC 12.2.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import vastai_sdk
+>>> v = vastai_sdk.VastAI()
+>>> v.search_offers()
+````
+You can handle this. 
 
 ### What about the return values?
 Well what about them? You get jsonable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
@@ -21,14 +40,34 @@ Well what about them? You get jsonable objects, exactly as `--raw` would send to
 ### Alright, but what about an API key, what's the catch?
 You can provide it in the class instantiation: `vastai.VastAI("My-magnificent-key")`
 
-OR, if you leave it blank it will look for a key in the same place as the cli, right there in your friendly `$HOME` directory.
+OR, if you leave it blank it will look for a key in the same place as the CLI, right there in your friendly `$HOME` directory.
+
+The `creds_source` @property will tell you where what's being used came from. Example:
+
+```python
+>>> v=vastai_sdk.VastAI("Not-My-Real-Key-Don't-Worry!")
+>>> v.creds_source
+'CODE'
+>>> v.api_key
+"Not-My-Real-Key-Don't-Worry!"
+>>>
+```
 
 ### Introspection, `__doc__`, `__sig__`?
-Yes, yes, and yes. It's all in there. 
+Yes, yes, and yes. It's all in there. Try this at the handy python prompt
 
-Your vscode, emacs, ipython, and neovim sessions will fly as your fingertips tab away.
+```python
+>>> help(v.create_instance)
+```
+Pretty nice, right? Now do this! (No Spoilers!)
+
+```python
+>>> help(v.<tab>
+```
+
+All the helpers are there so your vscode, emacs, ipython, and neovim sessions will fly as your fingertips tab away.
 
 ### Help, support, all that stuff?
 Sure. Just head over to GitHub issues.
 
-Thanks for using Vast.ai. We 💖 you!
+Thanks for using [Vast.ai](https://vast.ai). We 💖 you!
