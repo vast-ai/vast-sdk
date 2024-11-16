@@ -15,7 +15,7 @@ Under the hood we are using what the [CLI tool](https://github.com/vast-ai/vast-
 
 🐍 python: `vastai.cast(spell='abracadabra')`
 
-Welll, almost. Just a little something this and we're ready to roll!
+Just a little something like this and we're ready to roll!
 ```python
 import vastai_sdk
 vastai = vastai_sdk.VastAI()
