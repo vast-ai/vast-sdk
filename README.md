@@ -13,7 +13,7 @@ Under the hood we are using what the [cli tool](https://github.com/vast-ai/vast-
 
 shell: `vastai cast --spell='abracadabra'` 
 
-python: `vastai.cast(  spell='abracadabra')`
+python: `vastai.cast(spell='abracadabra')`
 
 ### What about the return values?
 Well what about them? You get jsonable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
