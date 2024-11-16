@@ -2,13 +2,13 @@ from setuptools import setup, find_packages
 
 setup(
     name="vastai_sdk",
-    version="0.2.0",
+    version="0.1.0",
     description="SDK for Vast.ai GPU Cloud Service",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     author="Chris McKenzie",
     author_email="chris@vast.ai",
-    url="https://github.com/yourusername/vastai-sdk",
+    url="https://github.com/kristopolous/vastai-sdk",
     packages=find_packages(),
     install_requires=[
         "requests>=2.25",
