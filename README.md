@@ -32,7 +32,7 @@ Type "help", "copyright", "credits" or "license" for more information.
 >>> v = vastai_sdk.VastAI()
 >>> v.search_offers()
 ````
-You can handle this. 
+This is easy, you got this! 
 
 ### What about the return values?
 Well what about them? You get jsonable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
