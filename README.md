@@ -9,7 +9,7 @@ Why, it’s not just an SDK—it’s an entire development philosophy in a singl
  * **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
 
 ## Documentation, Support, And More!
-Under the hood we are using what the [https://github.com/vast-ai/vast-python](cli tool) uses and so the documentation is the same. The arguments are the same. 
+Under the hood we are using what the [cli tool](https://github.com/vast-ai/vast-python) uses and so the documentation is the same. The arguments are the same. 
 
 shell: `vastai cast --spell='abracadabra'` 
 
