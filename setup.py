@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="vast-sdk",
+    name="vastai-sdk",
     version="0.1.0",
     description="SDK for Vast.ai GPU Cloud Service",
     long_description=open("README.md").read(),
