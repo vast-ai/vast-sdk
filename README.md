@@ -21,7 +21,7 @@ import vastai_sdk
 vastai = vastai_sdk.VastAI()
 ```
 
-Try something like this:
+In fact, try this right now. I'll wait!
 
 ```python
 $ pip install vastai-sdk
