@@ -1,19 +1,19 @@
-# Vast.ai Magic Comes To Python!
+# 🪄 Vast.ai Magic Comes To Python!
 It's everything you love from the [Vast.ai cli](https://github.com/vast-ai/vast-python) tool, wrapped neatly in an easy-to-use Python interface!
 
-## What's in the pip?
+## 📦 What's in the pip?
 Why, it’s not just an SDK—it’s an entire development philosophy in a single import statement! With just a humble `pip install`, you unlock:
 
- * **Lightning-fast integrations**: So easy, it practically writes your code for you.
- * **Error-free operations**: Bugs? Banished. Exceptions? Extinct. Our SDK makes them a thing of the past!
- * **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
+ * ⚡ **Lightning-fast integrations**: So easy, it practically writes your code for you.
+ * 🛡️ **Error-free operations**: Bugs? Banished. Exceptions? Extinct. Our SDK makes them a thing of the past!
+ * 🌍 **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
 
-## Documentation, Support, And More!
+## 📚 Documentation, Support, And More!
 Under the hood we are using what the [cli tool](https://github.com/vast-ai/vast-python) uses and so the documentation is the same. The arguments are the same. 
 
-shell: `vastai cast --spell='abracadabra'` 
+🐚 shell: `vastai cast --spell='abracadabra'` 
 
-python: `vastai.cast(spell='abracadabra')`
+🐍 python: `vastai.cast(spell='abracadabra')`
 
 ### What about the return values?
 Well what about them? You get jsonable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
