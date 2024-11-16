@@ -8,7 +8,7 @@ Why, it’s not just an SDK—it’s an entire development philosophy in a singl
  * 🛡️ **Error-free operations**: Bugs? Banished. Exceptions? Extinct. Our SDK makes them a thing of the past!
  * 🌍 **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
 
-## 📚 Documentation, Support, And More!
+## 👀 Let's Sneak A Peek!
 Under the hood we are using what the [CLI tool](https://github.com/vast-ai/vast-python) uses and so the documentation is the same. The arguments are the same. 
 
 🐚 shell: `vastai cast --spell='abracadabra'` 
