@@ -28,7 +28,7 @@ Yes, yes, and yes. It's all in there.
 
 Your vscode, emacs, ipython, and neovim sessions will fly as your fingertips tab away.
 
-### Help, support, all that stuff
+### Help, support, all that stuff?
 Sure. Just head over to GitHub issues.
 
 Thanks for using Vast.ai. We 💖 you!
