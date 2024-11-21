@@ -4,4 +4,4 @@ requests==2.32.3
 borb==2.0.17
 python-dateutil==2.6.1
 pytz
-urllib3==2.2.3
+urllib3

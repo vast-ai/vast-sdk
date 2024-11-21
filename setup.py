@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vastai-sdk",
-    version="0.1.0",
+    version="0.1.1",
     description="SDK for Vast.ai GPU Cloud Service",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -19,7 +19,7 @@ setup(
 		"borb==2.0.17",
 		"python-dateutil",
 		"pytz",
-		"urllib3==2.2.3",
+		"urllib3",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
