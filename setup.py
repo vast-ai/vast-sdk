@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vastai-sdk",
-    version="0.1.1",
+    version="0.1.2",
     description="SDK for Vast.ai GPU Cloud Service",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -14,7 +14,6 @@ setup(
         "requests>=2.25",
         "jsonschema>=3.2",
 		"xdg>=1.0.0",
-		"argcomplete==3.5.1",
 		"requests==2.32.3",
 		"borb==2.0.17",
 		"python-dateutil",
