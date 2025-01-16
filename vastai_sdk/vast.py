@@ -19,11 +19,16 @@ import requests
 import getpass
 import subprocess
 from subprocess import PIPE
+import urllib3
+import atexit
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
 from typing import Optional
 import shutil
 import logging
 import textwrap
 from pathlib import Path
+import warnings
 
 ARGS = None
 TABCOMPLETE = False
@@ -65,7 +70,14 @@ logging.basicConfig(
 APP_NAME = "vastai"
 
 try:
+  # Although xdg-base-dirs is the newer name, there's 
+  # python compatibility issues with dependencies that
+  # can be unresolvable using things like python 3.9
+  # So we actually use the older name, thus older
+  # version for now. This is as of now (2024/11/15)
+  # the safer option. -cjm
   import xdg
+
   DIRS = {
       'config': xdg.xdg_config_home(),
       'temp': xdg.xdg_cache_home()
@@ -282,12 +294,13 @@ class apwrap(object):
             kwargs["formatter_class"] = argparse.RawDescriptionHelpFormatter
           
             sp = self.subparsers().add_parser(name, aliases=aliases_transformed, help=help_, **kwargs)
-            setattr(func, "mysignature", sp)
+
             # TODO: Sometimes the parser.command has a help parameter. Ideally
             # I'd extract this during the sdk phase but for the life of me
             # I can't find it.
+            setattr(func, "mysignature", sp)
             setattr(func, "mysignature_help", help_)
- 
+
             self.subparser_objs.append(sp)
             for arg in arguments:
                 tsp = sp.add_argument(*arg.args, **arg.kwargs)
@@ -445,6 +458,7 @@ displayable_fields = (
     ("duration", "Max_Days", "{:0.1f}", lambda x: x / (24.0 * 60.0 * 60.0), True),
     ("machine_id", "mach_id", "{}", None, True),
     ("verification", "status", "{}", None, True),
+    ("host_id", "host_id", "{}", None, True),
     ("direct_port_count", "ports", "{}", None, True),
     ("geolocation", "country", "{}", None, True),
    #  ("direct_port_count", "Direct Port Count", "{}", None, True),
@@ -471,6 +485,7 @@ displayable_fields_reserved = (
     ("duration", "Max_Days", "{:0.1f}", lambda x: x / (24.0 * 60.0 * 60.0), True),
     ("machine_id", "mach_id", "{}", None, True),
     ("verification", "status", "{}", None, True),
+    ("host_id", "host_id", "{}", None, True),
     ("direct_port_count", "ports", "{}", None, True),
     ("geolocation", "country", "{}", None, True),
    #  ("direct_port_count", "Direct Port Count", "{}", None, True),
@@ -525,6 +540,16 @@ machine_fields = (
     ("listed_inet_up_cost",   "netu_$/TB", "{:0.2f}", lambda x: x * 1024, True),
     ("listed_inet_down_cost", "netd_$/TB", "{:0.2f}", lambda x: x * 1024, True),
     ("gpu_occupancy", "occup", "{}", None, True),
+)
+
+# These fields are displayed when you do 'show maints'
+maintenance_fields = (
+    ("machine_id", "Machine ID", "{}", None, True),
+    ("start_time", "Start (Date/Time)", "{}", lambda x: datetime.fromtimestamp(x).strftime('%Y-%m-%d/%H:%M'), True),
+    ("end_time", "End (Date/Time)", "{}", lambda x: datetime.fromtimestamp(x).strftime('%Y-%m-%d/%H:%M'), True),
+    ("duration_hours", "Duration (Hrs)", "{}", None, True),
+    ("maintenance_category", "Category", "{}", None, True),
+    ("maintenance_reason", "Reason", "{}", None, True),
 )
 
 
@@ -659,6 +684,7 @@ offers_fields = {
     "ubuntu_version",
     "verification",
     "verified",
+    "vms_enabled",
     "geolocation"
 }
 
@@ -949,7 +975,7 @@ def cancel__copy(args: argparse.Namespace):
     @param dst: ID of copy instance Target to cancel.
     """
 
-    url = apiurl(args, f"/commands/rsync/")
+    url = apiurl(args, f"/commands/copy_direct/")
     dst_id = args.dst
     if (dst_id is None):
         print("invalid arguments")
@@ -1076,14 +1102,13 @@ def copy(args: argparse.Namespace):
     @param dst: Target to copy object to.
     """
 
-    url = apiurl(args, f"/commands/rsync/")
     (src_id, src_path) = parse_vast_url(args.src)
     (dst_id, dst_path) = parse_vast_url(args.dst)
     if (src_id is None) and (dst_id is None):
         print("invalid arguments")
         return
 
-    print(f"copying {src_id}:{src_path} {dst_id}:{dst_path}")
+    print(f"copying {str(src_id)+':' if src_id else ''}{src_path} {str(dst_id)+':' if dst_id else ''}{dst_path}")
 
     req_json = {
         "client_id": "me",
@@ -1095,6 +1120,10 @@ def copy(args: argparse.Namespace):
     if (args.explain):
         print("request json: ")
         print(req_json)
+    if (src_id is None) or (dst_id is None):
+        url = apiurl(args, f"/commands/rsync/")
+    else:
+        url = apiurl(args, f"/commands/copy_direct/")
     r = http_put(args, url,  headers=headers,json=req_json)
     r.raise_for_status()
     if (r.status_code == 200):
@@ -1125,12 +1154,69 @@ def copy(args: argparse.Namespace):
             if (rj["success"]):
                 print("Remote to Remote copy initiated - check instance status bar for progress updates (~30 seconds delayed).")
             else:
-                print(rj["msg"]);
+                if rj["msg"] == "src_path not supported VMs.":
+                    print("src instance is a VM, use `vm copy` command for VM to VM copies")
+                elif rj["msg"] == "dst_path not supported for VMs.":
+                    print("dst instance is a VM, use `vm copy` command for VM to VM copies")
+                else:
+                    print(rj["msg"]);
     else:
         print(r.text);
         print("failed with error {r.status_code}".format(**locals()));
 
 
+
+@parser.command(
+    argument("src", help="instance_id of source VM.", type=int),
+    argument("dst", help="instance_id of destination VM", type=int),
+    usage="vastai vm copy SRC DST",
+    help=" Copy VM image from one VM instance to another",
+    epilog=deindent("""
+        Copies the entire VM image of from one instance to another.
+
+        Note: destination VM must be stopped during copy. The source VM
+        does not need to be stopped, but it's highly recommended that you keep
+        the source VM stopped for the duration of the copy.
+    """),
+)
+def vm__copy(args: argparse.Namespace):
+    """
+    Transfer VM image from one instance to another.
+
+    @param src: instance_id of source.
+    @param dst: instance_id of destination.
+    """
+    src_id = args.src
+    dst_id = args.dst
+
+    print(f"copying from {src_id} to {dst_id}")
+
+    req_json = {
+        "client_id": "me",
+        "src_id": src_id,
+        "dst_id": dst_id,
+    }
+    url = apiurl(args, f"/commands/copy_direct/")
+    if (args.explain):
+        print("request json: ")
+        print(req_json)
+
+    r = http_put(args, url,  headers=headers,json=req_json)
+    r.raise_for_status()
+    if (r.status_code == 200):
+        rj = r.json();
+        if (rj["success"]):
+            print("Remote to Remote copy initiated - check instance status bar for progress updates (~30 seconds delayed).")
+        else:
+            if rj["msg"] == "Invalid src_path.":
+                print("src instance is not a VM")
+            elif rj["msg"] == "Invalid dst_path.":
+                print("dst instance is not a VM")
+            else:
+                print(rj["msg"]);
+    else:
+        print(r.text);
+        print("failed with error {r.status_code}".format(**locals()));
 
 
 @parser.command(
@@ -1391,7 +1477,8 @@ def get_runtype(args):
 
 @parser.command(
     argument("id", help="id of instance type to launch (returned from search offers)", type=int),
-    argument("--price", help="per machine bid price in $/hour", type=float),
+    argument("--template_hash", help="Create instance from template info", type=str),
+    argument("--user", help="User to use with docker create. This breaks some images, so only use this if you are certain you need it.", type=str),
     argument("--disk", help="size of local disk partition in GB", type=float, default=10),
     argument("--image", help="docker container image to launch", type=str),
     argument("--login", help="docker login arguments for private repo authentication, surround with '' ", type=str),
@@ -1412,7 +1499,7 @@ def get_runtype(args):
     #argument("--create-from", help="Existing instance id to use as basis for new instance. Instance configuration should usually be identical, as only the difference from the base image is copied.", type=str),
     argument("--force", help="Skip sanity checks when creating from an existing instance", action="store_true"),
     argument("--cancel-unavail", help="Return error if scheduling fails (rather than creating a stopped instance)", action="store_true"),
-    argument("--template_hash", help="Create instance from template info", type=str),
+    argument("--bid_price", help="(OPTIONAL) create an INTERRUPTIBLE instance with per machine bid price in $/hour", type=float),
     usage="vastai create instance ID [OPTIONS] [--args ...]",
     help="Create a new instance",
     epilog=deindent("""
@@ -1427,17 +1514,20 @@ def get_runtype(args):
         
         Examples:
 
-        # create an instance with the PyTorch (cuDNN Devel) template and 64GB of disk
+        # create an on-demand instance with the PyTorch (cuDNN Devel) template and 64GB of disk
         vastai create instance 384826 --template_hash 661d064bbda1f2a133816b6d55da07c3 --disk 64
 
-        # create an instance with the pytorch/pytorch image, 40GB of disk, open 8081 udp, direct ssh, set hostname to billybob, and a small onstart script
+        # create an on-demand instance with the pytorch/pytorch image, 40GB of disk, open 8081 udp, direct ssh, set hostname to billybob, and a small onstart script
         vastai create instance 6995713 --image pytorch/pytorch --disk 40 --env '-p 8081:8081/udp -h billybob' --ssh --direct --onstart-cmd "env | grep _ >> /etc/environment; echo 'starting up'";                
 
-        # create an instance with the bobsrepo/pytorch:latest image, 20GB of disk, open 22, 8080, jupyter ssh, and set some env variables
+        # create an on-demand instance with the bobsrepo/pytorch:latest image, 20GB of disk, open 22, 8080, jupyter ssh, and set some env variables
         vastai create instance 384827  --image bobsrepo/pytorch:latest --login '-u bob -p 9d8df!fd89ufZ docker.io' --jupyter --direct --env '-e TZ=PDT -e XNAME=XX4 -p 22:22 -p 8080:8080' --disk 20
 
-        # create an instance with the pytorch/pytorch image, 40GB of disk, override the entrypoint to bash and pass bash a simple command to keep the instance running. (args launch without ssh/jupyter)
+        # create an on-demand instance with the pytorch/pytorch image, 40GB of disk, override the entrypoint to bash and pass bash a simple command to keep the instance running. (args launch without ssh/jupyter)
         vastai create instance 5801802 --image pytorch/pytorch --disk 40 --onstart-cmd 'bash' --args -c 'echo hello; sleep infinity;'
+
+        # create an interruptible (spot) instance with the PyTorch (cuDNN Devel) template, 64GB of disk, and a bid price of $0.10/hr
+        vastai create instance 384826 --template_hash 661d064bbda1f2a133816b6d55da07c3 --disk 64 --bid_price 0.1
 
         Return value:
         Returns a json reporting the instance ID of the newly created instance:
@@ -1461,7 +1551,7 @@ def create__instance(args: argparse.Namespace):
         "client_id": "me",
         "image": args.image,
         "env" : parse_env(args.env),
-        "price": args.price,
+        "price": args.bid_price,
         "disk": args.disk,
         "label": args.label,
         "extra": args.extra,
@@ -1474,7 +1564,8 @@ def create__instance(args: argparse.Namespace):
         #"create_from": args.create_from,
         "force": args.force,
         "cancel_unavail": args.cancel_unavail,
-        "template_hash_id" : args.template_hash
+        "template_hash_id" : args.template_hash,
+        "user": args.user
     }
 
 
@@ -1588,34 +1679,43 @@ def create__team_role(args):
     r.raise_for_status()
     print(r.json())
 
-@parser.command(
-    argument("--name", help="name of the template", type=str),
-    argument("--image", help="docker container image to launch", type=str),
-    argument("--image_tag", help="docker image tag (can also be appended to end of image_path)", type=str),
-    argument("--login", help="docker login arguments for private repo authentication, surround with ''", type=str),
-    argument("--env", help="Contents of the 'Docker options' field", type=str),
-    
-    argument("--ssh",     help="Launch as an ssh instance type", action="store_true"),
-    argument("--jupyter", help="Launch as a jupyter instance instead of an ssh instance", action="store_true"),
-    argument("--direct",  help="Use (faster) direct connections for jupyter & ssh", action="store_true"),
-    argument("--jupyter-dir", help="For runtype 'jupyter', directory in instance to use to launch jupyter. Defaults to image's working directory", type=str),
-    argument("--jupyter-lab", help="For runtype 'jupyter', Launch instance with jupyter lab", action="store_true"),
+def get_template_arguments():
+    return [
+        argument("--name", help="name of the template", type=str),
+        argument("--image", help="docker container image to launch", type=str),
+        argument("--image_tag", help="docker image tag (can also be appended to end of image_path)", type=str),
+        argument("--href", help="link you want to provide", type=str),
+        argument("--repo", help="link to repository", type=str),
+        argument("--login", help="docker login arguments for private repo authentication, surround with ''", type=str),
+        argument("--env", help="Contents of the 'Docker options' field", type=str),
+        argument("--ssh", help="Launch as an ssh instance type", action="store_true"),
+        argument("--jupyter", help="Launch as a jupyter instance instead of an ssh instance", action="store_true"),
+        argument("--direct", help="Use (faster) direct connections for jupyter & ssh", action="store_true"),
+        argument("--jupyter-dir", help="For runtype 'jupyter', directory in instance to use to launch jupyter. Defaults to image's working directory", type=str),
+        argument("--jupyter-lab", help="For runtype 'jupyter', Launch instance with jupyter lab", action="store_true"),
+        argument("--onstart-cmd", help="contents of onstart script as single argument", type=str),
+        argument("--search_params", help="search offers filters", type=str),
+        argument("-n", "--no-default", action="store_true", help="Disable default search param query args"),
+        argument("--disk_space", help="disk storage space, in GB", type=str),
+        argument("--readme", help="readme string", type=str),
+        argument("--hide-readme", help="hide the readme from users", action="store_true"),
+        argument("--desc", help="description string", type=str),
+        argument("--public", help="make template available to public", action="store_true"),
+    ]
 
-    argument("--onstart-cmd", help="contents of onstart script as single argument", type=str),
-    argument("--search_params", help="search offers filters", type=str),
-    argument("-n", "--no-default", action="store_true", help="Disable default search param query args"),
-    argument("--disk_space", help="disk storage space, in GB", type=str),
+@parser.command(
+    *get_template_arguments(),
     usage="vastai create template",
     help="Create a new template",
     epilog=deindent("""
         Create a template that can be used to create instances with
 
         Example: 
-            vast ai create template --name "tgi-llama2-7B-quantized" --image_path "ghcr.io/huggingface/text-generation-inference:1.0.3" 
+            vastai create template --name "tgi-llama2-7B-quantized" --image "ghcr.io/huggingface/text-generation-inference:1.0.3" 
                                     --env "-p 3000:3000 -e MODEL_ARGS='--model-id TheBloke/Llama-2-7B-chat-GPTQ --quantize gptq'" 
-                                    --onstart_cmd 'wget -O - https://raw.githubusercontent.com/vast-ai/vast-pyworker/main/scripts/launch_tgi.sh | bash' 
+                                    --onstart-cmd 'wget -O - https://raw.githubusercontent.com/vast-ai/vast-pyworker/main/scripts/launch_tgi.sh | bash' 
                                     --search_params "gpu_ram>=23 num_gpus=1 gpu_name=RTX_3090 inet_down>128 direct_port_count>3 disk_space>=192 driver_version>=535086005 rented=False" 
-                                    --disk 8.0 --ssh --direct
+                                    --disk_space 8.0 --ssh --direct
     """)
 )
 def create__template(args):
@@ -1636,8 +1736,11 @@ def create__template(args):
     
     extra_filters = parse_query(args.search_params, default_search_query, offers_fields, offers_alias, offers_mult)
     template = {
+        "name" : args.name,
         "image" : args.image,
         "tag" : args.image_tag,
+        "href": args.href,
+        "repo" : args.repo,
         "env" : args.env, #str format
         "onstart" : args.onstart_cmd, #don't accept file name for now
         "jup_direct" : jup_direct,
@@ -1648,7 +1751,11 @@ def create__template(args):
         "jupyter_dir" : args.jupyter_dir,
         "docker_login_repo" : docker_login_repo, #can't store username/password with template for now
         "extra_filters" : extra_filters,
-        "recommended_disk_space" : args.disk_space
+        "recommended_disk_space" : args.disk_space,
+        "readme": args.readme,
+        "readme_visible": not args.hide_readme,
+        "desc": args.desc,
+        "private": not args.public,
     }
 
     if (args.explain):
@@ -2919,6 +3026,7 @@ def search__invoices(args):
             total_flops:            float     total TFLOPs from all GPUs
             ubuntu_version          string    host machine ubuntu OS version
             verified:               bool      is the machine verified
+            vms_enabled:            bool      is the machine a VM instance
     """),
     aliases=hidden_aliases(["search instances"]),
 )
@@ -3115,12 +3223,18 @@ def search__templates(args):
         return 1  
     url = apiurl(args, "/template/", {"select_cols" : ['*'], "select_filters" : query})
     r = requests.get(url, headers=headers)
-    r.raise_for_status()
-    rows = r.json()
-    if True: # args.raw:
-        return rows
+    if r.status_code != 200:
+        print(r.text)
+        r.raise_for_status()
+    elif 'json' in r.headers.get("Content-Type"):
+        rows = r.json().get('templates', [])
+        if True: #args.raw:
+            print(json.dumps(rows, indent=1, sort_keys=True))
+        else:
+            display_table(rows, displayable_fields)
     else:
-        display_table(rows, displayable_fields)
+        print(r.text)
+        print("failed with error {r.status_code}".format(**locals()))
 
 
 @parser.command(
@@ -3997,31 +4111,16 @@ def update__team_role(args):
 
 @parser.command(
     argument("HASH_ID", help="hash id of the template", type=str),
-    argument("--name", help="name of the template", type=str),
-    argument("--image", help="docker container image to launch", type=str),
-    argument("--image_tag", help="docker image tag (can also be appended to end of image_path)", type=str),
-    argument("--login", help="docker login arguments for private repo authentication, surround with ''", type=str),
-    argument("--env", help="Contents of the 'Docker options' field", type=str),
-    
-    argument("--ssh",     help="Launch as an ssh instance type", action="store_true"),
-    argument("--jupyter", help="Launch as a jupyter instance instead of an ssh instance", action="store_true"),
-    argument("--direct",  help="Use (faster) direct connections for jupyter & ssh", action="store_true"),
-    argument("--jupyter-dir", help="For runtype 'jupyter', directory in instance to use to launch jupyter. Defaults to image's working directory", type=str),
-    argument("--jupyter-lab", help="For runtype 'jupyter', Launch instance with jupyter lab", action="store_true"),
-
-    argument("--onstart-cmd", help="contents of onstart script as single argument", type=str),
-    argument("--search_params", help="search offers filters", type=str),
-    argument("-n", "--no-default", action="store_true", help="Disable default search param query args"),
-    argument("--disk_space", help="disk storage space, in GB", type=str),
+    *get_template_arguments(),
     usage="vastai update template HASH_ID",
     help="Update an existing template",
     epilog=deindent("""
         Update a template
 
         Example: 
-            vastai update template c81e7ab0e928a508510d1979346de10d --name "tgi-llama2-7B-quantized" --image_path "ghcr.io/huggingface/text-generation-inference:1.0.3" 
+            vastai update template c81e7ab0e928a508510d1979346de10d --name "tgi-llama2-7B-quantized" --image "ghcr.io/huggingface/text-generation-inference:1.0.3" 
                                     --env "-p 3000:3000 -e MODEL_ARGS='--model-id TheBloke/Llama-2-7B-chat-GPTQ --quantize gptq'" 
-                                    --onstart_cmd 'wget -O - https://raw.githubusercontent.com/vast-ai/vast-pyworker/main/scripts/launch_tgi.sh | bash' 
+                                    --onstart-cmd 'wget -O - https://raw.githubusercontent.com/vast-ai/vast-pyworker/main/scripts/launch_tgi.sh | bash' 
                                     --search_params "gpu_ram>=23 num_gpus=1 gpu_name=RTX_3090 inet_down>128 direct_port_count>3 disk_space>=192 driver_version>=535086005 rented=False" 
                                     --disk 8.0 --ssh --direct
     """)
@@ -4043,9 +4142,12 @@ def update__template(args):
     
     extra_filters = parse_query(args.search_params, default_search_query, offers_fields, offers_alias, offers_mult)
     template = {
-        "hash_id": args.HASH_id,
+        "hash_id": args.HASH_ID,
+        "name" : args.name,
         "image" : args.image,
         "tag" : args.image_tag,
+        "href" : args.href,
+        "repo" : args.repo,
         "env" : args.env, #str format
         "onstart" : args.onstart_cmd, #don't accept file name for now
         "jup_direct" : jup_direct,
@@ -4056,7 +4158,11 @@ def update__template(args):
         "jupyter_dir" : args.jupyter_dir,
         "docker_login_repo" : docker_login_repo, #can't store username/password with template for now
         "extra_filters" : extra_filters,
-        "recommended_disk_space" : args.disk_space
+        "recommended_disk_space" : args.disk_space,
+        "readme": args.readme,
+        "readme_visible": not args.hide_readme,
+        "desc": args.desc,
+        "private": not args.public,
     }
 
     json_blob = template
@@ -4276,7 +4382,6 @@ def filter_invoice_items(args: argparse.Namespace, rows: List) -> Dict:
 #
 
 
-
 @parser.command(
     argument("id", help="id of machine to cancel maintenance(s) for", type=int),
     usage="vastai cancel maint id",
@@ -4306,30 +4411,6 @@ def cancel__maint(args):
     r.raise_for_status()
     print(r.text)
     print(f"Cancel maintenance window(s) scheduled for machine {args.id} success".format(r.json()))
-
-
-
-@parser.command(
-   argument("id", help="id of machine to delete", type=int),
-    usage="vastai force delete a machine <id>",
-    help="[Host] Force Delete a machine",
-) 
-def force__delete_machine(args):
-    """
-    Deletes machine if the machine is not being used by clients. host jobs on their own machines are disregarded and machine is force deleted.
-    """
-    req_url = apiurl(args, "/machines/{machine_id}/force_delete/".format(machine_id=args.id));
-    r = http_post(args, req_url, headers=headers)
-    if (r.status_code == 200):
-        rj = r.json()
-        if (rj["success"]):
-            print("deleted machine_id ({machine_id}) and all related contracts.".format(machine_id=args.id));
-        else:
-            print(rj["msg"]);
-    else:
-        print(r.text);
-        print("failed with error {r.status_code}".format(**locals()));
-
 
 
 def cleanup_machine(args, machine_id):
@@ -4369,6 +4450,28 @@ def cleanup__machine(args):
     :rtype:
     """
     cleanup_machine(args, args.id)
+
+
+@parser.command(
+   argument("id", help="id of machine to delete", type=int),
+    usage="vastai delete machine <id>",
+    help="[Host] Delete machine if the machine is not being used by clients. host jobs on their own machines are disregarded and machine is force deleted.",
+) 
+def delete__machine(args):
+    """
+    Deletes machine if the machine is not in use by clients. Disregards host jobs on their own machines and force deletes a machine.
+    """
+    req_url = apiurl(args, "/machines/{machine_id}/force_delete/".format(machine_id=args.id));
+    r = http_post(args, req_url, headers=headers)
+    if (r.status_code == 200):
+        rj = r.json()
+        if (rj["success"]):
+            print("deleted machine_id ({machine_id}) and all related contracts.".format(machine_id=args.id));
+        else:
+            print(rj["msg"]);
+    else:
+        print(r.text);
+        print("failed with error {r.status_code}".format(**locals()));
 
 
 def list_machine(args, id):
@@ -4433,7 +4536,6 @@ def list_machine(args, id):
 )
 def list__machine(args):
     """
-
     :param argparse.Namespace args: should supply all the command-line options
     :rtype:
     """
@@ -4732,10 +4834,41 @@ def show__machines(args):
 
 
 @parser.command(
+    argument("-ids", help="comma seperated string of machine_ids for which to get maintenance information", type=str),
+    argument("-q", "--quiet", action="store_true", help="only display numeric ids of the machines in maintenance"),
+    usage="\nvastai show maints -ids 'machine_id_1' [OPTIONS]\nvastai show maints -ids 'machine_id_1, machine_id_2' [OPTIONS]",
+    help="[Host] Show maintenance information for host machines",
+)
+def show__maints(args):
+    """
+    Show the maintenance information for the machines
+
+    :param argparse.Namespace args: should supply all the command-line options
+    :rtype:
+    """
+    machine_ids = args.ids.split(',')
+    machine_ids = list(map(int, machine_ids))
+
+    req_url = apiurl(args, "/machines/maintenances", {"owner": "me", "machine_ids" : machine_ids});
+    r = http_get(args, req_url)
+    r.raise_for_status()
+    rows = r.json()
+    if args.raw:
+        return r
+    else:
+        if args.quiet:   
+            ids = [f"{row['machine_id']}" for row in rows]
+            print(" ".join(id for id in ids))
+        else:
+            display_table(rows, maintenance_fields)
+
+
+@parser.command(
     argument("id", help="id of machine to unlist", type=int),
     usage="vastai unlist machine <id>",
     help="[Host] Unlist a listed machine",
 )
+
 def unlist__machine(args):
     """
     Removes machine from list of machines for rent.
@@ -4756,8 +4889,766 @@ def unlist__machine(args):
         print("failed with error {r.status_code}".format(**locals()));
 
 
+def suppress_stdout():
+    """
+    A context manager to suppress standard output (stdout) within its block.
+
+    This is useful for silencing output from functions or blocks of code that 
+    print to stdout, especially when such output is not needed or should be 
+    hidden from the user.
+
+    Usage:
+        with suppress_stdout():
+            # Code block with suppressed stdout
+            some_function_that_prints()
+
+    Yields:
+        None
+    """
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+
+def destroy_instance_silent(id, args):
+    """
+    Silently destroys a specified instance, retrying up to three times if it fails.
+
+    This function calls the `destroy_instance` function to terminate an instance.
+    If the `args.raw` flag is set to True, the output of the destruction process
+    is suppressed to keep the console output clean.
+
+    Args:
+        id (str): The ID of the instance to destroy.
+        args (argparse.Namespace): Command-line arguments containing necessary flags.
+
+    Returns:
+        dict: A dictionary with a success status and error message, if any.
+    """
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Suppress output if args.raw is True
+            if args.raw:
+                with open(os.devnull, 'w') as devnull, redirect_stdout(devnull), redirect_stderr(devnull):
+                    destroy_instance(id, args)
+            else:
+                destroy_instance(id, args)
+
+            # If successful, exit the loop and return success
+            if not args.raw:
+                print(f"Instance {id} destroyed successfully on attempt {attempt}.")
+            return {"success": True}
+
+        except Exception as e:
+            if not args.raw:
+                print(f"Error destroying instance {id}: {e}")
+
+        # Wait before retrying if the attempt failed
+        if attempt < max_retries:
+            if not args.raw:
+                print(f"Retrying in 10 seconds... (Attempt {attempt}/{max_retries})")
+            time.sleep(10)
+        else:
+            if not args.raw:
+                print(f"Failed to destroy instance {id} after {max_retries} attempts.")
+            return {"success": False, "error": "Max retries exceeded"}
+
+
+def progress_print(args, *args_to_print):
+    """
+    Prints progress messages to the console based on the `raw` flag.
+
+    This function ensures that progress messages are only printed when the `raw`
+    output mode is not enabled. This is useful for controlling the verbosity of
+    the script's output, especially in machine-readable formats.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments containing flags
+                                  and options such as `raw`.
+        *args_to_print: Variable length argument list of messages to print.
+
+    Returns:
+        None
+    """
+    if not args.raw:
+        print(*args_to_print)
+
+def debug_print(args, *args_to_print):
+    """
+    Prints debug messages to the console based on the `debugging` and `raw` flags.
+
+    This function ensures that debug messages are only printed when debugging is
+    enabled and the `raw` output mode is not active. It helps in providing detailed
+    logs for troubleshooting without cluttering the standard output during normal
+    operation.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments containing flags
+                                  and options such as `debugging` and `raw`.
+        *args_to_print: Variable length argument list of debug messages to print.
+
+    Returns:
+        None
+    """
+    if args.debugging and not args.raw:
+        print(*args_to_print)
+
+def instance_exist(instance_id, api_key, args):
+    if not hasattr(args, 'debugging'):
+        args.debugging = False
+
+    if not instance_id:
+        return False
+
+    show_args = argparse.Namespace(
+        id=instance_id,
+        api_key=api_key,
+        url=args.url,
+        retry=args.retry,
+        explain=False,
+        raw=True,
+        debugging=args.debugging
+    )
+    try:
+        instance_info = show__instance(show_args)
+        
+        # Empty list or None means instance doesn't exist - return False without error
+        if not instance_info:
+            return False
+
+        # If we have instance info, check its status
+        status = instance_info.get('intended_status') or instance_info.get('actual_status')
+        if status in ['destroyed', 'terminated', 'offline']:
+            return False
+
+        return True
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            # Instance does not exist
+            return False
+        else:
+            if args.debugging:
+                debug_print(args, f"HTTPError when checking instance existence: {e}")
+            return False
+    except Exception as e:
+        if args.debugging:
+            debug_print(args, f"No instance found or Unexpected error checking instance existence: {e}")
+        return False
+    
+def run_machinetester(ip_address, port, instance_id, machine_id, delay, args, api_key=None):
+    """
+    Executes machine testing by connecting to the specified IP and port, monitoring
+    the instance's status, and handling test completion or failures.
+
+    This function performs the following steps:
+        1. Disables SSL warnings.
+        2. Optionally delays the start of testing.
+        3. Continuously checks the instance status and attempts to connect to the
+           `/progress` endpoint to monitor test progress.
+        4. Handles different response messages, such as completion or errors.
+        5. Implements timeout logic to prevent indefinite waiting.
+        6. Ensures instance cleanup in case of failures or completion.
+
+    Args:
+        ip_address (str): The public IP address of the instance to test.
+        port (int): The port number to connect to for testing.
+        instance_id (str): The ID of the instance being tested.
+        machine_id (str): The machine ID associated with the instance.
+        delay (int): The number of seconds to delay before starting the test.
+        args (argparse.Namespace): Parsed command-line arguments containing flags
+                                  and options such as `debugging` and `raw`.
+        api_key (str, optional): API key for authentication. Defaults to None.
+
+    Returns:
+        tuple:
+            - bool: `True` if the test was successful, `False` otherwise.
+            - str: Reason for failure if the test was not successful, empty string otherwise.
+    """
+
+    # Temporarily disable SSL warnings
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    delay = int(delay)
+
+    # Ensure debugging is set in args
+    if not hasattr(args, 'debugging'):
+        args.debugging = False
+
+    def is_instance(instance_id):
+        """Check instance status via show__instance."""
+        show_args = argparse.Namespace(
+            id=instance_id,
+            explain=False,
+            api_key=api_key,
+            url="https://console.vast.ai",
+            retry=3,
+            raw=True,
+            debugging=args.debugging,
+        )
+        try:
+            instance_info = show__instance(show_args)
+            if args.debugging:
+                debug_print(args, f"is_instance(): Output from vast show instance: {instance_info}")
+
+            if not instance_info or not isinstance(instance_info, dict):
+                if args.debugging:
+                    debug_print(args, "is_instance(): No valid instance information received.")
+                return 'unknown'
+
+            actual_status = instance_info.get('actual_status', 'unknown')
+            return actual_status if actual_status in ['running', 'offline', 'exited', 'created'] else 'unknown'
+        except Exception as e:
+            if args.debugging:
+                debug_print(args, f"is_instance(): Error: {e}")
+            return 'unknown'
+
+    # Prepare destroy_args with required attributes set to False as needed
+    destroy_args = argparse.Namespace(api_key=api_key, url="https://console.vast.ai", retry=3, explain=False, raw=args.raw, debbuging=args.debugging,)
+
+    # Delay start if specified
+    if delay > 0:
+        if args.debugging:
+            debug_print(args, f"Sleeping for {delay} seconds before starting tests.")
+        time.sleep(delay)
+
+    start_time = time.time()
+    no_response_seconds = 0
+    printed_lines = set()
+    first_connection_established = False  # Flag to track first successful connection
+    instance_destroyed = False  # Track whether the instance has been destroyed
+    try:
+        while time.time() - start_time < 300:
+            # Check instance status with high priority for offline status
+            status = is_instance(instance_id)
+            if args.debugging:
+                debug_print(args, f"Instance {instance_id} status: {status}")
+                
+            if status == 'offline':
+                reason = "Instance offline during testing"
+                progress_print(args, f"Instance {instance_id} went offline. {reason}")
+                destroy_instance_silent(instance_id, destroy_args)
+                instance_destroyed = True
+                with open("Error_testresults.log", "a") as f:
+                    f.write(f"{machine_id}:{instance_id} {reason}\n")
+                return False, reason
+
+            # Attempt to connect to the progress endpoint
+            try:
+                if args.debugging:
+                    debug_print(args, f"Sending GET request to https://{ip_address}:{port}/progress")
+                response = requests.get(f'https://{ip_address}:{port}/progress', verify=False, timeout=10)
+                
+                if response.status_code == 200 and not first_connection_established:
+                    progress_print(args, "Successfully established HTTPS connection to the server.")
+                    first_connection_established = True
+
+                message = response.text.strip()
+                if args.debugging:
+                    debug_print(args, f"Received message: '{message}'")
+            except requests.exceptions.RequestException as e:
+                if args.debugging:
+                    progress_print(args, f"Error making HTTPS request: {e}")
+                message = ''
+
+            # Process response messages
+            if message:
+                lines = message.split('\n')
+                new_lines = [line for line in lines if line not in printed_lines]
+                for line in new_lines:
+                    if line == 'DONE':
+                        progress_print(args, "Test completed successfully.")
+                        with open("Pass_testresults.log", "a") as f:
+                            f.write(f"{machine_id}\n")
+                        progress_print(args, f"Test passed.")
+                        destroy_instance_silent(instance_id, destroy_args)
+                        instance_destroyed = True
+                        return True, ""
+                    elif line.startswith('ERROR'):
+                        progress_print(args, line)
+                        with open("Error_testresults.log", "a") as f:
+                            f.write(f"{machine_id}:{instance_id} {line}\n")
+                        progress_print(args, f"Test failed with error: {line}.")
+                        destroy_instance_silent(instance_id, destroy_args)
+                        instance_destroyed = True
+                        return False, line
+                    else:
+                        progress_print(args, line)
+                    printed_lines.add(line)
+                no_response_seconds = 0
+            else:
+                no_response_seconds += 20
+                if args.debugging:
+                    debug_print(args, f"No message received. Incremented no_response_seconds to {no_response_seconds}.")
+
+            if status == 'running' and no_response_seconds >= 60:
+                with open("Error_testresults.log", "a") as f:
+                    f.write(f"{machine_id}:{instance_id} No response from port {port} for 60s with running instance\n")
+                progress_print(args, f"No response for 60s with running instance. This may indicate a misconfiguration of ports on the machine.")
+                destroy_instance_silent(instance_id, destroy_args)
+                instance_destroyed = True
+                return False, "No response for 60 seconds with running instance"
+
+            if args.debugging:
+                debug_print(args, "Waiting for 20 seconds before the next check.")
+            time.sleep(20)
+
+        if args.debugging:
+            debug_print(args, f"Time limit reached. Destroying instance {instance_id}.")
+        return False, "Test did not complete within the time limit"
+    finally:
+        # Ensure instance cleanup
+        if not instance_destroyed and instance_id and instance_exist(instance_id, api_key, destroy_args):
+           destroy_instance_silent(instance_id, destroy_args)
+        progress_print(args, f"Machine: {machine_id} Done with testing remote.py results {message}")
+        warnings.simplefilter('default')
+
+def safe_float(value):
+    """
+    Convert value to float, returning 0 if value is None.
+    
+    Args:
+        value: The value to convert to float
+        
+    Returns:
+        float: The converted value, or 0 if value is None
+    """
+    if value is None:
+        return 0
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0
+
+def check_requirements(machine_id, api_key, args):
+    """
+    Validates whether a machine meets the specified hardware and performance requirements.
+
+    This function queries the machine's offers and checks various criteria such as CUDA
+    version, reliability, port count, PCIe bandwidth, internet speeds, GPU RAM, system
+    RAM, and CPU cores relative to the number of GPUs. If any of these requirements are
+    not met, it records the reasons for the failure.
+
+    Args:
+        machine_id (str): The ID of the machine to check.
+        api_key (str): API key for authentication with the VAST API.
+        args (argparse.Namespace): Parsed command-line arguments containing flags
+                                  and options such as `debugging` and `raw`.
+
+    Returns:
+        tuple:
+            - bool: `True` if the machine meets all requirements, `False` otherwise.
+            - list: A list of reasons why the machine does not meet the requirements.
+    """
+    unmet_reasons = []
+
+    # Prepare search arguments to get machine offers
+    search_args = argparse.Namespace(
+        query=[f"machine_id={machine_id}", "verified=any", "rentable=true"],
+        type="on-demand",
+        quiet=False,
+        no_default=False,
+        new=False,
+        limit=None,
+        disable_bundling=False,
+        storage=5.0,
+        order="score-",
+        raw=True,  # Ensure raw output to get data directly
+        explain=args.explain,
+        api_key=api_key,
+        url=args.url,
+        retry=args.retry
+    )
+
+    try:
+        # Call search__offers and capture the return value directly
+        offers = search__offers(search_args)
+        if args.debugging:
+            debug_print(args, "Captured offers from search__offers:", offers)
+
+        if not offers:
+            unmet_reasons.append(f"Machine ID {machine_id} not found or not rentable.")
+            progress_print(args, f"Machine ID {machine_id} not found or not rentable.")
+            return False, unmet_reasons
+
+        # Sort offers based on 'dlperf' in descending order
+        sorted_offers = sorted(offers, key=lambda x: x.get('dlperf', 0), reverse=True)
+        top_offer = sorted_offers[0]
+
+        if args.debugging:
+            debug_print(args, "Top offer found:", top_offer)
+
+        # Requirement checks
+        # 1. CUDA version
+        if safe_float(top_offer.get('cuda_max_good')) < 12.4:
+            unmet_reasons.append("CUDA version < 12.4")
+
+        # 2. Reliability
+        if safe_float(top_offer.get('reliability')) <= 0.90:
+            unmet_reasons.append("Reliability <= 0.90")
+
+        # 3. Direct port count
+        if safe_float(top_offer.get('direct_port_count')) <= 3:
+            unmet_reasons.append("Direct port count <= 3")
+
+        # 4. PCIe bandwidth
+        if safe_float(top_offer.get('pcie_bw')) <= 2.85:
+            unmet_reasons.append("PCIe bandwidth <= 2.85")
+
+        # 5. Download speed
+        if safe_float(top_offer.get('inet_down')) <= 10:
+            unmet_reasons.append("Download speed <= 10 Mb/s")
+
+        # 6. Upload speed
+        if safe_float(top_offer.get('inet_up')) <= 10:
+            unmet_reasons.append("Upload speed <= 10 Mb/s")
+
+        # 7. GPU RAM
+        if safe_float(top_offer.get('gpu_ram')) <= 7:
+            unmet_reasons.append("GPU RAM <= 7 GB")
+
+        # Additional Requirement Checks
+
+        # 8. System RAM vs. Total GPU RAM
+        gpu_total_ram = safe_float(top_offer.get('gpu_total_ram'))  # in MB
+        cpu_ram = safe_float(top_offer.get('cpu_ram'))  # in MB
+        if cpu_ram < gpu_total_ram:
+            unmet_reasons.append("System RAM is less than total VRAM.")
+
+        # Debugging Information for RAM
+        if args.debugging:
+            debug_print(args, f"CPU RAM: {cpu_ram} MB")
+            debug_print(args, f"Total GPU RAM: {gpu_total_ram} MB")
+
+        # 9. CPU Cores vs. Number of GPUs
+        cpu_cores = int(safe_float(top_offer.get('cpu_cores')))
+        num_gpus = int(safe_float(top_offer.get('num_gpus')))
+        if cpu_cores < 2 * num_gpus:
+            unmet_reasons.append("Number of CPU cores is less than twice the number of GPUs.")
+
+        # Debugging Information for CPU Cores
+        if args.debugging:
+            debug_print(args, f"CPU Cores: {cpu_cores}")
+            debug_print(args, f"Number of GPUs: {num_gpus}")
+
+        # Return True if all requirements are met, False otherwise
+        if unmet_reasons:
+            progress_print(args, f"Machine ID {machine_id} does not meet the requirements:")
+            for reason in unmet_reasons:
+                progress_print(args, f"- {reason}")
+            return False, unmet_reasons
+        else:
+            progress_print(args, f"Machine ID {machine_id} meets all the requirements.")
+            return True, []
+
+    except Exception as e:
+        progress_print(args, f"An unexpected error occurred: {str(e)}")
+        if args.debugging:
+            debug_print(args, f"Exception details: {e}")
+        return False, [f"Unexpected error: {str(e)}"]
+
+
+def wait_for_instance(instance_id, api_key, args, destroy_args, timeout=900, interval=10):
+    """
+    Waits for an instance to reach a running state and monitors its status for errors.
+
+    """
+
+    if not hasattr(args, 'debugging'):
+        args.debugging = False
+
+    start_time = time.time()
+    show_args = argparse.Namespace(
+        id=instance_id,
+        quiet=False,
+        raw=True,  # Ensure raw output to get data directly
+        explain=args.explain,
+        api_key=api_key,
+        url=args.url,
+        retry=args.retry,
+        debugging=args.debugging,
+    )
+    
+    if args.debugging:
+        debug_print(args, "Starting wait_for_instance with ID:", instance_id)
+    
+    while time.time() - start_time < timeout:
+        try:
+            # Directly call show__instance and capture the return value
+            instance_info = show__instance(show_args)
+            
+            if not instance_info:
+                progress_print(args, f"No information returned for instance {instance_id}. Retrying...")
+                time.sleep(interval)
+                continue  # Retry
+
+            # Check for error in status_msg
+            status_msg = instance_info.get('status_msg', '')
+            if status_msg and 'Error' in status_msg:
+                reason = f"Instance {instance_id} encountered an error: {status_msg.strip()}"
+                progress_print(args, reason)
+                
+                # Destroy the instance
+                if instance_exist(instance_id, api_key, destroy_args):
+                    destroy_instance_silent(instance_id, destroy_args)
+                    progress_print(args, f"Instance {instance_id} has been destroyed due to error.")
+                else:
+                    progress_print(args, f"Instance {instance_id} could not be destroyed or does not exist.")
+                
+                return False, reason
+            
+            # Check if instance went offline
+            actual_status = instance_info.get('actual_status', 'unknown')
+            if actual_status == 'offline':
+                reason = "Instance offline during testing"
+                progress_print(args, reason)
+                
+                # Destroy the instance
+                if instance_exist(instance_id, api_key, destroy_args):
+                    destroy_instance_silent(instance_id, destroy_args)
+                    progress_print(args, f"Instance {instance_id} has been destroyed due to being offline.")
+                else:
+                    progress_print(args, f"Instance {instance_id} could not be destroyed or does not exist.")
+                
+                return False, reason
+            
+            # Check if instance is running
+            if instance_info.get('intended_status') == 'running' and actual_status == 'running':
+                if args.debugging:
+                    debug_print(args, f"Instance {instance_id} is now running.")
+                return instance_info, None  # Return instance_info with None for reason
+            
+            # Print feedback about the current status
+            progress_print(args, f"Instance {instance_id} status: {actual_status}... waiting for 'running' status.")
+            time.sleep(interval)
+        
+        except Exception as e:
+            progress_print(args, f"Error retrieving instance info for {instance_id}: {e}. Retrying...")
+            if args.debugging:
+                debug_print(args, f"Exception details: {str(e)}")
+            time.sleep(interval)
+    
+    # Timeout reached without instance running
+    reason = f"Instance {instance_id} did not become running within {timeout} seconds."
+    progress_print(args, reason)
+    return False, reason
+
+@parser.command(
+    argument("machine_id", help="Machine ID", type=str),
+    argument("--debugging", action="store_true", help="Enable debugging output"),
+    argument("--explain", action="store_true", help="Output verbose explanation of mapping of CLI calls to HTTPS API endpoints"),
+    argument("--raw", action="store_true", help="Output machine-readable JSON"), 
+    argument("--url", help="Server REST API URL", default="https://console.vast.ai"),
+    argument("--retry", help="Retry limit", type=int, default=3),
+    usage="vastai self-test machine <machine_id> [--debugging] [--explain] [--api_key API_KEY] [--url URL] [--retry RETRY] [--raw]",
+    help="Perform a self-test on the specified machine",
+    epilog=deindent("""
+        This command tests if a machine meets specific requirements and 
+        runs a series of tests to ensure it's functioning correctly.
+
+        Examples:
+         vast self-test machine 12345
+         vast self-test machine 12345 --debugging
+         vast self-test machine 12345 --explain
+         vast self-test machine 12345 --api_key <YOUR_API_KEY>
+    """),
+)
+
+def self_test__machine(args):
+    """
+    Performs a self-test on the specified machine to verify its compliance with
+    required specifications and functionality.
+    """
+    instance_id = None  # Store instance ID for cleanup if needed
+    result = {"success": False, "reason": ""}
+    
+    # Ensure debugging attribute exists in args
+    if not hasattr(args, 'debugging'):
+        args.debugging = False
+    
+    try:
+        # Load API key
+        if not args.api_key:
+            api_key_file = os.path.expanduser("~/.vast_api_key")
+            if os.path.exists(api_key_file):
+                with open(api_key_file, "r") as reader:
+                    args.api_key = reader.read().strip()
+            else:
+                progress_print(args, "No API key found. Please set it using 'vast set api-key YOUR_API_KEY_HERE'")
+                result["reason"] = "API key not found."
+        
+        api_key = args.api_key
+        if not api_key:
+            raise Exception("API key is missing.")
+
+        # Prepare destroy_args
+        destroy_args = argparse.Namespace(
+            api_key=api_key,
+            url=args.url,
+            retry=args.retry,
+            explain=False,
+            raw=args.raw,
+            debugging=args.debugging,
+        )
+
+        # Check requirements
+        meets_requirements, unmet_reasons = check_requirements(args.machine_id, api_key, args)
+        if not meets_requirements:
+            progress_print(args, f"Machine ID {args.machine_id} does not meet the requirements:")
+            for reason in unmet_reasons:
+                progress_print(args, f"- {reason}")
+            result["reason"] = "; ".join(unmet_reasons)
+        else:
+            # Find the top offer
+            def search_offers_and_get_top(machine_id):
+                search_args = argparse.Namespace(
+                    query=[f"machine_id={machine_id}", "verified=any", "rentable=true"],
+                    type="on-demand",
+                    quiet=False,
+                    no_default=False,
+                    new=False,
+                    limit=None,
+                    disable_bundling=False,
+                    storage=5.0,
+                    order="score-",
+                    raw=True,
+                    explain=args.explain,
+                    api_key=api_key,
+                    url=args.url,
+                    retry=args.retry,
+                    debugging=args.debugging,
+                )
+                offers = search__offers(search_args)
+                if not offers:
+                    progress_print(args, f"Machine ID {machine_id} not found or not rentable.")
+                    return None
+                sorted_offers = sorted(offers, key=lambda x: x.get("dlperf", 0), reverse=True)
+                return sorted_offers[0] if sorted_offers else None
+
+            top_offer = search_offers_and_get_top(args.machine_id)
+            if not top_offer:
+                progress_print(args, f"No valid offers found for Machine ID {args.machine_id}")
+                result["reason"] = "No valid offers found."
+            else:
+                ask_contract_id = top_offer["id"]
+
+                # Prepare arguments for instance creation
+                create_args = argparse.Namespace(
+                    id=ask_contract_id,
+                    price=None,  # Set bid_price to None
+                    disk=40,  # Match the disk size from the working command
+                    image="vastai/test:selftest",  # Use the same image as the working command
+                    login=None,
+                    label=None,
+                    onstart=None,
+                    onstart_cmd="python3 remote.py",
+                    entrypoint=None,
+                    ssh=False,  # Set ssh to False
+                    jupyter=True,  # Set jupyter to True
+                    direct=True,
+                    jupyter_dir=None,
+                    jupyter_lab=False,
+                    lang_utf8=False,
+                    python_utf8=False,
+                    extra=None,
+                    env="-e TZ=PDT -e XNAME=XX4 -p 5000:5000",
+                    args=None,
+                    force=False,
+                    cancel_unavail=False,
+                    template_hash=None,
+                    raw=True,
+                    explain=args.explain,
+                    api_key=api_key,
+                    url=args.url,
+                    retry=args.retry,
+                    debugging=args.debugging,
+                    bid_price=None,  # Ensure bid_price is None
+                )
+
+                # Create instance
+                try:
+                    response = create__instance(create_args)
+                    if isinstance(response, requests.Response):  # Check if it's an HTTP response
+                        if response.status_code == 200:
+                            try:
+                                instance_info = response.json()  # Parse JSON
+                                if args.debugging:
+                                    debug_print(args, "Captured instance_info from create__instance:", instance_info)
+                            except json.JSONDecodeError as e:
+                                progress_print(args, f"Error parsing JSON response: {e}")
+                                debug_print(args, f"Raw response content: {response.text}")
+                                raise Exception("Failed to parse JSON from instance creation response.")
+                        else:
+                            progress_print(args, f"HTTP error during instance creation: {response.status_code}")
+                            debug_print(args, f"Response text: {response.text}")
+                            raise Exception(f"Instance creation failed with status {response.status_code}")
+                    else:
+                        raise Exception("Unexpected response type from create__instance.")
+                except Exception as e:
+                    progress_print(args, f"Error creating instance: {e}")
+                    result["reason"] = "Failed to create instance."
+                    return result  # Cleanup handled in finally block
+
+                # Extract instance ID and proceed
+                instance_id = instance_info.get("new_contract")
+                if not instance_id:
+                    progress_print(args, "Instance creation response did not contain 'new_contract'.")
+                    result["reason"] = "Instance creation failed."
+                else:
+                    # Wait for the instance to start
+                    instance_info, wait_reason = wait_for_instance(instance_id, api_key, args, destroy_args)
+                    if not instance_info:
+                        result["reason"] = wait_reason
+                    else:
+                        # Proceed with the rest of your code
+                        # Run machine tester
+                        ip_address = instance_info.get("public_ipaddr")
+                        if not ip_address:
+                            result["reason"] = "Failed to retrieve public IP address."
+                        else:
+                            port_mappings = instance_info.get("ports", {}).get("5000/tcp", [])
+                            port = port_mappings[0].get("HostPort") if port_mappings else None
+                            if not port:
+                                result["reason"] = "Failed to retrieve mapped port."
+                            else:
+                                delay = "15"
+                                success, reason = run_machinetester(
+                                    ip_address, port, str(instance_id), args.machine_id, delay, args, api_key=api_key
+                                )
+                                result["success"] = success
+                                result["reason"] = reason
+
+    except Exception as e:
+        result["success"] = False
+        result["reason"] = str(e)
+
+    finally:
+        try:
+            if instance_id and instance_exist(instance_id, api_key, destroy_args):
+                destroy_instance_silent(instance_id, destroy_args)
+        except Exception as e:
+            if args.debugging:
+                debug_print(args, f"Error during cleanup: {e}")
+
+    # Output results
+    if args.raw:
+        print(json.dumps(result))
+        sys.exit(0)
+    else:
+        if result["success"]:
+            print("Test completed successfully.")
+            sys.exit(0)
+        else:
+            print(f"Test failed: {result['reason']}")
+            sys.exit(1)
+
 
 login_deprecated_message = """
+
+
 login via the command line is no longer supported.
 go to https://console.vast.ai/cli in a web browser to get your api key, then run:
 
@@ -4809,12 +5700,12 @@ def main():
         headers["Authorization"] = "Bearer " + args.api_key
 
     if TABCOMPLETE:
-      myautocc = MyAutocomplete()
-      myautocc(parser.parser)
+        myautocc = MyAutocomplete()
+        myautocc(parser.parser)
 
     try:
         res = args.func(args)
-        if res:
+        if args.raw:
             # There's two types of responses right now
             try:
                 print(json.dumps(res, indent=1, sort_keys=True))
@@ -4833,8 +5724,6 @@ def main():
         print("failed with error {e.response.status_code}: {errmsg}".format(**locals()));
     except ValueError as e:
       print(e)
-
-
 
 
 if __name__ == "__main__":
