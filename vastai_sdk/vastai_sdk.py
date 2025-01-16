@@ -37,6 +37,7 @@ class VastAI(VastAIBase):
 
         self._KEYPATH = APIKEY_FILE
         self.api_key = api_key
+        self.api_key_access = api_key
         self.server_url = server_url
         self.retry = retry
         self.raw = raw
