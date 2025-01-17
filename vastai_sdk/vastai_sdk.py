@@ -45,6 +45,7 @@ class VastAI(VastAIBase):
         self.explain = explain
         self.quiet = quiet
         self.imported_methods = {}
+        self.last_output = None
         self.import_cli_functions()
 
     @property
@@ -163,17 +164,16 @@ class VastAI(VastAIBase):
 
             out_b = io.StringIO()
             out_o = sys.stdout
-
             sys.stdout = out_b
 
             res = func(args) 
-            if hasattr(res, 'json'):
-               res = res.json()
 
             sys.stdout = out_o
-            if type(res) is not list:
-              res['_stdout_'] = out_b.getvalue()
+            self.last_output = out_b.getvalue()
             out_b.close()
+
+            if hasattr(res, 'json'):
+               return res.json()
 
             return res
 
