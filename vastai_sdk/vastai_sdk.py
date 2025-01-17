@@ -8,6 +8,7 @@ import requests
 import inspect
 import re
 import os
+import sys
 
 from .vastai_base import VastAIBase
 from .vast import parser, APIKEY_FILE
@@ -160,9 +161,19 @@ class VastAI(VastAIBase):
 
             args = argparse.Namespace(**kwargs)
 
+            out_b = io.StringIO()
+            out_o = sys.stdout
+
+            sys.stdout = out_b
+
             res = func(args) 
             if hasattr(res, 'json'):
-               return res.json()
+               res = res.json()
+
+            sys.stdout = out_o
+            if type(res) is not list:
+              res['_stdout_'] = out_b.getvalue()
+            out_b.close()
 
             return res
 
