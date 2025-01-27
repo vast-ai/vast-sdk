@@ -9,10 +9,16 @@ import inspect
 import re
 import os
 import sys
+import logging
 
 from .vastai_base import VastAIBase
 from .vast import parser, APIKEY_FILE
 from textwrap import dedent
+
+logging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
+logger = logging.getLogger()
+if logger.isEnabledFor(logging.DEBUG):
+    import inspect
 
 class VastAI(VastAIBase):
     """VastAI SDK class that dynamically imports functions from vast.py and binds them as instance methods."""
@@ -161,6 +167,10 @@ class VastAI(VastAIBase):
             kwargs.setdefault("quiet", self.quiet)
 
             args = argparse.Namespace(**kwargs)
+            if logger.isEnabledFor(logging.DEBUG):
+               kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
+               logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
+
 
             out_b = io.StringIO()
             out_o = sys.stdout
@@ -173,7 +183,10 @@ class VastAI(VastAIBase):
             out_b.close()
 
             if hasattr(res, 'json'):
+               logging.debug(f" └-> {res.json()}")
                return res.json()
+
+            logging.debug(f" └-> {res}")
 
             return res
 
