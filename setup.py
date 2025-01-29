@@ -8,7 +8,7 @@ setup(
     long_description_content_type="text/markdown",
     author="Chris McKenzie",
     author_email="chris@vast.ai",
-    url="https://github.com/kristopolous/vastai-sdk",
+    url="https://github.com/kristopolous/vast-sdk",
     packages=find_packages(),
     install_requires=[
         "requests>=2.25",
