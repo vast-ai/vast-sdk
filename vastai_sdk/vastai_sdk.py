@@ -48,41 +48,55 @@ def reverse_mapping(regions):
 _regions_rev = reverse_mapping(_regions)
 
 def queryParser(kwargs):
-    state = False
-    if 'query' in kwargs:
-      qstr = kwargs['query']
+  # georegion uses the region modifiers as top level
+  # descriptors
+  #
+  # chunked reduces values communicated to more usable chunks
+  state = {'georegion': False, 'chunked': False }
 
-      key = Word(alphas + "_-")
-      operator = oneOf("= in != > < >= <=")
-      value = Word(alphanums) | quotedString
-      expr = Group(key + operator + value)
-      query = ZeroOrMore(expr)
-      parsed = query.parseString(qstr)
+  if kwargs.get('query') is not None: 
+    qstr = kwargs['query']
 
-      geo = ['georegion', '=', 'true']
-      toPass = []
+    key = Word(alphas + "_-")
+    operator = oneOf("= in != > < >= <=")
+    value = Word(alphanums) | quotedString
+    expr = Group(key + operator + value)
+    query = ZeroOrMore(expr)
+    parsed = query.parseString(qstr)
 
-      state = any(geo == list(expr) for expr in parsed)
-      if state:
+    toPass = []
 
-        for expr in parsed:
-          if expr[0] == 'georegion':
-            continue
-          elif expr[0] == 'geolocation':
-            region = _regions.get(expr[2].strip('"'))
-            expr = ['geolocation', 'in', f'[{region}]']
+    for key in state.keys():
+      state[key] = any([key, '=', 'true'] == list(expr) for expr in parsed)
 
-          toPass.append(' '.join(expr))
+    for expr in parsed:
+      if expr[0] in state.keys():
+        continue
 
-        kwargs['query'] = ' '.join(toPass)
+      elif expr[0] == 'geolocation' and state['georegion']:
+        region = _regions.get(expr[2].strip('"'))
+        expr = ['geolocation', 'in', f'[{region}]']
 
-    return (state, kwargs)
+      toPass.append(' '.join(expr))
+
+    kwargs['query'] = ' '.join(toPass)
+
+  return (state, kwargs)
 
 def queryFormatter(state, obj):
-  if state:
-    for res in obj:
+  upper = lambda amount: amount & (0xfff << max(amount.bit_length() - 12,12))
+
+  for res in obj:
+    if state['georegion'] and res['geolocation'] is not None:
       country = res['geolocation'][-2:]
       res['geolocation'] += f', {_regions_rev[country]}'
+
+    if state['chunked']:
+      res['cpu_ram'] = upper(res['cpu_ram'])
+      res['cpu_cores'] = max(res['cpu_cores'] & 0xffff8, 4)
+      res['gpu_ram'] = res['gpu_ram'] & 0xffffffffff00
+      res['disk_space'] = int(res['disk_space']) & 0xffffffffffc0
+
   return obj
   
 _hooks = {
