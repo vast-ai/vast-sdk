@@ -17,6 +17,7 @@ setup(
 		"requests==2.32.3",
 		"borb==2.0.17",
 		"python-dateutil",
+        "pyparsing",
 		"pytz",
 		"urllib3",
     ],

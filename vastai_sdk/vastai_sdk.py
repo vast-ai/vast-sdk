@@ -10,6 +10,8 @@ import re
 import os
 import sys
 import logging
+from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore
+
 
 from .vastai_base import VastAIBase
 from .vast import parser, APIKEY_FILE
@@ -19,6 +21,74 @@ logging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
 logger = logging.getLogger()
 if logger.isEnabledFor(logging.DEBUG):
     import inspect
+
+
+_regions = {
+  'AF': ('DZ,AO,BJ,BW,BF,BI,CM,CV,CF,TD,KM,CD,CG,DJ,EG,GQ,ER,ET,GA,GM,GH,GN,'
+         'GW,KE,LS,LR,LY,MW,MA,ML,MR,MU,MZ,NA,NE,NG,RW,SH,ST,SN,SC,SL,SO,ZA,'
+         'SS,SD,SZ,TZ,TG,TN,UG,YE,ZM,ZW'),  # Africa
+  'AS': ('AE,AM,AR,AU,AZ,BD,BH,BN,BT,MM,KH,KP,IN,ID,IR,IQ,IL,JP,JO,KZ,LV,'
+         'LI,MY,MV,MN,NP,KR,PK,PH,QA,SA,SG,LK,SY,TW,TJ,TH,TR,TM,VN,YE,HK,'
+         'CN,OM'),  # Asia
+  'EU': ('AL,AD,AT,BY,BE,BA,BG,HR,CY,CZ,DK,EE,'
+         'FI,FR,GE,DE,GR,HU,IS,IT,KZ,LV,LI,LT,'
+         'LU,MT,MD,MC,ME,NL,NO,PL,PT,RO,RU,RS,'
+         'SK,SI,ES,SE,CH,UA,GB,VA,MK'),  # Europe
+  'LC': ('AG,AR,BS,BB,BZ,BO,BR,CL,CO,CR,CU,DO,EC,SV,GY,HT,HN,JM,MX,NI,PA,PY,'
+         'PE,PR,RD,SUR,TT,UR,VZ'),  # Latin America and the Caribbean
+  'NA': 'CA,US',  # Northern America
+  'OC': ('AU,FJ,GU,KI,MH,FM,NR,NZ,PG,PW,SL,TO,TV,VU'),  # Oceania
+}
+
+def reverse_mapping(regions):
+    reversed_mapping = {}
+    for region, countries in regions.items():
+        for country in countries.split(','):
+            reversed_mapping[country] = region
+    return reversed_mapping
+
+_regions_rev = reverse_mapping(_regions)
+
+def queryParser(args):
+    state = False
+    if hasattr(args, 'query') and args.query:
+      qstr = args.query
+
+      key = Word(alphas + "_", alphanums + "_")
+      operator = oneOf("= in != > < >= <=")
+      value = Word(alphanums + "_")
+      expr = Group(key + operator + value)
+      query = ZeroOrMore(expr)
+      parsed = query.parseString(qstr)
+
+      geo = ['georegion', '=', 'true']
+      toPass = []
+
+      state = any(geo == list(expr) for expr in parsed)
+      if state:
+
+        for expr in parsed:
+          if expr[0] == 'georegion':
+            continue
+          elif expr[0] == 'geolocation':
+            expr = ['geolocation', 'in', f'[{_regions[expr[2]]}]']
+
+          toPass.append(' '.join(expr))
+
+        args.query = ' '.join(toPass)
+
+    return (state, args)
+
+def queryFormatter(state, obj):
+  if state:
+    for res in obj:
+      country = res['geolocation'][-2:]
+      res['geolocation'] += f', {_regions_rev[country]}'
+  return obj
+  
+_hooks = {
+    'search__offers': [queryParser, queryFormatter]
+}
 
 class VastAI(VastAIBase):
     """VastAI SDK class that dynamically imports functions from vast.py and binds them as instance methods."""
@@ -171,12 +241,18 @@ class VastAI(VastAIBase):
                kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
                logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
 
+            # if we specified hooks we get that now
+            if func.__name__ in _hooks:
+              state, args = _hooks[func.__name__][0](args)
 
             out_b = io.StringIO()
             out_o = sys.stdout
             sys.stdout = out_b
 
             res = func(args) 
+
+            if func.__name__ in _hooks:
+              res = _hooks[func.__name__][1](state, res)
 
             sys.stdout = out_o
             self.last_output = out_b.getvalue()
