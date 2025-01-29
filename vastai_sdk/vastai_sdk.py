@@ -1,3 +1,4 @@
+import ipdb
 import importlib
 import types
 import argparse
@@ -10,7 +11,7 @@ import re
 import os
 import sys
 import logging
-from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore
+from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore, quotedString
 
 
 from .vastai_base import VastAIBase
@@ -25,7 +26,7 @@ _regions = {
   'AF': ('DZ,AO,BJ,BW,BF,BI,CM,CV,CF,TD,KM,CD,CG,DJ,EG,GQ,ER,ET,GA,GM,GH,GN,'
          'GW,KE,LS,LR,LY,MW,MA,ML,MR,MU,MZ,NA,NE,NG,RW,SH,ST,SN,SC,SL,SO,ZA,'
          'SS,SD,SZ,TZ,TG,TN,UG,YE,ZM,ZW'),  # Africa
-  'AS': ('AE,AM,AR,AU,AZ,BD,BH,BN,BT,MM,KH,KP,IN,ID,IR,IQ,IL,JP,JO,KZ,LV,'
+  'AS': ('AE,AM,AR,AU,AZ,BD,BH,BN,BT,MM,KH,KW,KP,IN,ID,IR,IQ,IL,JP,JO,KZ,LV,'
          'LI,MY,MV,MN,NP,KR,PK,PH,QA,SA,SG,LK,SY,TW,TJ,TH,TR,TM,VN,YE,HK,'
          'CN,OM'),  # Asia
   'EU': ('AL,AD,AT,BY,BE,BA,BG,HR,CY,CZ,DK,EE,'
@@ -47,14 +48,14 @@ def reverse_mapping(regions):
 
 _regions_rev = reverse_mapping(_regions)
 
-def queryParser(args):
+def queryParser(kwargs):
     state = False
-    if hasattr(args, 'query') and args.query:
-      qstr = args.query
+    if 'query' in kwargs:
+      qstr = kwargs['query']
 
-      key = Word(alphas + "_", alphanums + "_")
+      key = Word(alphas + "_-")
       operator = oneOf("= in != > < >= <=")
-      value = Word(alphanums + "_")
+      value = Word(alphanums) | quotedString
       expr = Group(key + operator + value)
       query = ZeroOrMore(expr)
       parsed = query.parseString(qstr)
@@ -69,13 +70,14 @@ def queryParser(args):
           if expr[0] == 'georegion':
             continue
           elif expr[0] == 'geolocation':
-            expr = ['geolocation', 'in', f'[{_regions[expr[2]]}]']
+            region = _regions.get(expr[2].strip('"'))
+            expr = ['geolocation', 'in', f'[{region}]']
 
           toPass.append(' '.join(expr))
 
-        args.query = ' '.join(toPass)
+        kwargs['query'] = ' '.join(toPass)
 
-    return (state, args)
+    return (state, kwargs)
 
 def queryFormatter(state, obj):
   if state:
@@ -234,14 +236,15 @@ class VastAI(VastAIBase):
             kwargs.setdefault("explain", self.explain)
             kwargs.setdefault("quiet", self.quiet)
 
+            # if we specified hooks we get that now
+            if func.__name__ in _hooks:
+              state, kwargs = _hooks[func.__name__][0](kwargs)
+
             args = argparse.Namespace(**kwargs)
+
             if logger.isEnabledFor(logging.DEBUG):
                kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
                logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
-
-            # if we specified hooks we get that now
-            if func.__name__ in _hooks:
-              state, args = _hooks[func.__name__][0](args)
 
             out_b = io.StringIO()
             out_o = sys.stdout
