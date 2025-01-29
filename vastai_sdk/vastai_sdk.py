@@ -19,8 +19,6 @@ from textwrap import dedent
 
 logging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
 logger = logging.getLogger()
-if logger.isEnabledFor(logging.DEBUG):
-    import inspect
 
 
 _regions = {
