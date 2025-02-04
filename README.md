@@ -1,6 +1,8 @@
 # 🪄 Vast.ai Magic Comes To Python!
 It's everything you love from the [Vast.ai CLI](https://github.com/vast-ai/vast-python) tool, wrapped neatly in an easy-to-use Python interface!
 
+[![PyPI version](https://badge.fury.io/py/vastai-sdk.svg)](https://badge.fury.io/py/vastai-sdk)
+
 ## 📦 What's in the pip?
 Why, it’s not just an SDK—it’s an entire development philosophy in a single import statement! With just a humble `pip install`, you unlock:
 
