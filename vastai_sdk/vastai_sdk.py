@@ -84,20 +84,41 @@ def queryParser(kwargs):
   return (state, kwargs)
 
 def queryFormatter(state, obj):
-  upper = lambda amount: amount & (0xfff << max(amount.bit_length() - 12,12))
+  # This algo is explicitly designed for skypilot to add 
+  # depth to our catalog offerings
+  cutoff = {
+    'cpu_ram': 64 * 1024,
+    'cpu_cores': 32
+  }
 
+  upper = lambda amount: amount & (0xffff << max(amount.bit_length() - 1,1))
+
+  filtered = []
   for res in obj:
     if state['georegion'] and res['geolocation'] is not None:
       country = res['geolocation'][-2:]
       res['geolocation'] += f', {_regions_rev[country]}'
 
     if state['chunked']:
-      res['cpu_ram'] = upper(res['cpu_ram'])
-      res['cpu_cores'] = max(res['cpu_cores'] & 0xffff8, 4)
-      res['gpu_ram'] = res['gpu_ram'] & 0xffffffffff00
+      good = True
+
+      for k,v in cutoff.items():
+        if res[k] < cutoff[k]:
+          good = False
+        else:
+          res[k] = cutoff[k]
+
+      if not good:
+        continue
+
+      #res['cpu_ram'] = upper(res['cpu_ram'])
+      #res['cpu_cores'] = max(res['cpu_cores'] & 0xffff8, 4)
+      res['gpu_ram'] = res['gpu_ram'] & 0xffffffffff0
       res['disk_space'] = int(res['disk_space']) & 0xffffffffffc0
 
-  return obj
+    filtered.append(res)
+
+  return filtered
   
 _hooks = {
     'search__offers': [queryParser, queryFormatter]
