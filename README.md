@@ -1,5 +1,5 @@
 # 🪄 Vast.ai Magic Comes To Python!
-It's everything you love from the [Vast.ai CLI](https://github.com/vast-ai/vast-python) tool, wrapped neatly in an easy-to-use Python interface!
+It's everything you love from the [Vast.ai CLI](https://github.com/vast-ai/vast-cli) tool, wrapped neatly in an easy-to-use Python interface!
 
 [![PyPI version](https://badge.fury.io/py/vastai-sdk.svg)](https://badge.fury.io/py/vastai-sdk)
 
@@ -11,7 +11,7 @@ Why, it’s not just an SDK—it’s an entire development philosophy in a singl
  * 🌍 **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
 
 ## 👀 Let's Sneak A Peek!
-Under the hood we are using what the [CLI tool](https://github.com/vast-ai/vast-python) uses and so the documentation is the same. The arguments are the same. 
+Under the hood we are using what the [CLI tool](https://github.com/vast-ai/vast-cli) uses and so the documentation is the same. The arguments are the same. 
 
 🐚 shell: `vastai cast --spell='abracadabra'` 
 
