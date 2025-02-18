@@ -95,6 +95,7 @@ def queryFormatter(state, obj):
 
   filtered = []
   for res in obj:
+    res['datacenter'] = (res['hosting_type'] == 1)
     if state['georegion'] and res['geolocation'] is not None:
       country = res['geolocation'][-2:]
       res['geolocation'] += f', {_regions_rev[country]}'
