@@ -59,7 +59,7 @@ def queryParser(kwargs):
 
     key = Word(alphas + "_-")
     operator = oneOf("= in != > < >= <=")
-    value = Word(alphanums) | quotedString
+    value = Word(alphanums + "_") | quotedString
     expr = Group(key + operator + value)
     query = ZeroOrMore(expr)
     parsed = query.parseString(qstr)
