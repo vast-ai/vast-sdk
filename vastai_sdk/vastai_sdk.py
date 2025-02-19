@@ -10,8 +10,7 @@ import re
 import os
 import sys
 import logging
-from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore, quotedString
-
+from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore, quotedString, delimitedList, Suppress
 
 from .vastai_base import VastAIBase
 from .vast import parser, APIKEY_FILE
@@ -59,7 +58,11 @@ def queryParser(kwargs):
 
     key = Word(alphas + "_-")
     operator = oneOf("= in != > < >= <=")
-    value = Word(alphanums + "_") | quotedString
+    single_value = Word(alphanums + "_") | quotedString
+    array_value = (
+        Suppress("[") + delimitedList(quotedString) + Suppress("]")
+    ).setParseAction(lambda t: f"[{','.join(t)}]")
+    value = single_value | array_value 
     expr = Group(key + operator + value)
     query = ZeroOrMore(expr)
     parsed = query.parseString(qstr)
