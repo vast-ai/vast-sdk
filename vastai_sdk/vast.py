@@ -29,7 +29,9 @@ import logging
 import textwrap
 from pathlib import Path
 import warnings
+import platform
 
+is_windows = platform.system().lower() == "windows"
 ARGS = None
 TABCOMPLETE = False
 try:
@@ -1097,19 +1099,23 @@ def change__bid(args: argparse.Namespace):
 def copy(args: argparse.Namespace):
     """
     Transfer data from one instance to another.
-
     @param src: Location of data object to be copied.
     @param dst: Target to copy object to.
     """
+    import platform
+    import shutil
 
+    # Parse the source and destination URLs
     (src_id, src_path) = parse_vast_url(args.src)
     (dst_id, dst_path) = parse_vast_url(args.dst)
     if (src_id is None) and (dst_id is None):
         print("invalid arguments")
         return
 
+    # Display what is being copied
     print(f"copying {str(src_id)+':' if src_id else ''}{src_path} {str(dst_id)+':' if dst_id else ''}{dst_path}")
 
+    # Build the request JSON to call the appropriate API endpoint
     req_json = {
         "client_id": "me",
         "src_id": src_id,
@@ -1117,41 +1123,71 @@ def copy(args: argparse.Namespace):
         "src_path": src_path,
         "dst_path": dst_path,
     }
-    if (args.explain):
+    if args.explain:
         print("request json: ")
         print(req_json)
+
+    # Choose the API endpoint based on whether either src or dst is local
     if (src_id is None) or (dst_id is None):
-        url = apiurl(args, f"/commands/rsync/")
+        url = apiurl(args, "/commands/rsync/")
     else:
-        url = apiurl(args, f"/commands/copy_direct/")
-    r = http_put(args, url,  headers=headers,json=req_json)
+        url = apiurl(args, "/commands/copy_direct/")
+    
+    # Call the API and raise an error if the call fails
+    r = http_put(args, url, headers=headers, json=req_json)
     r.raise_for_status()
-    if (r.status_code == 200):
-        rj = r.json();
-        #print(json.dumps(rj, indent=1, sort_keys=True))
-        if (rj["success"]) and ((src_id is None) or (dst_id is None)):
+
+    if r.status_code == 200:
+        rj = r.json()
+        # If the API indicates success and one of the endpoints is local
+        if rj["success"] and ((src_id is None) or (dst_id is None)):
             homedir = subprocess.getoutput("echo $HOME")
-            #print(f"homedir: {homedir}")
             remote_port = None
+            # Determine the identity file, either provided or default to ~/.ssh/id_rsa
             identity = args.identity if (args.identity is not None) else f"{homedir}/.ssh/id_rsa"
-            if (src_id is None):
-                #result = subprocess.run(f"mkdir -p {src_path}", shell=True)
+            
+            # Check if we're running on Windows and whether rsync is available
+            is_windows = platform.system().lower() == "windows"
+            has_rsync = shutil.which("rsync") is not None
+
+            # --- Local -> Remote copy (src is local) ---
+            if src_id is None:
                 remote_port = rj["dst_port"]
                 remote_addr = rj["dst_addr"]
-                cmd = f"sudo rsync -arz -v --progress --rsh=ssh -e 'sudo ssh -i {identity} -p {remote_port} -o StrictHostKeyChecking=no' {src_path} vastai_kaalia@{remote_addr}::{dst_id}/{dst_path}"
-                print(cmd)
+                if is_windows or not has_rsync:
+                    # Use scp as a fallback for Windows or if rsync is not available
+                    cmd = f"scp -i {identity} -P {remote_port} -r {src_path} vastai_kaalia@{remote_addr}:{dst_path}"
+                else:
+                    # Use rsync with sudo on non-Windows systems
+                    sudo_prefix = "sudo "  # prepend sudo on non-Windows systems
+                    cmd = (
+                        f"{sudo_prefix}rsync -arz -v --progress --rsh=ssh -e "
+                        f"'{sudo_prefix}ssh -i {identity} -p {remote_port} -o StrictHostKeyChecking=no' "
+                        f"{src_path} vastai_kaalia@{remote_addr}:{dst_path}"
+                    )
+                print(cmd)  # Print the command for debugging purposes
                 result = subprocess.run(cmd, shell=True)
-                #result = subprocess.run(["sudo", "rsync" "-arz", "-v", "--progress", "-rsh=ssh", "-e 'sudo ssh -i {homedir}/.ssh/id_rsa -p {remote_port} -o StrictHostKeyChecking=no'", src_path, "vastai_kaalia@{remote_addr}::{dst_id}"], shell=True)
-            elif (dst_id is None):
-                result = subprocess.run(f"mkdir -p {dst_path}", shell=True)
+            
+            # --- Remote -> Local copy (dst is local) ---
+            elif dst_id is None:
+                # Create the destination directory if it doesn't exist
+                subprocess.run(f"mkdir -p {dst_path}", shell=True)
                 remote_port = rj["src_port"]
                 remote_addr = rj["src_addr"]
-                cmd = f"sudo rsync -arz -v --progress --rsh=ssh -e 'sudo ssh -i {identity} -p {remote_port} -o StrictHostKeyChecking=no' vastai_kaalia@{remote_addr}::{src_id}/{src_path} {dst_path}"
+                if is_windows or not has_rsync:
+                    cmd = f"scp -i {identity} -P {remote_port} -r vastai_kaalia@{remote_addr}:{src_path} {dst_path}"
+                else:
+                    sudo_prefix = "sudo "
+                    cmd = (
+                        f"{sudo_prefix}rsync -arz -v --progress --rsh=ssh -e "
+                        f"'{sudo_prefix}ssh -i {identity} -p {remote_port} -o StrictHostKeyChecking=no' "
+                        f"vastai_kaalia@{remote_addr}:{src_path} {dst_path}"
+                    )
                 print(cmd)
                 result = subprocess.run(cmd, shell=True)
-                #result = subprocess.run(["sudo", "rsync" "-arz", "-v", "--progress", "-rsh=ssh", "-e 'sudo ssh -i {homedir}/.ssh/id_rsa -p {remote_port} -o StrictHostKeyChecking=no'", "vastai_kaalia@{remote_addr}::{src_id}", dst_path], shell=True)
         else:
-            if (rj["success"]):
+            # For remote-to-remote copies, display status messages accordingly.
+            if rj["success"]:
                 print("Remote to Remote copy initiated - check instance status bar for progress updates (~30 seconds delayed).")
             else:
                 if rj["msg"] == "src_path not supported VMs.":
@@ -1159,10 +1195,11 @@ def copy(args: argparse.Namespace):
                 elif rj["msg"] == "dst_path not supported for VMs.":
                     print("dst instance is a VM, use `vm copy` command for VM to VM copies")
                 else:
-                    print(rj["msg"]);
+                    print(rj["msg"])
     else:
-        print(r.text);
-        print("failed with error {r.status_code}".format(**locals()));
+        print(r.text)
+        print("failed with error {r.status_code}".format(**locals()))
+
 
 
 
