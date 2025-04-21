@@ -15,7 +15,7 @@ setup(
         "jsonschema>=3.2",
 		"xdg>=1.0.0",
 		"requests==2.32.3",
-		"borb==2.0.17",
+        "borb~=2.0.17",
 		"python-dateutil",
         "pyparsing",
 		"pytz",
