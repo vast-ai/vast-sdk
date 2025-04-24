@@ -283,19 +283,20 @@ class VastAI(VastAIBase):
             if logger.isEnabledFor(logging.DEBUG):
                kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
                logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
-
-            out_b = io.StringIO()
-            out_o = sys.stdout
-            sys.stdout = out_b
+            else:
+                out_b = io.StringIO()
+                out_o = sys.stdout
+                sys.stdout = out_b
 
             res = func(args) 
 
             if func.__name__ in _hooks:
               res = _hooks[func.__name__][1](state, res)
 
-            sys.stdout = out_o
-            self.last_output = out_b.getvalue()
-            out_b.close()
+            if not logger.isEnabledFor(logging.DEBUG):
+                sys.stdout = out_o
+                self.last_output = out_b.getvalue()
+                out_b.close()
 
             if hasattr(res, 'json'):
                logging.debug(f" └-> {res.json()}")
