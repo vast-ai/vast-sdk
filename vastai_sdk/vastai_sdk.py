@@ -14,6 +14,7 @@ from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMor
 
 from .vastai_base import VastAIBase
 from .vast import parser, APIKEY_FILE
+from . import vast as _vast
 from textwrap import dedent
 
 logging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
@@ -46,7 +47,7 @@ def reverse_mapping(regions):
 
 _regions_rev = reverse_mapping(_regions)
 
-def queryParser(kwargs):
+def queryParser(kwargs, instance):
   # georegion uses the region modifiers as top level
   # descriptors
   #
@@ -86,7 +87,7 @@ def queryParser(kwargs):
 
   return (state, kwargs)
 
-def queryFormatter(state, obj):
+def queryFormatter(state, obj, instance):
   # This algo is explicitly designed for skypilot to add 
   # depth to our catalog offerings
   cutoff = {
@@ -123,9 +124,13 @@ def queryFormatter(state, obj):
     filtered.append(res)
 
   return filtered
+
+def lastOutput(state, obj, instance):
+    return instance.last_output
   
 _hooks = {
-    'search__offers': [queryParser, queryFormatter]
+    'search__offers': [queryParser, queryFormatter],
+    'logs': [None, lastOutput]
 }
 
 class VastAI(VastAIBase):
@@ -139,6 +144,7 @@ class VastAI(VastAIBase):
         raw=True,
         explain=False,
         quiet=False,
+        curl=False
     ):
         if not api_key:
             if os.path.exists(APIKEY_FILE):
@@ -158,6 +164,7 @@ class VastAI(VastAIBase):
         self.raw = raw
         self.explain = explain
         self.quiet = quiet
+        self.curl = curl
         self.imported_methods = {}
         self.last_output = None
         self.import_cli_functions()
@@ -273,16 +280,19 @@ class VastAI(VastAIBase):
             kwargs.setdefault("raw", self.raw)
             kwargs.setdefault("explain", self.explain)
             kwargs.setdefault("quiet", self.quiet)
+            kwargs.setdefault("curl", self.curl)
 
             # if we specified hooks we get that now
-            if func.__name__ in _hooks:
-              state, kwargs = _hooks[func.__name__][0](kwargs)
+            state = None
+            if func.__name__ in _hooks and _hooks[func.__name__][0] is not None:
+              state, kwargs = _hooks[func.__name__][0](kwargs, self)
 
             args = argparse.Namespace(**kwargs)
+            _vast.ARGS = args
 
             if logger.isEnabledFor(logging.DEBUG):
-               kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
-               logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
+                kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
+                logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
             else:
                 out_b = io.StringIO()
                 out_o = sys.stdout
@@ -290,13 +300,13 @@ class VastAI(VastAIBase):
 
             res = func(args) 
 
-            if func.__name__ in _hooks:
-              res = _hooks[func.__name__][1](state, res)
-
             if not logger.isEnabledFor(logging.DEBUG):
                 sys.stdout = out_o
                 self.last_output = out_b.getvalue()
                 out_b.close()
+
+            if func.__name__ in _hooks:
+              res = _hooks[func.__name__][1](state, res, self)
 
             if hasattr(res, 'json'):
                logging.debug(f" └-> {res.json()}")

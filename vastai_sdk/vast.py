@@ -29,7 +29,12 @@ import logging
 import textwrap
 from pathlib import Path
 import warnings
+import importlib.metadata
 
+
+PYPI_BASE_PATH = "https://pypi.org"
+# INFO - Change to False if you don't want to check for update each run.
+should_check_for_update = True
 ARGS = None
 TABCOMPLETE = False
 try:
@@ -37,6 +42,11 @@ try:
     TABCOMPLETE = True
 except:
     # No tab-completion for you
+    pass
+
+try:
+    import curlify
+except ImportError:
     pass
 
 try:
@@ -67,7 +77,124 @@ logging.basicConfig(
     format="%(levelname)s - %(message)s"
 )
 
+def parse_version(version: str) -> tuple[int, ...]:
+    parts = version.split(".")
+
+    if len(parts) < 3:
+        print(f"Invalid version format: {version}", file=sys.stderr)
+
+    return tuple(int(part) for part in parts)
+
+
+def get_git_version():
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        tag = result.stdout.strip()
+
+        return tag[1:] if tag.startswith("v") else tag
+    except Exception:
+        return "0.0.0"
+
+
+def get_pip_version():
+    try:
+        return importlib.metadata.version("vastai")
+    except Exception:
+        return "0.0.0"
+
+
+def is_pip_package():
+    script_path = sys.argv[0]
+    executable_name = os.path.basename(script_path)
+
+    return executable_name == "vastai"
+
+
+def get_update_command(stable_version: str) -> str:
+    if is_pip_package():
+        if "test.pypi.org" in PYPI_BASE_PATH:
+            return f"{sys.executable} -m pip install --force-reinstall --no-cache-dir -i {PYPI_BASE_PATH} vastai=={stable_version}"
+        else:
+            return f"{sys.executable} -m pip install --force-reinstall --no-cache-dir vastai=={stable_version}"
+    else:
+        return f"git fetch --all --tags --prune && git checkout tags/v{stable_version}"
+
+
+def get_local_version():
+    if is_pip_package():
+        return get_pip_version()
+    return get_git_version()
+
+
+def get_project_data(project_name: str) -> dict[str, dict[str, str]]:
+    url = PYPI_BASE_PATH + f"/pypi/{project_name}/json"
+    response = requests.get(url, headers={"Accept": "application/json"})
+
+    # this will raise for HTTP status 4xx and 5xx
+    response.raise_for_status()
+
+    # this will raise for HTTP status >200,<=399
+    if response.status_code != 200:
+        raise Exception(
+            f"Could not get PyPi Project: {project_name}. Response: {response.status_code}"
+        )
+
+    response_data: dict[str, dict[str, str]] = response.json()
+    return response_data
+
+
+def get_pypi_version(project_data: dict[str, dict[str, str]]) -> str:
+    info_data = project_data.get("info")
+
+    if not info_data:
+        raise Exception("Could not get PyPi Project")
+
+    version_data: str = str(info_data.get("version"))
+
+    return str(version_data)
+def check_for_update():
+    pypi_data = get_project_data("vastai")
+    pypi_version = get_pypi_version(pypi_data)
+
+    local_version = get_local_version()
+
+    local_tuple = parse_version(local_version)
+    pypi_tuple = parse_version(pypi_version)
+
+    if local_tuple >= pypi_tuple:
+        return
+
+    user_wants_update = input(
+        f"Update available from {local_version} to {pypi_version}. Would you like to update [Y/n]: "
+    ).lower()
+
+    if user_wants_update not in ["y", ""]:
+        print("You selected no. If you don't want to check for updates each time, update should_check_for_update in vast.py")
+        return
+
+    update_command = get_update_command(pypi_version)
+
+    print("Updating...")
+    _ = subprocess.run(
+        update_command,
+        shell=True,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    print("Update completed successfully!\nAttempt to run your command again!")
+    sys.exit(0)
+
 APP_NAME = "vastai"
+VERSION = get_local_version()
+
 
 try:
   # Although xdg-base-dirs is the newer name, there's 
@@ -101,7 +228,8 @@ CACHE_DURATION = timedelta(hours=24)
 APIKEY_FILE = os.path.join(DIRS['config'], "vast_api_key")
 APIKEY_FILE_HOME = os.path.expanduser("~/.vast_api_key") # Legacy
 
-if os.path.exists(APIKEY_FILE_HOME):
+if not os.path.exists(APIKEY_FILE) and os.path.exists(APIKEY_FILE_HOME):
+  print(f'copying key from {APIKEY_FILE_HOME} -> {APIKEY_FILE}')
   shutil.copyfile(APIKEY_FILE_HOME, APIKEY_FILE)
 
 
@@ -170,51 +298,42 @@ class hidden_aliases(object):
     def append(self, x):
         self.l.append(x)
 
-def http_get(args, req_url, headers = None, json = None):
+def http_request(verb, args, req_url, headers = None, json = None):
     t = 0.15
     for i in range(0, args.retry):
-        r = requests.get(req_url, headers=headers, json=json)
+        req = requests.Request(method=verb, url=req_url, headers=headers, json=json)
+        session = requests.Session()
+        prep = session.prepare_request(req)
+        if ARGS.curl:
+            as_curl = curlify.to_curl(prep)
+            simple = re.sub(r" -H '[^']*'", '', as_curl)
+            parts = re.split(r'(?=\s+-\S+)', simple)
+            pp = parts[-1].split("'")
+            pp[-3] += "\n "
+            parts = [*parts[:-1], *[x.rstrip() for x in "'".join(pp).split("\n")]]
+            print("\n" + ' \\\n  '.join(parts).strip() + "\n")
+            sys.exit(0)
+        else:
+            r = session.send(prep)
+
         if (r.status_code == 429):
             time.sleep(t)
             t *= 1.5
         else:
             break
     return r
+
+def http_get(args, req_url, headers = None, json = None):
+    return http_request('GET', args, req_url, headers, json)
 
 def http_put(args, req_url, headers, json):
-    t = 0.3
-    for i in range(0, int(args.retry)):
-        r = requests.put(req_url, headers=headers, json=json)
-        if (r.status_code == 429):
-            time.sleep(t)
-            t *= 1.5
-        else:
-            break
-    return r
+    return http_request('PUT', args, req_url, headers, json)
 
 def http_post(args, req_url, headers, json={}):
-    t = 0.3
-    for i in range(0, int(args.retry)):
-        #if (args.explain):
-        #    print(req_url)
-        r = requests.post(req_url, headers=headers, json=json)
-        if (r.status_code == 429):
-            time.sleep(t)
-            t *= 1.5
-        else:
-            break
-    return r
+    return http_request('POST', args, req_url, headers, json)
 
 def http_del(args, req_url, headers, json={}):
-    t = 0.3
-    for i in range(0, int(args.retry)):
-        r = requests.delete(req_url, headers=headers, json=json)
-        if (r.status_code == 429):
-            time.sleep(t)
-            t *= 1.5
-        else:
-            break
-    return r
+    return http_request('DELETE', args, req_url, headers, json)
 
 
 def load_permissions_from_file(file_path):
@@ -232,7 +351,8 @@ def complete_sshkeys(prefix=None, action=None, parser=None, parsed_args=None):
 
 class apwrap(object):
     def __init__(self, *args, **kwargs):
-        kwargs["formatter_class"] = argparse.RawDescriptionHelpFormatter
+        if "formatter_class" not in kwargs:
+            kwargs["formatter_class"] = MyWideHelpFormatter    
         self.parser = argparse.ArgumentParser(*args, **kwargs)
         self.parser.set_defaults(func=self.fail_with_help)
         self.subparsers_ = None
@@ -290,9 +410,9 @@ class apwrap(object):
             for x in aliases:
                 verb, _, obj = x.partition(" ")
                 aliases_transformed.append(self.get_name(verb, obj))
+            if "formatter_class" not in kwargs:
+                kwargs["formatter_class"] = MyWideHelpFormatter
 
-            kwargs["formatter_class"] = argparse.RawDescriptionHelpFormatter
-          
             sp = self.subparsers().add_parser(name, aliases=aliases_transformed, help=help_, **kwargs)
 
             # TODO: Sometimes the parser.command has a help parameter. Ideally
@@ -340,8 +460,15 @@ class apwrap(object):
             func(args)
         return args
 
+class MyWideHelpFormatter(argparse.RawTextHelpFormatter):
+    def __init__(self, prog):
+        super().__init__(prog, width=128, max_help_position=50, indent_increment=1)
 
-parser = apwrap(epilog="Use 'vast COMMAND --help' for more info about a command")
+
+parser = apwrap(
+    epilog="Use 'vast COMMAND --help' for more info about a command",
+    formatter_class=MyWideHelpFormatter
+)
 
 def translate_null_strings_to_blanks(d: Dict) -> Dict:
     """Map over a dict and translate any null string values into ' '.
@@ -492,6 +619,51 @@ displayable_fields_reserved = (
 )
 
 
+vol_offers_fields = {
+        "cpu_arch",
+        "cuda_vers",
+        "datacenter",
+        "disk_bw",
+        "disk_space",
+        "driver_version",
+        "duration",
+        "geolocation",
+        "gpu_arch",
+        "has_avx",
+        "id",
+        "inet_down",
+        "inet_up",
+        "machine_id",
+        "pci_gen",
+        "pcie_bw",
+        "reliability",
+        "storage_cost",
+        "static_ip",
+        "total_flops",
+        "ubuntu_version",
+        "verified",
+}
+
+
+vol_displayable_fields = (
+    ("id", "ID", "{}", None, True),
+    ("cuda_max_good", "CUDA", "{:0.1f}", None, True),
+    ("cpu_ghz", "cpu_ghz", "{:0.1f}", None, True),
+    ("disk_bw", "Disk B/W", "{:0.1f}", None, True),
+    ("disk_space", "Disk", "{:.0f}", None, True),
+    ("disk_name", "Disk Name", "{}", None, True),
+    ("storage_cost", "$/Gb/Month", "{:.2f}", None, True),
+    ("driver_version", "NV Driver", "{}", None, True),
+    ("inet_up", "Net_up", "{:0.1f}", None, True),
+    ("inet_down", "Net_down", "{:0.1f}", None, True),
+    ("reliability", "R", "{:0.1f}", lambda x: x * 100, True),
+    ("duration", "Max_Days", "{:0.1f}", lambda x: x / (24.0 * 60.0 * 60.0), True),
+    ("machine_id", "mach_id", "{}", None, True),
+    ("verification", "status", "{}", None, True),
+    ("host_id", "host_id", "{}", None, True),
+    ("geolocation", "country", "{}", None, True),
+)
+
 # Need to add bw_nvlink, machine_id, direct_port_count to output.
 
 
@@ -520,6 +692,22 @@ instance_fields = (
     ("uptime_mins", "uptime(mins)", "{:0.2f}",  None, True),
 )
 
+volume_fields = (
+    ("id", "ID", "{}", None, True),
+    ("disk_space", "Disk", "{:.0f}", None, True),
+    ("status", "status", "{}", None, True),
+    ("disk_name", "Disk Name", "{}", None, True),
+    ("driver_version", "NV Driver", "{}", None, True),
+    ("inet_up", "Net_up", "{:0.1f}", None, True),
+    ("inet_down", "Net_down", "{:0.1f}", None, True),
+    ("reliability2", "R", "{:0.1f}", lambda x: x * 100, True),
+    ("duration", "age(hours)", "{:0.2f}", lambda x: x/(3600.0), True),
+    ("machine_id", "mach_id", "{}", None, True),
+    ("verification", "Verification", "{}", None, True),
+    ("host_id", "host_id", "{}", None, True),
+    ("geolocation", "country", "{}", None, True),
+    ("instances", "instances","{}", None, True)
+)
 
 # These fields are displayed when you do 'show machines'
 machine_fields = (
@@ -823,7 +1011,7 @@ def parse_query(query_str: str, res: Dict = None, fields = {}, field_alias = {},
     return res
 
 
-def display_table(rows: list, fields: Tuple) -> None:
+def display_table(rows: list, fields: Tuple, replace_spaces: bool = True) -> None:
     """Basically takes a set of field names and rows containing the corresponding data and prints a nice tidy table
     of it.
 
@@ -849,7 +1037,8 @@ def display_table(rows: list, fields: Tuple) -> None:
             else:
                 val = conv(val)
                 s = fmt.format(val)
-            s = s.replace(' ', '_')
+            if replace_spaces:
+                s = s.replace(' ', '_')
             idx = len(row)
             lengths[idx] = max(len(s), lengths[idx])
             row.append(s)
@@ -879,6 +1068,7 @@ def parse_vast_url(url_str):
 
     instance_id = None
     path = url_str
+    #print(f'url_str: {url_str}')
     if (":" in url_str):
         url_parts = url_str.split(":", 2)
         if len(url_parts) == 2:
@@ -889,12 +1079,20 @@ def parse_vast_url(url_str):
             instance_id = int(instance_id)
         except:
             raise VRLException("Instance id must be an integer.")
+    else:
+        try:
+            instance_id = int(path)
+            path = "/"
+        except:
+            pass
 
     valid_unix_path_regex = re.compile('^(/)?([^/\0]+(/)?)+$')
     # Got this regex from https://stackoverflow.com/questions/537772/what-is-the-most-correct-regular-expression-for-a-unix-file-path
     if (path != "/") and (valid_unix_path_regex.match(path) is None):
         raise VRLException(f"Path component: {path} of VRL is not a valid Unix style path.")
-
+    
+    #print(f'instance_id: {instance_id}')
+    #print(f'path: {path}')
     return (instance_id, path)
 
 def get_ssh_key(argstr):
@@ -1069,6 +1267,41 @@ def change__bid(args: argparse.Namespace):
 
 
 
+@parser.command(
+    argument("source", help="id of volume contract being cloned", type=int),
+    argument("dest", help="id of volume offer volume is being copied to", type=int),
+    argument("-s", "--size", help="Size of new volume contract, in GB. Must be greater than or equal to the source volume, and less than or equal to the destination offer.", type=float),
+    argument("-d", "--disable_compression", action="store_true", help="Do not compress volume data before copying."),
+    usage="vastai copy volume <source_id> <dest_id> [options]",
+    help="Clone an existing volume",
+    epilog=deindent("""
+        Create a new volume with the given offer, by copying the existing volume. 
+        Size defaults to the size of the existing volume, but can be increased if there is available space.
+    """)
+)
+def clone__volume(args: argparse.Namespace):
+    json_blob={
+        "source" : args.source,
+        "dest": args.dest,
+    }
+    if args.size:
+        json_blob["size"] = args.size
+    if args.disable_compression:
+        json_blob["disable_compression"] = True
+
+
+    url = apiurl(args, "/volumes/copy/")
+
+    if (args.explain):
+        print("request json: ")
+        print(json_blob)
+    r = http_post(args, url,  headers=headers,json=json_blob)
+    r.raise_for_status()
+    if args.raw:
+        return r
+    else:
+        print("Created. {}".format(r.json()))
+
 
 @parser.command(
     argument("src", help="instance_id:/path to source of object to copy", type=str),
@@ -1105,8 +1338,9 @@ def copy(args: argparse.Namespace):
     (src_id, src_path) = parse_vast_url(args.src)
     (dst_id, dst_path) = parse_vast_url(args.dst)
     if (src_id is None) and (dst_id is None):
-        print("invalid arguments")
-        return
+        pass
+        #print("invalid arguments")
+        #return
 
     print(f"copying {str(src_id)+':' if src_id else ''}{src_path} {str(dst_id)+':' if dst_id else ''}{dst_path}")
 
@@ -1127,7 +1361,7 @@ def copy(args: argparse.Namespace):
     r = http_put(args, url,  headers=headers,json=req_json)
     r.raise_for_status()
     if (r.status_code == 200):
-        rj = r.json();
+        rj = r.json()
         #print(json.dumps(rj, indent=1, sort_keys=True))
         if (rj["success"]) and ((src_id is None) or (dst_id is None)):
             homedir = subprocess.getoutput("echo $HOME")
@@ -1155,17 +1389,17 @@ def copy(args: argparse.Namespace):
                 print("Remote to Remote copy initiated - check instance status bar for progress updates (~30 seconds delayed).")
             else:
                 if rj["msg"] == "src_path not supported VMs.":
-                    print("src instance is a VM, use `vm copy` command for VM to VM copies")
+                    print("copy between VM instances does not currently support subpaths (only full disk copy)")
                 elif rj["msg"] == "dst_path not supported for VMs.":
-                    print("dst instance is a VM, use `vm copy` command for VM to VM copies")
+                    print("copy between VM instances does not currently support subpaths (only full disk copy)")
                 else:
-                    print(rj["msg"]);
+                    print(rj["msg"])
     else:
-        print(r.text);
+        print(r.text)
         print("failed with error {r.status_code}".format(**locals()));
 
 
-
+'''
 @parser.command(
     argument("src", help="instance_id of source VM.", type=int),
     argument("dst", help="instance_id of destination VM", type=int),
@@ -1217,7 +1451,7 @@ def vm__copy(args: argparse.Namespace):
     else:
         print(r.text);
         print("failed with error {r.status_code}".format(**locals()));
-
+'''
 
 @parser.command(
     argument("--src", help="path to source of object to copy", type=str),
@@ -1775,6 +2009,41 @@ def create__template(args):
 
 
 @parser.command(
+    argument("id", help="id of volume offer", type=int),
+    argument("-s", "--size",
+             help="size in GB of volume. Default 15 GB.", type=float),
+    usage="vastai create volume ID [options]",
+    help="Create a new volume",
+    epilog=deindent("""
+        Creates a volume from an offer ID (which is returned from "search volumes"). Each offer ID can be used to create multiple volumes,
+        provided the size of all volumes does not exceed the size of the offer.
+    """)
+)
+def create__volume(args: argparse.Namespace):
+    
+    size = args.size
+    
+    if not size:
+        size = 15.0
+    json_blob ={
+        "size": size,
+        "id": args.id
+    }
+
+    url = apiurl(args, "/volumes/")
+
+    if (args.explain):
+        print("request json: ")
+        print(json_blob)
+    r = http_put(args, url,  headers=headers,json=json_blob)
+    r.raise_for_status()
+    if args.raw:
+        return r
+    else:
+        print("Created. {}".format(r.json()))
+
+
+@parser.command(
     argument("id", help="id of apikey to remove", type=int),
     usage="vastai delete api-key ID",
     help="Remove an api-key",
@@ -1913,6 +2182,25 @@ def delete__template(args):
         print("The response is not JSON. Content-Type:", r.headers.get('Content-Type'))
         print(r.text)
 
+
+@parser.command(
+    argument("id", help="id of volume contract", type=int),
+    usage="vastai delete volume ID",
+    help="Delete a volume",
+    epilog=deindent("""
+        Deletes volume with the given ID. All instances using the volume must be destroyed before the volume can be deleted.
+    """)
+)
+def delete__volume(args: argparse.Namespace):
+    url = apiurl(args, "/volumes/", query_args={"id": args.id})
+    r = http_del(args, url, headers=headers)
+    r.raise_for_status()
+    if args.raw:
+        return r
+    else:
+        print("Deleted. {}".format(r.json()))
+
+
 def destroy_instance(id,args):
     url = apiurl(args, "/instances/{id}/".format(id=id))
     r = http_del(args, url, headers=headers,json={})
@@ -2020,13 +2308,8 @@ def execute(args):
         if (rj["success"]):
             for i in range(0,30):
                 time.sleep(0.3)
-                url = rj.get("result_url",None)
-                if (url is None):
-                    api_key_id_h = hashlib.md5( (args.api_key + str(args.id)).encode('utf-8') ).hexdigest()
-                    url = "https://s3.amazonaws.com/vast.ai/instance_logs/" + api_key_id_h + "C.log"
-                # print(f"trying {url}")
-                r = requests.get(url) #headers=headers
-                # print(f"got: {r.status_code}")
+                url = rj["result_url"]
+                r = requests.get(url)
                 if (r.status_code == 200):
                     filtered_text = r.text.replace(rj["writeable_path"], '');
                     print(filtered_text)
@@ -2064,23 +2347,30 @@ def get__endpt_logs(args):
     levels = {0 : "info0", 1: "info1", 2: "trace", 3: "debug"}
 
     if (r.status_code == 200):
-        rj = r.json()
+        rj = None
+        try:
+            rj = r.json()
+        except Exception as e:
+            print(str(e))
+            print(r.text)
         if args.raw:
             # sort_keys
-            return rj
+            return rj or r.text
         else:
             dbg_lvl = levels[args.level]
             print(rj[dbg_lvl])
             #print(json.dumps(rj, indent=1, sort_keys=True))
+    else:
+        print(r.text)
 
 
 @parser.command(
     argument("--email", help="email of user to be invited", type=str),
     argument("--role", help="role of user to be invited", type=str),
-    usage="vastai invite team-member --email EMAIL --role ROLE",
+    usage="vastai invite member --email EMAIL --role ROLE",
     help="Invite a team member",
 )
-def invite__team_member(args):
+def invite__member(args):
     url = apiurl(args, "/team/invite/", query_args={"email": args.email, "role": args.role})
     r = http_post(args, url, headers=headers)
     r.raise_for_status()
@@ -2371,8 +2661,7 @@ def logs(args):
         rj = r.json()
         for i in range(0, 30):
             time.sleep(0.3)
-            api_key_id_h = hashlib.md5((args.api_key + str(args.INSTANCE_ID)).encode('utf-8')).hexdigest()
-            url = "https://s3.amazonaws.com/vast.ai/instance_logs/" + api_key_id_h + ".log"
+            url = rj["result_url"]
             print(f"waiting on logs for instance {args.INSTANCE_ID} fetching from {url}")
             r = requests.get(url)
             if r.status_code == 200:
@@ -2476,10 +2765,10 @@ def recycle__instance(args):
 
 @parser.command(
     argument("id", help="id of user to remove", type=int),
-    usage="vastai remove team-member ID",
+    usage="vastai remove member ID",
     help="Remove a team member",
 )
-def remove__team_member(args):
+def remove__member(args):
     url = apiurl(args, "/team/members/{id}/".format(id=args.id))
     r = http_del(args, url, headers=headers)
     r.raise_for_status()
@@ -2993,7 +3282,7 @@ def search__invoices(args):
             dlperf:                 float     DL-perf score  (see FAQ for explanation)
             dlperf_usd:             float     DL-perf/$
             dph:                    float     $/hour rental cost
-            driver_version          string    machine's nvidia driver version as 3 digit string ex. "535.86.05"
+            driver_version:         string    machine's nvidia/amd driver version as 3 digit string ex. "535.86.05,"
             duration:               float     max rental duration in days
             external:               bool      show external offers in addition to datacenter offers
             flops_usd:              float     TFLOPs/$
@@ -3236,6 +3525,119 @@ def search__templates(args):
         print(r.text)
         print("failed with error {r.status_code}".format(**locals()))
 
+@parser.command(
+    argument("-n", "--no-default", action="store_true", help="Disable default query"),
+    argument("--limit", type=int, help=""),
+    argument("--storage", type=float, default=1.0, help="Amount of storage to use for pricing, in GiB. default=1.0GiB"),
+    argument("-o", "--order", type=str, help="Comma-separated list of fields to sort on. postfix field with - to sort desc. ex: -o 'disk_space,inet_up-'.  default='score-'", default='score-'),
+    argument("query", help="Query to search for. default: 'external=false verified=true disk_space>=1', pass -n to ignore default", nargs="*", default=None),
+    usage="vastai search volumes [--help] [--api-key API_KEY] [--raw] <query>",
+    help="Search for volume offers using custom query",
+    epilog=deindent("""
+        Query syntax:
+
+            query = comparison comparison...
+            comparison = field op value
+            field = <name of a field>
+            op = one of: <, <=, ==, !=, >=, >, in, notin
+            value = <bool, int, float, string> | 'any' | [value0, value1, ...]
+            bool: True, False
+
+        note: to pass '>' and '<' on the command line, make sure to use quotes
+        note: to encode a string query value (ie for gpu_name), replace any spaces ' ' with underscore '_'
+
+        Examples:
+
+            # search for volumes with greater than 50GB of available storage and greater than 500 Mb/s upload and download speed
+            vastai search volumes "disk_space>50 inet_up>500 inet_down>500"
+            
+        Available fields:
+
+              Name                  Type       Description
+
+            cpu_arch:               string    host machine cpu architecture (e.g. amd64, arm64)
+            cuda_vers:              float     machine max supported cuda version (based on driver version)
+            datacenter:             bool      show only datacenter offers
+            disk_bw:                float     disk read bandwidth, in MB/s
+            disk_space:             float     disk storage space, in GB
+            driver_version:         string    machine's nvidia/amd driver version as 3 digit string ex. "535.86.05"
+            duration:               float     max rental duration in days
+            geolocation:            string    Two letter country code. Works with operators =, !=, in, notin (e.g. geolocation not in ['XV','XZ'])
+            gpu_arch:               string    host machine gpu architecture (e.g. nvidia, amd)
+            gpu_name:               string    GPU model name (no quotes, replace spaces with underscores, ie: RTX_3090 rather than 'RTX 3090')
+            has_avx:                bool      CPU supports AVX instruction set.
+            id:                     int       volume offer unique ID
+            inet_down:              float     internet download speed in Mb/s
+            inet_up:                float     internet upload speed in Mb/s
+            machine_id:             int       machine id of volume offer
+            pci_gen:                float     PCIE generation
+            pcie_bw:                float     PCIE bandwidth (CPU to GPU)
+            reliability:            float     machine reliability score (see FAQ for explanation)
+            storage_cost:           float     storage cost in $/GB/month
+            static_ip:              bool      is the IP addr static/stable
+            total_flops:            float     total TFLOPs from all GPUs
+            ubuntu_version:         string    host machine ubuntu OS version
+            verified:               bool      is the machine verified
+    """),
+)
+def search__volumes(args: argparse.Namespace):
+    try:
+
+        if args.no_default:
+            query = {}
+        else:
+            query = {"verified": {"eq": True}, "external": {"eq": False}, "disk_space": {"gte": 1}}
+
+        if args.query is not None:
+            query = parse_query(args.query, query, vol_offers_fields, {}, offers_mult)
+
+        order = []
+        for name in args.order.split(","):
+            name = name.strip()
+            if not name: continue
+            direction = "asc"
+            field = name
+            if name.strip("-") != name:
+                direction = "desc"
+                field = name.strip("-")
+            if name.strip("+") != name:
+                direction = "asc"
+                field = name.strip("+")
+            if field in offers_alias:
+                field = offers_alias[field];
+            order.append([field, direction])
+
+        query["order"] = order
+        if (args.limit):
+            query["limit"] = int(args.limit)
+        query["allocated_storage"] = args.storage
+    except ValueError as e:
+        print("Error: ", e)
+        return 1
+
+    json_blob = query
+
+    if (args.explain):
+        print("request json: ")
+        print(json_blob)
+    url = apiurl(args, "/volumes/search/")
+    r = http_post(args, url, headers=headers, json=json_blob)
+
+    r.raise_for_status()
+   
+    if (r.headers.get('Content-Type') != 'application/json'):
+        print(f"invalid return Content-Type: {r.headers.get('Content-Type')}")
+        return   
+
+    rows = r.json()["offers"]
+    
+    if args.raw:
+        return rows
+    else:
+        display_table(rows, vol_displayable_fields)
+
+
+
 
 @parser.command(
     argument("new_api_key", help="Api key to set as currently logged in user"),
@@ -3249,6 +3651,11 @@ def set__api_key(args):
     with open(APIKEY_FILE, "w") as writer:
         writer.write(args.new_api_key)
     print("Your api key has been saved in {}".format(APIKEY_FILE))
+    
+    APIKEY_FILE_HOME = os.path.expanduser("~/.vast_api_key") # Legacy
+    if os.path.exists(APIKEY_FILE_HOME):
+        os.remove(APIKEY_FILE_HOME)
+        print("Your api key has been removed from {}".format(APIKEY_FILE_HOME))
 
 
 
@@ -3327,7 +3734,7 @@ def _ssh_url(args, protocol):
 
     # Opening JSON file
     try:
-        with open(f"ssh_{args.id}.json", 'r') as openfile:
+        with open(f"{DIRS['temp']}/ssh_{args.id}.json", 'r') as openfile:
             json_object = json.load(openfile)
     except:
         pass
@@ -3339,7 +3746,7 @@ def _ssh_url(args, protocol):
         ipaddr = json_object["ipaddr"]
         port   = json_object["port"]
 
-    if ipaddr is None:
+    if ipaddr is None or ipaddr.endswith('.vast.ai'):
         req_url = apiurl(args, "/instances", {"owner": "me"});
         r = http_get(args, req_url);
         r.raise_for_status()
@@ -3373,7 +3780,7 @@ def _ssh_url(args, protocol):
    
     # Writing to sample.json
     try:
-        with open(f"ssh_{args.id}.json", "w") as outfile:
+        with open(f"{DIRS['temp']}/ssh_{args.id}.json", "w") as outfile:
             json.dump({"ipaddr":ipaddr, "port":port}, outfile)
     except:
         pass
@@ -3862,10 +4269,10 @@ def show__subaccounts(args):
         display_table(rows, user_fields)
 
 @parser.command(
-    usage="vastai show team-members",
+    usage="vastai show members",
     help="Show your team members",
 )
-def show__team_members(args):
+def show__members(args):
     url = apiurl(args, "/team/members/")
     r = http_get(args, url, headers=headers)
     r.raise_for_status()
@@ -3899,6 +4306,30 @@ def show__team_roles(args):
         return r
     else:
         print(r.json())
+
+
+@parser.command(
+    usage="vastai show volumes",
+    help="Show stats on owned volumes.",
+    epilog=deindent("""
+        Show stats on owned volumes
+    """)
+)
+def show__volumes(args: argparse.Namespace):
+    req_url = apiurl(args, "/volumes", {"owner": "me"});
+    r = http_get(args, req_url)
+    r.raise_for_status()
+    rows = r.json()["volumes"]
+    processed = []
+    for row in rows:
+        row = {k: strip_strings(v) for k, v in row.items()} 
+        row['duration'] = time.time() - row['start_date']
+        processed.append(row)
+    if args.raw:
+        return processed
+    else:
+        display_table(processed, volume_fields, replace_spaces=False)
+
 
 @parser.command(
     argument("recipient", help="email (or id) of recipient account", type=str),
@@ -3951,13 +4382,13 @@ def transfer__credit(args: argparse.Namespace):
     argument("--template_id",   help="template id", type=int),
     argument("--search_params",   help="search param string for search offers    ex: \"gpu_ram>=23 num_gpus=2 gpu_name=RTX_4090 inet_down>200 direct_port_count>2 disk_space>=64\"", type=str),
     argument("-n", "--no-default", action="store_true", help="Disable default search param query args"),
-    argument("--launch_args",   help="launch args  string for create instance  ex: \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\"", type=str),
+    argument("--launch_args",   help="launch args  string for create instance  ex: \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/public.vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\"", type=str),
     argument("--endpoint_name",   help="deployment endpoint name (allows multiple autoscale groups to share same deployment endpoint)", type=str),
     argument("--endpoint_id",   help="deployment endpoint id (allows multiple autoscale groups to share same deployment endpoint)", type=int),
     usage="vastai update autogroup ID [OPTIONS]",
     help="Update an existing autoscale group",
     epilog=deindent("""
-        Example: vastai update autogroup 4242 --min_load 100 --target_util 0.9 --cold_mult 2.0 --search_params \"gpu_ram>=23 num_gpus=2 gpu_name=RTX_4090 inet_down>200 direct_port_count>2 disk_space>=64\" --launch_args \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\" --gpu_ram 32.0 --endpoint_name "LLama" --endpoint_id 2
+        Example: vastai update autogroup 4242 --min_load 100 --target_util 0.9 --cold_mult 2.0 --search_params \"gpu_ram>=23 num_gpus=2 gpu_name=RTX_4090 inet_down>200 direct_port_count>2 disk_space>=64\" --launch_args \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/public.vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\" --gpu_ram 32.0 --endpoint_name "LLama" --endpoint_id 2
     """),
 )
 def update__autogroup(args):
@@ -4331,6 +4762,9 @@ def filter_invoice_items(args: argparse.Namespace, rows: List) -> Dict:
     return {"rows": rows, "header_text": header_text, "pdf_filename": filename}
 
 
+
+
+
 #@parser.command(
 #    argument("-q", "--quiet", action="store_true", help="only display numeric ids"),
 #    argument("-s", "--start_date", help="start date and time for report. Many formats accepted (optional)", type=str),
@@ -4479,7 +4913,7 @@ def list_machine(args, id):
 
     json_blob = {'machine': id, 'price_gpu': args.price_gpu,
                         'price_disk': args.price_disk, 'price_inetu': args.price_inetu, 'price_inetd': args.price_inetd, 'price_min_bid': args.price_min_bid, 
-                        'min_chunk': args.min_chunk, 'end_date': string_to_unix_epoch(args.end_date), 'credit_discount_max': args.discount_rate}
+                        'min_chunk': args.min_chunk, 'end_date': string_to_unix_epoch(args.end_date), 'credit_discount_max': args.discount_rate, 'duration': args.duration}
     if (args.explain):
         print("request json: ")
         print(json_blob)
@@ -4494,10 +4928,11 @@ def list_machine(args, id):
             min_chunk_ = str(args.min_chunk)
             end_date_ = string_to_unix_epoch(args.end_date)
             discount_rate_ = str(args.discount_rate)
+            duration_ = str(args.duration)
             if args.raw:
                 return r
             else:
-                print("offers created/updated for machine {id},  @ ${price_gpu_}/gpu/hr, ${price_inetu_}/GB up, ${price_inetd_}/GB down, {min_chunk_}/min gpus, max discount_rate {discount_rate_}, till {end_date_}".format(**locals()))
+                print("offers created/updated for machine {id},  @ ${price_gpu_}/gpu/hr, ${price_inetu_}/GB up, ${price_inetd_}/GB down, {min_chunk_}/min gpus, max discount_rate {discount_rate_}, till {end_date_}, duration {duration_}".format(**locals()))
                 num_extended = rj.get("extended", 0)
 
                 if num_extended > 0:
@@ -4524,6 +4959,7 @@ def list_machine(args, id):
     argument("-r", "--discount_rate", help="Max long term prepay discount rate fraction, default: 0.4 ", type=float),
     argument("-m", "--min_chunk", help="minimum amount of gpus", type=int),
     argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format)", type=str),
+    argument("-l", "--duration", help="Updates end_date daily to be duration from current date. Cannot be combined with end_date. Format is: `n days`, `n weeks`, `n months`, `n years`, or total intended duration in seconds."),
     usage="vastai list machine ID [options]",
     help="[Host] list a machine for rent",
     epilog=deindent("""
@@ -4553,6 +4989,7 @@ def list__machine(args):
     argument("-r", "--discount_rate", help="Max long term prepay discount rate fraction, default: 0.4 ", type=float),
     argument("-m", "--min_chunk", help="minimum amount of gpus", type=int),
     argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format)", type=str),
+    argument("-l", "--duration", help="Updates end_date daily to be duration from current date. Cannot be combined with end_date. Format is: `n days`, `n weeks`, `n months`, `n years`, or total intended duration in seconds."),
     usage="vastai list machines IDs [options]",
     help="[Host] list machines for rent",
     epilog=deindent("""
@@ -4567,6 +5004,87 @@ def list__machines(args):
     return [list_machine(args, id) for id in args.ids]
     return res
 
+
+@parser.command(
+    argument("id", help="id of machine to list", type=int),
+    argument("-p", "--price_disk",
+             help="storage price in $/GB/month, default: $0.15/GB/month", default=.15, type=float),
+    argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format), default 1 month", type=str),
+    argument("-s", "--size", help="size of disk space allocated to offer in GB, default 15 GB", default=15),
+    usage="vastai list volume ID [options]",
+    help="[Host] list disk space for rent as a volume on a machine",
+    epilog=deindent("""
+        Allocates a section of disk on a machine to be used for volumes.  
+    """)
+)
+def list__volume(args):        
+    size = args.size
+    if not size:
+        size = 15.0
+    price_disk = args.price_disk
+    if not price_disk:
+        price_disk = .15
+
+    json_blob ={
+        "size": int(size),
+        "machine": int(args.id)
+    }
+    if args.end_date:
+        json_blob["end_date"] = string_to_unix_epoch(args.end_date)
+
+
+    url = apiurl(args, "/volumes/")
+
+    if (args.explain):
+        print("request json: ")
+        print(json_blob)
+    r = http_post(args, url,  headers=headers,json=json_blob)
+    r.raise_for_status()
+    if args.raw:
+        return r
+    else:
+        print("Created. {}".format(r.json()))
+
+
+@parser.command(
+    argument("ids", help="id of machines list", type=int, nargs='+'),
+    argument("-s", "--price_disk",
+             help="storage price in $/GB/month, default: $0.10/GB/month", type=float),
+    argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format)", type=str),
+    argument("-n", "--size", help="size of disk space allocated to offer in GB, default 5 GB"),
+    usage="vastai list volume IDs [options]",
+    help="[Host] list disk space for rent as a volume on machines",
+    epilog=deindent("""
+        Allocates a section of disk on machines to be used for volumes.  
+    """)
+)
+def list__volumes(args):
+    size = args.size
+    if not size:
+        size = 15.0
+    price_disk = args.price_disk
+    if not price_disk:
+        price_disk = .15
+
+    json_blob ={
+        "size": int(size),
+        "machine": [int(id) for id in args.ids]
+    }
+    if args.end_date:
+        json_blob["end_date"] = string_to_unix_epoch(args.end_date)
+
+
+    url = apiurl(args, "/volumes/")
+
+    if (args.explain):
+        print("request json: ")
+        print(json_blob)
+    r = http_post(args, url,  headers=headers,json=json_blob)
+    r.raise_for_status()
+    if args.raw:
+        return r
+    else:
+        print("Created. {}".format(r.json()))
 
 
 
@@ -4678,7 +5196,7 @@ def parse_env(envs):
     prev = None
     for e in env:
         if (prev is None):
-          if (e in {"-e", "-p", "-h"}):
+          if (e in {"-e", "-p", "-h", "-v"}):
               prev = e
           else:
             pass
@@ -4697,6 +5215,9 @@ def parse_env(envs):
                 result[kv[0]] = val.strip("'\"")
             else:
                 pass
+          elif (prev == "-v"):
+            if (set(e).issubset(set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:./_"))):
+                result["-v " + e] = "1" 
           else:
               result[prev] = e
           prev = None
@@ -5121,7 +5642,7 @@ def run_machinetester(ip_address, port, instance_id, machine_id, delay, args, ap
     first_connection_established = False  # Flag to track first successful connection
     instance_destroyed = False  # Track whether the instance has been destroyed
     try:
-        while time.time() - start_time < 300:
+        while time.time() - start_time < 600:
             # Check instance status with high priority for offline status
             status = is_instance(instance_id)
             if args.debugging:
@@ -5184,13 +5705,13 @@ def run_machinetester(ip_address, port, instance_id, machine_id, delay, args, ap
                 if args.debugging:
                     debug_print(args, f"No message received. Incremented no_response_seconds to {no_response_seconds}.")
 
-            if status == 'running' and no_response_seconds >= 60:
+            if status == 'running' and no_response_seconds >= 120:
                 with open("Error_testresults.log", "a") as f:
-                    f.write(f"{machine_id}:{instance_id} No response from port {port} for 60s with running instance\n")
-                progress_print(args, f"No response for 60s with running instance. This may indicate a misconfiguration of ports on the machine.")
+                    f.write(f"{machine_id}:{instance_id} No response from port {port} for 120s with running instance\n")
+                progress_print(args, f"No response for 120s with running instance. This may indicate a misconfiguration of ports on the machine. Network error or system stall or crashed. ")
                 destroy_instance_silent(instance_id, destroy_args)
                 instance_destroyed = True
-                return False, "No response for 60 seconds with running instance"
+                return False, "No response for 120 seconds with running instance. The system might have crashed or stalled during stress test. Use the self-test machine function in vast cli"
 
             if args.debugging:
                 debug_print(args, "Waiting for 20 seconds before the next check.")
@@ -5247,7 +5768,7 @@ def check_requirements(machine_id, api_key, args):
 
     # Prepare search arguments to get machine offers
     search_args = argparse.Namespace(
-        query=[f"machine_id={machine_id}", "verified=any", "rentable=true"],
+        query=[f"machine_id={machine_id}", "verified=any", "rentable=true", "rented=any"],
         type="on-demand",
         quiet=False,
         no_default=False,
@@ -5283,8 +5804,8 @@ def check_requirements(machine_id, api_key, args):
 
         # Requirement checks
         # 1. CUDA version
-        if safe_float(top_offer.get('cuda_max_good')) < 12.4:
-            unmet_reasons.append("CUDA version < 12.4")
+        if safe_float(top_offer.get('cuda_max_good')) < 11.8:
+            unmet_reasons.append("CUDA version < 11.8")
 
         # 2. Reliability
         if safe_float(top_offer.get('reliability')) <= 0.90:
@@ -5432,7 +5953,7 @@ def wait_for_instance(instance_id, api_key, args, destroy_args, timeout=900, int
             time.sleep(interval)
     
     # Timeout reached without instance running
-    reason = f"Instance {instance_id} did not become running within {timeout} seconds."
+    reason = f"Instance did not become running within {timeout} seconds. Verify network configuration. Use the self-test machine function in vast cli"
     progress_print(args, reason)
     return False, reason
 
@@ -5443,8 +5964,9 @@ def wait_for_instance(instance_id, api_key, args, destroy_args, timeout=900, int
     argument("--raw", action="store_true", help="Output machine-readable JSON"), 
     argument("--url", help="Server REST API URL", default="https://console.vast.ai"),
     argument("--retry", help="Retry limit", type=int, default=3),
-    usage="vastai self-test machine <machine_id> [--debugging] [--explain] [--api_key API_KEY] [--url URL] [--retry RETRY] [--raw]",
-    help="Perform a self-test on the specified machine",
+    argument("--ignore-requirements", action="store_true", help="Ignore the minimum system requirements and run the self test regardless"),
+    usage="vastai self-test machine <machine_id> [--debugging] [--explain] [--api_key API_KEY] [--url URL] [--retry RETRY] [--raw] [--ignore-requirements]",
+    help="[Host] Perform a self-test on the specified machine",
     epilog=deindent("""
         This command tests if a machine meets specific requirements and 
         runs a series of tests to ensure it's functioning correctly.
@@ -5496,130 +6018,177 @@ def self_test__machine(args):
 
         # Check requirements
         meets_requirements, unmet_reasons = check_requirements(args.machine_id, api_key, args)
-        if not meets_requirements:
-            progress_print(args, f"Machine ID {args.machine_id} does not meet the requirements:")
+        if not meets_requirements and not args.ignore_requirements:
+            # immediately fail
+            progress_print(args, f"Machine ID {args.machine_id} does not meet the following requirements:")
             for reason in unmet_reasons:
                 progress_print(args, f"- {reason}")
             result["reason"] = "; ".join(unmet_reasons)
+            return result
+        if not meets_requirements and args.ignore_requirements:
+            progress_print(args, f"Machine ID {args.machine_id} does not meet the following requirements:")
+            for reason in unmet_reasons:
+                progress_print(args, f"- {reason}")
+                # If user did pass --ignore-requirements, warn and continue
+                progress_print(args, "Continuing despite unmet requirements because --ignore-requirements is set.")
+
+        def cuda_map_to_image(cuda_version):
+            """
+            Maps a CUDA version to a Docker image tag, falling back to the next lower version until failure.
+            """
+            docker_repo = "vastai/test"
+            # Convert float input to string
+            if isinstance(cuda_version, float):
+                cuda_version = str(cuda_version)
+            
+            # Predefined mapping. Tracks PyTorch releases
+            docker_tag_map = {
+                "11.8": "cu118",
+                "12.1": "cu121",
+                "12.4": "cu124",
+                "12.6": "cu126",
+                "12.8": "cu128"
+            }
+            
+            if cuda_version in docker_tag_map:
+                return f"{docker_repo}:self-test-{docker_tag_map[cuda_version]}"
+            
+            # Try to find the next version down
+            cuda_float = float(cuda_version)
+            
+            # Try to decrement the version by 0.1 until we find a match or run out of options
+            next_version = round(cuda_float - 0.1, 1)
+            while next_version >= min(float(v) for v in docker_tag_map.keys()):
+                next_version_str = str(next_version)
+                if next_version_str in docker_tag_map:
+                    return f"{docker_repo}:self-test-{docker_tag_map[next_version_str]}"
+                next_version = round(next_version - 0.1, 1)
+            
+            raise KeyError(f"No CUDA version found for {cuda_version} or any lower version")
+    
+
+        def search_offers_and_get_top(machine_id):
+            search_args = argparse.Namespace(
+                query=[f"machine_id={machine_id}", "verified=any", "rentable=true", "rented=any"],
+                type="on-demand",
+                quiet=False,
+                no_default=False,
+                new=False,
+                limit=None,
+                disable_bundling=False,
+                storage=5.0,
+                order="score-",
+                raw=True,
+                explain=args.explain,
+                api_key=api_key,
+                url=args.url,
+                curl=args.curl,
+                retry=args.retry,
+                debugging=args.debugging,
+            )
+            offers = search__offers(search_args)
+            if not offers:
+                progress_print(args, f"Machine ID {machine_id} not found or not rentable.")
+                return None
+            sorted_offers = sorted(offers, key=lambda x: x.get("dlperf", 0), reverse=True)
+            return sorted_offers[0] if sorted_offers else None
+
+        top_offer = search_offers_and_get_top(args.machine_id)
+        if not top_offer:
+            progress_print(args, f"No valid offers found for Machine ID {args.machine_id}")
+            result["reason"] = "No valid offers found."
         else:
-            # Find the top offer
-            def search_offers_and_get_top(machine_id):
-                search_args = argparse.Namespace(
-                    query=[f"machine_id={machine_id}", "verified=any", "rentable=true"],
-                    type="on-demand",
-                    quiet=False,
-                    no_default=False,
-                    new=False,
-                    limit=None,
-                    disable_bundling=False,
-                    storage=5.0,
-                    order="score-",
-                    raw=True,
-                    explain=args.explain,
-                    api_key=api_key,
-                    url=args.url,
-                    retry=args.retry,
-                    debugging=args.debugging,
-                )
-                offers = search__offers(search_args)
-                if not offers:
-                    progress_print(args, f"Machine ID {machine_id} not found or not rentable.")
-                    return None
-                sorted_offers = sorted(offers, key=lambda x: x.get("dlperf", 0), reverse=True)
-                return sorted_offers[0] if sorted_offers else None
+            ask_contract_id = top_offer["id"]
+            cuda_version = top_offer["cuda_max_good"]
+            docker_image = cuda_map_to_image(cuda_version)
 
-            top_offer = search_offers_and_get_top(args.machine_id)
-            if not top_offer:
-                progress_print(args, f"No valid offers found for Machine ID {args.machine_id}")
-                result["reason"] = "No valid offers found."
-            else:
-                ask_contract_id = top_offer["id"]
+            # Prepare arguments for instance creation
+            create_args = argparse.Namespace(
+                id=ask_contract_id,
+                user=None,
+                price=None,  # Set bid_price to None
+                disk=40,  # Match the disk size from the working command
+                image=docker_image,
+                login=None,
+                label=None,
+                onstart=None,
+                onstart_cmd="/verification/remote.sh",
+                entrypoint=None,
+                ssh=False,  # Set ssh to False
+                jupyter=True,  # Set jupyter to True
+                direct=True,
+                jupyter_dir=None,
+                jupyter_lab=False,
+                lang_utf8=False,
+                python_utf8=False,
+                extra=None,
+                env="-e TZ=PDT -e XNAME=XX4 -p 5000:5000 -p 1234:1234",
+                args=None,
+                force=False,
+                cancel_unavail=False,
+                template_hash=None,
+                raw=True,
+                explain=args.explain,
+                api_key=api_key,
+                url=args.url,
+                retry=args.retry,
+                debugging=args.debugging,
+                bid_price=None,  # Ensure bid_price is None
+            )
 
-                # Prepare arguments for instance creation
-                create_args = argparse.Namespace(
-                    id=ask_contract_id,
-                    price=None,  # Set bid_price to None
-                    disk=40,  # Match the disk size from the working command
-                    image="vastai/test:selftest",  # Use the same image as the working command
-                    login=None,
-                    label=None,
-                    onstart=None,
-                    onstart_cmd="python3 remote.py",
-                    entrypoint=None,
-                    ssh=False,  # Set ssh to False
-                    jupyter=True,  # Set jupyter to True
-                    direct=True,
-                    jupyter_dir=None,
-                    jupyter_lab=False,
-                    lang_utf8=False,
-                    python_utf8=False,
-                    extra=None,
-                    env="-e TZ=PDT -e XNAME=XX4 -p 5000:5000",
-                    args=None,
-                    force=False,
-                    cancel_unavail=False,
-                    template_hash=None,
-                    raw=True,
-                    explain=args.explain,
-                    api_key=api_key,
-                    url=args.url,
-                    retry=args.retry,
-                    debugging=args.debugging,
-                    bid_price=None,  # Ensure bid_price is None
-                )
-
-                # Create instance
-                try:
-                    response = create__instance(create_args)
-                    if isinstance(response, requests.Response):  # Check if it's an HTTP response
-                        if response.status_code == 200:
-                            try:
-                                instance_info = response.json()  # Parse JSON
-                                if args.debugging:
-                                    debug_print(args, "Captured instance_info from create__instance:", instance_info)
-                            except json.JSONDecodeError as e:
-                                progress_print(args, f"Error parsing JSON response: {e}")
-                                debug_print(args, f"Raw response content: {response.text}")
-                                raise Exception("Failed to parse JSON from instance creation response.")
-                        else:
-                            progress_print(args, f"HTTP error during instance creation: {response.status_code}")
-                            debug_print(args, f"Response text: {response.text}")
-                            raise Exception(f"Instance creation failed with status {response.status_code}")
+            # Create instance
+            try:
+                progress_print(args, f"Starting test with {docker_image}")
+                response = create__instance(create_args)
+                if isinstance(response, requests.Response):  # Check if it's an HTTP response
+                    if response.status_code == 200:
+                        try:
+                            instance_info = response.json()  # Parse JSON
+                            if args.debugging:
+                                debug_print(args, "Captured instance_info from create__instance:", instance_info)
+                        except json.JSONDecodeError as e:
+                            progress_print(args, f"Error parsing JSON response: {e}")
+                            debug_print(args, f"Raw response content: {response.text}")
+                            raise Exception("Failed to parse JSON from instance creation response.")
                     else:
-                        raise Exception("Unexpected response type from create__instance.")
-                except Exception as e:
-                    progress_print(args, f"Error creating instance: {e}")
-                    result["reason"] = "Failed to create instance."
-                    return result  # Cleanup handled in finally block
-
-                # Extract instance ID and proceed
-                instance_id = instance_info.get("new_contract")
-                if not instance_id:
-                    progress_print(args, "Instance creation response did not contain 'new_contract'.")
-                    result["reason"] = "Instance creation failed."
+                        progress_print(args, f"HTTP error during instance creation: {response.status_code}")
+                        debug_print(args, f"Response text: {response.text}")
+                        raise Exception(f"Instance creation failed with status {response.status_code}")
                 else:
-                    # Wait for the instance to start
-                    instance_info, wait_reason = wait_for_instance(instance_id, api_key, args, destroy_args)
-                    if not instance_info:
-                        result["reason"] = wait_reason
+                    raise Exception("Unexpected response type from create__instance.")
+            except Exception as e:
+                progress_print(args, f"Error creating instance: {e}")
+                result["reason"] = "Failed to create instance. Check the docker configuration. Use the self-test machine function in vast cli "
+                return result  # Cleanup handled in finally block
+
+            # Extract instance ID and proceed
+            instance_id = instance_info.get("new_contract")
+            if not instance_id:
+                progress_print(args, "Instance creation response did not contain 'new_contract'.")
+                result["reason"] = "Instance creation failed."
+            else:
+                # Wait for the instance to start
+                instance_info, wait_reason = wait_for_instance(instance_id, api_key, args, destroy_args)
+                if not instance_info:
+                    result["reason"] = wait_reason
+                else:
+                    # Proceed with the rest of your code
+                    # Run machine tester
+                    ip_address = instance_info.get("public_ipaddr")
+                    if not ip_address:
+                        result["reason"] = "Failed to retrieve public IP address."
                     else:
-                        # Proceed with the rest of your code
-                        # Run machine tester
-                        ip_address = instance_info.get("public_ipaddr")
-                        if not ip_address:
-                            result["reason"] = "Failed to retrieve public IP address."
+                        port_mappings = instance_info.get("ports", {}).get("5000/tcp", [])
+                        port = port_mappings[0].get("HostPort") if port_mappings else None
+                        if not port:
+                            result["reason"] = "Failed to retrieve mapped port."
                         else:
-                            port_mappings = instance_info.get("ports", {}).get("5000/tcp", [])
-                            port = port_mappings[0].get("HostPort") if port_mappings else None
-                            if not port:
-                                result["reason"] = "Failed to retrieve mapped port."
-                            else:
-                                delay = "15"
-                                success, reason = run_machinetester(
-                                    ip_address, port, str(instance_id), args.machine_id, delay, args, api_key=api_key
-                                )
-                                result["success"] = success
-                                result["reason"] = reason
+                            delay = "15"
+                            success, reason = run_machinetester(
+                                ip_address, port, str(instance_id), args.machine_id, delay, args, api_key=api_key
+                            )
+                            result["success"] = success
+                            result["reason"] = reason
 
     except Exception as e:
         result["success"] = False
@@ -5686,18 +6255,31 @@ def main():
     parser.add_argument("--retry", help="retry limit", default=3)
     parser.add_argument("--raw", action="store_true", help="output machine-readable json")
     parser.add_argument("--explain", action="store_true", help="output verbose explanation of mapping of CLI calls to HTTPS API endpoints")
+    parser.add_argument("--curl", action="store_true", help="show a curl equivalency to the call")
     parser.add_argument("--api-key", help="api key. defaults to using the one stored in {}".format(APIKEY_FILE), type=str, required=False, default=os.getenv("VAST_API_KEY", api_key_guard))
+    parser.add_argument("--version", help="show version", action="version", version=VERSION)
 
     ARGS = args = parser.parse_args()
-
+    #print(args.api_key)
     if args.api_key is api_key_guard:
+        if args.explain:
+            print(f'checking {APIKEY_FILE}')
         if os.path.exists(APIKEY_FILE):
+            if args.explain:
+                print(f'reading key from {APIKEY_FILE}')
             with open(APIKEY_FILE, "r") as reader:
                 args.api_key = reader.read().strip()
         else:
             args.api_key = None
     if args.api_key:
         headers["Authorization"] = "Bearer " + args.api_key
+
+    if not args.raw and should_check_for_update:
+        try:
+            if is_pip_package():
+                check_for_update()
+        except Exception as e:
+            print(f"Error checking for update: {e}")
 
     if TABCOMPLETE:
         myautocc = MyAutocomplete()
@@ -5731,4 +6313,3 @@ if __name__ == "__main__":
         main()
     except (KeyboardInterrupt, BrokenPipeError):
         pass
-
