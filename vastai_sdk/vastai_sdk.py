@@ -291,18 +291,19 @@ class VastAI(VastAIBase):
             _vast.ARGS = args
 
             if logger.isEnabledFor(logging.DEBUG):
-               kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
-               logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
-
-            out_b = io.StringIO()
-            out_o = sys.stdout
-            sys.stdout = out_b
+                kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
+                logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
+            else:
+                out_b = io.StringIO()
+                out_o = sys.stdout
+                sys.stdout = out_b
 
             res = func(args) 
 
-            sys.stdout = out_o
-            self.last_output = out_b.getvalue()
-            out_b.close()
+            if not logger.isEnabledFor(logging.DEBUG):
+                sys.stdout = out_o
+                self.last_output = out_b.getvalue()
+                out_b.close()
 
             if func.__name__ in _hooks:
               res = _hooks[func.__name__][1](state, res, self)
