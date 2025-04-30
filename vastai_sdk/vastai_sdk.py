@@ -107,11 +107,14 @@ def queryFormatter(state, obj, instance):
     if state['chunked']:
       good = True
 
-      for k,v in cutoff.items():
-        if res[k] < cutoff[k]:
-          good = False
-        else:
-          res[k] = cutoff[k]
+      try:
+        for k,v in cutoff.items():
+          if res[k] is not None and (res[k] < cutoff[k]):
+            good = False
+          else:
+            res[k] = cutoff[k]
+      except:
+        good = False
 
       if not good:
         continue
