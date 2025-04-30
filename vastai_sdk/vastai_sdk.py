@@ -92,7 +92,8 @@ def queryFormatter(state, obj, instance):
   # depth to our catalog offerings
   cutoff = {
     'cpu_ram': 64 * 1024,
-    'cpu_cores': 32
+    'cpu_cores': 32,
+    'min_bid': 0
   }
 
   upper = lambda amount: amount & (0xffff << max(amount.bit_length() - 1,1))
