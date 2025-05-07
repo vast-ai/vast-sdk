@@ -59,7 +59,8 @@ def queryParser(kwargs, instance):
 
     key = Word(alphas + "_-")
     operator = oneOf("= in != > < >= <=")
-    single_value = Word(alphanums + "_") | quotedString
+    single_value = Word(alphanums + "_.-") | quotedString
+
     array_value = (
         Suppress("[") + delimitedList(quotedString) + Suppress("]")
     ).setParseAction(lambda t: f"[{','.join(t)}]")
