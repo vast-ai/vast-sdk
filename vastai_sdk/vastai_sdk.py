@@ -135,7 +135,8 @@ def lastOutput(state, obj, instance):
   
 _hooks = {
     'search__offers': [queryParser, queryFormatter],
-    'logs': [None, lastOutput]
+    'logs': [None, lastOutput],
+    'execute': [None, lastOutput]
 }
 
 class VastAI(VastAIBase):
