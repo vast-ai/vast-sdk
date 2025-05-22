@@ -304,7 +304,11 @@ class VastAI(VastAIBase):
                 out_o = sys.stdout
                 sys.stdout = out_b
 
-            res = func(args) 
+            res = ''
+            try:
+                res = func(args) 
+            except:
+                pass
 
             if not logger.isEnabledFor(logging.DEBUG):
                 sys.stdout = out_o

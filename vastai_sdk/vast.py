@@ -312,7 +312,7 @@ def http_request(verb, args, req_url, headers = None, json = None):
             pp[-3] += "\n "
             parts = [*parts[:-1], *[x.rstrip() for x in "'".join(pp).split("\n")]]
             print("\n" + ' \\\n  '.join(parts).strip() + "\n")
-            sys.exit(0)
+            raise Exception()
         else:
             r = session.send(prep)
 
