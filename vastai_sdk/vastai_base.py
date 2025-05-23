@@ -49,7 +49,7 @@ class VastAIBase(ABC):
         """Create a new SSH key."""
         pass
 
-    def create_autoscaler(
+    def create_autogroup(
         self,
         test_workers: int = 3,
         gpu_ram: Optional[float] = None,
