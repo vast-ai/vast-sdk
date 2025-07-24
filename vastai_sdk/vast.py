@@ -2445,7 +2445,7 @@ def _get_gpu_names() -> List[str]:
 REGIONS = {
     "North_America": "[US, CA]",
     "South_America": "[BR, AR, CL]",
-    "Europe": "[SE, UA, GB, PL, PT, SI, DE, IT, CH, LT, GR, FI, IS, AT, FR, RO, MD, HU, NO, MK, BG, ES, HR, NL, CZ, EE",
+    "Europe": "[SE, UA, GB, PL, PT, SI, DE, IT, CH, LT, GR, FI, IS, AT, FR, RO, MD, HU, NO, MK, BG, ES, HR, NL, CZ, EE]",
     "Asia": "[CN, JP, KR, ID, IN, HK, MY, IL, TH, QA, TR, RU, VN, TW, OM, SG, AE, KZ]",
     "Oceania": "[AU, NZ]",
     "Africa": "[EG, ZA]",
