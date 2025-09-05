@@ -4153,13 +4153,32 @@ def show__instance(args):
     #r = http_get(req_url)
     r = http_get(args, req_url)
     r.raise_for_status()
-    row = r.json()["instances"]
-    row['duration'] = time.time() - row['start_date']
-    row['extra_env'] = {env_var[0]: env_var[1] for env_var in row['extra_env']}
+    
+    # Safely get the instance data. The API might return {"instances": null}
+    # if the instance is not ready or found.
+    response_data = r.json()
+    row = response_data.get("instances")
+
+    # Check if the instance data exists before processing it.
+    if not row:
+        if args.raw:
+            return None # Return None for raw mode if instance not found
+        else:
+            print(f"Instance with ID {args.id} not found or not ready.")
+            return # Exit gracefully for interactive mode
+
+    # Safely calculate duration
+    start_date = row.get('start_date')
+    if start_date is not None:
+        row['duration'] = time.time() - start_date
+    
+    extra_env = row.get('extra_env')
+    if extra_env:
+        row['extra_env'] = {env_var[0]: env_var[1] for env_var in extra_env}
+
     if args.raw:
         return row
     else:
-        #print(row)
         display_table([row], instance_fields)
 
 @parser.command(
