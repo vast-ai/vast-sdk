@@ -4176,7 +4176,6 @@ def show__instance(args):
     if extra_env:
         row['extra_env'] = {env_var[0]: env_var[1] for env_var in extra_env}
 
-    row['extra_env'] = {env_var[0]: env_var[1] for env_var in row['extra_env']}
     if args.raw:
         return row
     else:
