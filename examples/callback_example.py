@@ -1,5 +1,5 @@
 import asyncio
-from vast_serverless import Serverless, ServerlessRequest
+from vastai_sdk import Serverless, ServerlessRequest
 import os
 
 API_KEY = os.environ.get("VAST_API_KEY")
