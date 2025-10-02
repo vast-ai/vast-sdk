@@ -25,7 +25,7 @@ class Endpoint:
         return self.client.queue_endpoint_request(endpoint=self, worker_route=route, worker_payload=payload, serverless_request=serverless_request)
     
     async def _route(self, cost=0.0):
-        if self.client == None or not self.client.is_open():
+        if self.client is None or not self.client.is_open():
             raise ValueError("Client is invalid")
         try:
             response = await _make_request(
@@ -60,6 +60,7 @@ class RouteResponse:
         else:
             self.status = "WAITING"
             self.body = body
+            
     def get_url(self):
-        return self.body["url"]
+        return self.body.get("url")
         

@@ -38,7 +38,7 @@ class Serverless:
     SSL_CERT_URL = "https://console.vast.ai/static/jvastai_root.cer"
 
     def __init__(self, api_key: str, debug=False):
-        if api_key == None or api_key == "":
+        if api_key is None or api_key == "":
             raise ValueError("api_key cannot be empty")
         self.api_key = api_key
 
@@ -69,7 +69,7 @@ class Serverless:
         return self._session
     
     def is_open(self):
-        return not self._session.closed
+        return self._session is not None and not self._session.closed
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -129,7 +129,7 @@ class Serverless:
     
     def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None):
         """Return a Future that will resolve once the request completes."""
-        if serverless_request == None:
+        if serverless_request is None:
             serverless_request = ServerlessRequest()
 
         async def task(request: ServerlessRequest):
