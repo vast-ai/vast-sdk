@@ -22,7 +22,7 @@ async def _make_request(client, route : str, api_key : str, url=VAST_WEB_URL, bo
             async with request_fn(url + route, headers=headers, json=body, params=params, ssl=ssl_context) as resp:
                 text = await resp.text()
 
-                if resp.status == 429:
+                if resp.status != 200:
                     # Check for Retry-After header if provided
                     retry_after = resp.headers.get("Retry-After")
                     if retry_after:
@@ -33,9 +33,6 @@ async def _make_request(client, route : str, api_key : str, url=VAST_WEB_URL, bo
 
                     await asyncio.sleep(wait_time)
                     continue  # retry
-
-                if resp.status != 200:
-                    raise Exception(f"Error connecting to {url + route}:\nHTTP {resp.status}: {text}")
 
                 try:
                     return await resp.json(content_type=None)

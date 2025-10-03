@@ -5,3 +5,6 @@ python-dateutil==2.6.1
 pytz
 urllib3
 pyparsing
+fastapi>=0.110
+uvicorn[standard]>=0.24
+vastai-sdk>=0.1

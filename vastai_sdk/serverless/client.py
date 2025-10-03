@@ -137,23 +137,31 @@ class Serverless:
                 request.status = "Queued"
 
                 # Initial high-cost route to wake up stopped workers
-                route = await endpoint._route(100)
+                route = await endpoint._route(cost=0)
                 self.logger.info("Sending initial route call")
 
                 max_wait_time = 60 # seconds
                 poll_interval = 1
                 elapsed_time = 0
 
-                while route.status != "READY":
-                    if elapsed_time >= max_wait_time:
-                        raise TimeoutError("Timed out waiting for worker to become ready")
+                if route.status != "READY":
+                    # Call route with high cost to wake up a worker
+                    self.logger.info("No workers present, attempting to wake up stopped worker")
+                    route = await endpoint._route(cost=100)
 
-                    await asyncio.sleep(poll_interval)
-                    elapsed_time += poll_interval
+                    while route.status != "READY":
+                        # Call route with no cost to poll endpoint status
+                        route = await endpoint._route()
+                        self.logger.info(f"Polling for ready worker... ({elapsed_time}s elapsed)")
 
-                    # Call route with no cost to poll endpoint status
-                    route = await endpoint._route()
-                    self.logger.info(f"Polling for ready worker... ({elapsed_time}s elapsed)")
+                        while route.status != "READY":
+                            if elapsed_time >= max_wait_time:
+                                raise TimeoutError("Timed out waiting for worker to become ready")
+                            await asyncio.sleep(poll_interval)
+                            elapsed_time += poll_interval
+                            # Call route with no cost to poll endpoint status
+                            route = await endpoint._route()
+                            self.logger.info("Sending polling route call...")
 
                 self.logger.info("Found worker machine, starting work")
                 request.status = "In Progress"
