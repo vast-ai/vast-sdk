@@ -15,26 +15,28 @@ class ServerlessRequest(asyncio.Future):
         self.on_work_start_callbacks = []
         self.status = "New"
 
-    def then(self, callback):
+    def then(self, callback: callable) -> "ServerlessRequest":
         def _done(fut):
             callback(fut.result())
         self.add_done_callback(_done)
         return self
-    
-    def add_on_work_start_callback(self, callback):
+
+    def add_on_work_start_callback(self, callback: callable) -> None:
         """Register a callback (sync or async) that will be invoked when work starts."""
         self.on_work_start_callbacks.append(callback)
-    
-    async def trigger_on_work_start(self):
+
+    async def trigger_on_work_start(self) -> None:
         """Run the registered callback when worker starts."""
-        if len(self.on_work_start_callbacks) > 0:
-            for cb in self.on_work_start_callbacks:
+        for cb in self.on_work_start_callbacks:
+            try:
                 if asyncio.iscoroutinefunction(cb):
                     await cb()
                 else:
                     cb()
+            except Exception as e:
+                pass
 
-class Serverless:
+class ServerlessClient:
     SSL_CERT_URL = "https://console.vast.ai/static/jvastai_root.cer"
 
     def __init__(self, api_key: str, debug=False):
@@ -57,7 +59,6 @@ class Serverless:
         else:
             # If debug is False, disable logging
             self.logger.addHandler(logging.NullHandler())
-
 
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
@@ -121,13 +122,14 @@ class Serverless:
             raise Exception(
                 f"Failed to get endpoints:\nReason={ex}"
             )
+
         endpoints = []
         for e in response["results"]:
             endpoints.append(Endpoint(client=self, name=e["endpoint_name"], id=e["id"], api_key=e["api_key"]))
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
-    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None):
+    def send_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None):
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
             serverless_request = ServerlessRequest()
@@ -140,6 +142,7 @@ class Serverless:
                 route = await endpoint._route(cost=0)
                 self.logger.info("Sending initial route call")
 
+                # Prevents infinite polling
                 max_wait_time = 60 # seconds
                 poll_interval = 1
                 elapsed_time = 0

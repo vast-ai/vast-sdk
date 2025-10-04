@@ -22,7 +22,7 @@ class Endpoint:
 
     def request(self, route, payload, serverless_request=None):
         """Forward requests to the parent client."""
-        return self.client.queue_endpoint_request(endpoint=self, worker_route=route, worker_payload=payload, serverless_request=serverless_request)
+        return self.client.send_endpoint_request(endpoint=self, worker_route=route, worker_payload=payload, serverless_request=serverless_request)
     
     async def _route(self, cost=0.0):
         if self.client is None or not self.client.is_open():
