@@ -5,7 +5,7 @@ import os
 API_KEY = os.environ.get("VAST_API_KEY")
 
 async def main():
-    client = ServerlessClient(API_KEY, debug=False)
+    client = ServerlessClient(API_KEY, debug=True)
     endpoint = await client.get_endpoint(name="my_endpoint")
 
     payload = {

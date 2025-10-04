@@ -34,7 +34,7 @@ class ServerlessRequest(asyncio.Future):
                 else:
                     cb()
             except Exception as e:
-                pass
+                self.logger.warning(f"Callback error: {e}")
 
 class ServerlessClient:
     SSL_CERT_URL = "https://console.vast.ai/static/jvastai_root.cer"
@@ -129,6 +129,39 @@ class ServerlessClient:
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
+    async def _wait_for_worker(self, endpoint: Endpoint, max_wait_time: int = 300) -> str:
+        """Poll endpoint until a worker is ready, return worker URL."""
+        # Initial high-cost route to wake up stopped workers
+        route = await endpoint._route(cost=0)
+        self.logger.info("Sending initial route call")
+
+        initial_poll_interval = 1
+        max_poll_interval = 10
+        poll_interval = initial_poll_interval
+        elapsed_time = 0
+
+        if route.status != "READY":
+            # Call route with high cost to wake up a worker
+            self.logger.info("No workers present, attempting to wake up stopped worker")
+            route = await endpoint._route(cost=100)
+
+            while route.status != "READY":
+                if elapsed_time >= max_wait_time:
+                    raise TimeoutError("Timed out waiting for worker to become ready")
+                
+                self.logger.info(f"Waiting {poll_interval}s before next poll... ({elapsed_time}s elapsed)")
+                await asyncio.sleep(poll_interval)
+                elapsed_time += poll_interval
+                
+                # Exponential backoff
+                poll_interval = min(poll_interval * 2, max_poll_interval)
+                
+                # Call route with no cost to poll endpoint status
+                route = await endpoint._route()
+                self.logger.info("Sending polling route call...")
+
+        return route
+    
     def send_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None):
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
@@ -138,33 +171,9 @@ class ServerlessClient:
             try:
                 request.status = "Queued"
 
-                # Initial high-cost route to wake up stopped workers
-                route = await endpoint._route(cost=0)
-                self.logger.info("Sending initial route call")
-
-                # Prevents infinite polling
-                max_wait_time = 60 # seconds
-                poll_interval = 1
-                elapsed_time = 0
-
-                if route.status != "READY":
-                    # Call route with high cost to wake up a worker
-                    self.logger.info("No workers present, attempting to wake up stopped worker")
-                    route = await endpoint._route(cost=100)
-
-                    while route.status != "READY":
-                        # Call route with no cost to poll endpoint status
-                        route = await endpoint._route()
-                        self.logger.info(f"Polling for ready worker... ({elapsed_time}s elapsed)")
-
-                        while route.status != "READY":
-                            if elapsed_time >= max_wait_time:
-                                raise TimeoutError("Timed out waiting for worker to become ready")
-                            await asyncio.sleep(poll_interval)
-                            elapsed_time += poll_interval
-                            # Call route with no cost to poll endpoint status
-                            route = await endpoint._route()
-                            self.logger.info("Sending polling route call...")
+                # Wait for worker to be ready
+                route = await self._wait_for_worker(endpoint)
+                worker_url = route.get_url()
 
                 self.logger.info("Found worker machine, starting work")
                 request.status = "In Progress"
@@ -173,14 +182,11 @@ class ServerlessClient:
                 await request.trigger_on_work_start()
 
                 # Now, route is ready for sending request to worker
-                worker_url = route.get_url()
-                auth_data = route.body
-                payload = worker_payload
                 worker_request_body = {
-                                        "auth_data" : auth_data,
-                                        "payload" : payload
-                                      }
-                
+                    "auth_data" : route.body,
+                    "payload" : worker_payload
+                }
+
                 try:
                     worker_response = await _make_request(
                         client=self,
