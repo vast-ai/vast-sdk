@@ -1,6 +1,6 @@
 import asyncio
-from vastai_sdk import ServerlessClient, ServerlessRequest
 import os
+from vastai_sdk import ServerlessClient, ServerlessRequest
 
 API_KEY = os.environ.get("VAST_API_KEY")
 
@@ -11,9 +11,9 @@ async def main():
     payload = {
         "input" : {
             "model": "Qwen/Qwen3-8B",
-            "prompt" : "Who are you?",
-            "max_tokens" : 100,
-            "temperature" : 0.7
+            "prompt": "Who are you?",
+            "max_tokens": 100,
+            "temperature": 0.7
         }
     }
     
@@ -28,12 +28,14 @@ async def main():
 
     # Attach a callback to run when the machine finished work on the request
     def work_finished_callback(response):
-        print(f"Request finished. Got response of length {len(response["choices"][0]["text"])}")
+        print("Work finished:", response)
 
     req.then(work_finished_callback)
 
+    # Now use the clean endpoint.request() method!
     response = await endpoint.request(route="/v1/completions", payload=payload, serverless_request=req)
-    print(response)
+    print("Final response:", response)
+    
     await client.close()
 
 if __name__ == "__main__":
