@@ -23,10 +23,9 @@ class Worker:
             model_log_file=config.model_log_file,
             allow_parallel_requests=config.allow_parallel_requests,
             benchmark_handler=benchmark_handler,
-            log_actions=[],  # Can be configured if needed
+            log_actions=config.log_actions
         )
         
-        # Create routes using backend.create_handler() - just like in the example!
         self.routes = []
         for route_path, handler in handlers.items():
             self.routes.append(

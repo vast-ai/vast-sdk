@@ -318,7 +318,8 @@ class WorkerConfig:
     model_healthcheck_url: str = "/health"
     benchmark_route: Optional[str] = None
     allow_parallel_requests: bool = False
-    max_model_latency: Optional[float] = None
+    max_model_latency: Optional[float] = None,
+    log_actions: list[tuple[LogAction, str]] = field(default_factory=list)
 
 
 class GenericEndpointFactory:

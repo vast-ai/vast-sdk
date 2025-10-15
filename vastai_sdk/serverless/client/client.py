@@ -44,6 +44,16 @@ class Serverless:
         if api_key is None or api_key == "":
             raise ValueError("api_key cannot be empty")
         self.api_key = api_key
+        match instance:
+            case "prod":
+                self.autoscaler_url = "https://run.vast.ai"
+            case "alpha":
+                self.autoscaler_url = "https://run-alpha.vast.ai"
+            case "local":
+                self.autoscaler_url = "http://localhost:8080"
+            case _:
+                self.autoscaler_url = "https://run.vast.ai"
+
 
         self.debug = debug
         self.logger = logging.getLogger(self.__class__.__name__)

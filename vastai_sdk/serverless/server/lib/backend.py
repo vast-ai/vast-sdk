@@ -8,7 +8,7 @@ import logging
 from asyncio import wait, sleep, gather, Semaphore, FIRST_COMPLETED, create_task
 from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional
 from functools import cached_property
-from distutils.util import strtobool
+from setuptools._distutils.util import strtobool
 
 from anyio import open_file
 from aiohttp import web, ClientResponse, ClientSession, ClientConnectorError, ClientTimeout, TCPConnector

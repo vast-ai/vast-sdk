@@ -30,7 +30,7 @@ class Endpoint:
         try:
             response = await _make_request(
                     client=self.client,
-                    url= "http://localhost:8080", #"https://run.vast.ai",, #"https://run-alpha.vast.ai",
+                    url=self.client.autoscaler_url,
                     route="/route/",
                     api_key=self.api_key,
                     body={
