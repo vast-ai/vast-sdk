@@ -6,7 +6,7 @@ import ssl
 import os
 import tempfile
 import logging
-
+import random
 
 class ServerlessRequest(asyncio.Future):
     """A promise-like Future that also supports .then()."""
@@ -17,6 +17,9 @@ class ServerlessRequest(asyncio.Future):
 
     def then(self, callback):
         def _done(fut):
+            if fut.exception() is not None:
+                print(fut.exception())
+                return
             callback(fut.result())
         self.add_done_callback(_done)
         return self
@@ -37,7 +40,7 @@ class ServerlessRequest(asyncio.Future):
 class Serverless:
     SSL_CERT_URL = "https://console.vast.ai/static/jvastai_root.cer"
 
-    def __init__(self, api_key: str, debug=False):
+    def __init__(self, api_key: str, debug=False, instance="prod"):
         if api_key is None or api_key == "":
             raise ValueError("api_key cannot be empty")
         self.api_key = api_key
@@ -53,7 +56,7 @@ class Serverless:
             )
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
-            self.logger.setLevel(logging.DEBUG)
+            self.logger.setLevel(logging.INFO)
         else:
             # If debug is False, disable logging
             self.logger.addHandler(logging.NullHandler())
@@ -134,37 +137,32 @@ class Serverless:
 
         async def task(request: ServerlessRequest):
             try:
-                request.status = "Queued"
+                if request.status != "Retrying":
+                    request.status = "Queued"
 
                 # Initial high-cost route to wake up stopped workers
-                route = await endpoint._route(cost=0)
-                self.logger.info("Sending initial route call")
+                route = await endpoint._route(cost=100)
+                self.logger.debug("Sending initial route call")
 
-                max_wait_time = 60 # seconds
                 poll_interval = 1
                 elapsed_time = 0
+                attempt = 0
+                while route.status != "READY":
+                    if request.status != "Retrying":
+                        request.status = "Polling"
+                    #  if elapsed_time >= max_wait_time:
+                    #     raise TimeoutError("Timed out waiting for worker to become ready")
+                    await asyncio.sleep(poll_interval)
+                    # Call route with no cost to poll endpoint status
+                    route = await endpoint._route()
+                    # exponential backoff + jitter
+                    poll_interval = min(2 ** attempt + random.uniform(0, 1), 30)
+                    attempt += 1
+                    self.logger.debug("Sending polling route call...")
 
-                if route.status != "READY":
-                    # Call route with high cost to wake up a worker
-                    self.logger.info("No workers present, attempting to wake up stopped worker")
-                    route = await endpoint._route(cost=100)
-
-                    while route.status != "READY":
-                        # Call route with no cost to poll endpoint status
-                        route = await endpoint._route()
-                        self.logger.info(f"Polling for ready worker... ({elapsed_time}s elapsed)")
-
-                        while route.status != "READY":
-                            if elapsed_time >= max_wait_time:
-                                raise TimeoutError("Timed out waiting for worker to become ready")
-                            await asyncio.sleep(poll_interval)
-                            elapsed_time += poll_interval
-                            # Call route with no cost to poll endpoint status
-                            route = await endpoint._route()
-                            self.logger.info("Sending polling route call...")
-
-                self.logger.info("Found worker machine, starting work")
-                request.status = "In Progress"
+                self.logger.debug("Found worker machine, starting work")
+                if request.status != "Retrying":
+                    request.status = "In Progress"
 
                 # Trigger the on_work_start callback
                 await request.trigger_on_work_start()
@@ -176,7 +174,7 @@ class Serverless:
                 worker_request_body = {
                                         "auth_data" : auth_data,
                                         "payload" : payload
-                                      }
+                                    }
                 
                 try:
                     worker_response = await _make_request(
@@ -185,20 +183,31 @@ class Serverless:
                         route=worker_route,
                         api_key=endpoint.api_key,
                         body=worker_request_body,
-                        method="POST"
+                        method="POST",
+                        retries=1
                     )
                 except Exception as ex:
                     raise Exception(
                         f"ERROR: Worker request failed:\nReason={ex}"
                     )
                 
-                # Resolve future, task complete
-                request.set_result(worker_response)
+                response = {
+                    "response" : worker_response,
+                    "url" : worker_url
+                }
+
+                # Resolve future, task complete 
                 request.status = "Complete"
                 self.logger.info("Endpoint request task completed")
+                request.set_result(response)
+                return
 
-            except Exception as e:
-                request.set_exception(e)
+
+            except Exception as ex:
+                request.status = "Errored"
+                self.logger.error(f"Error on worker response, retrying: {ex}")
+                return
+                    #request.set_exception(ex)
 
         # Create asyncio task for request lifetime management
         asyncio.create_task(task(serverless_request))

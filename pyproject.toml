@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vastai_sdk_vasttest"
+name = "vastai_sdk"
 version = "0.1.19"
 description = "SDK for Vast.ai GPU Cloud Service"
 readme = {file = "README.md", content-type = "text/markdown"}
@@ -15,16 +15,24 @@ authors = [
 license = {text = "MIT AND (Apache-2.0 OR BSD-2-Clause)"}
 requires-python = ">=3.8"
 dependencies = [
-    "requests>=2.25",
-    "jsonschema>=3.2",
-    "xdg>=1.0.0",
-    "borb~=2.0.17",
-    "python-dateutil",
-    "pyparsing",
+    "xdg",
+    "requests==2.32.3",
+    "borb==2.0.17",
+    "python-dateutil==2.6.1",
     "pytz",
     "urllib3",
-    "aiohttp",
-    "asyncio",
+    "pyparsing",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.24",
+    "anyio~=4.4",
+    "aiohttp[speedups]==3.10.1",
+    "nltk~=3.9",
+    "psutil~=6.0",
+    "pycryptodome~=3.20",
+    "Requests~=2.32",
+    "transformers~=4.52",
+    "utils==1.0.*",
+    "hf_transfer>=0.1.9",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
