@@ -114,13 +114,20 @@ class GenericHandler(EndpointHandler[vLLMPayload], ABC):
                 else:
                     log.debug("Detected non-streaming response...")
                     content = await model_response.read()
+                    
+                    # IMPORTANT: Preserve or set correct content type
+                    content_type = model_response.content_type
+                    if not content_type or content_type == "application/octet-stream":
+                        # Default to JSON for vLLM responses
+                        content_type = "application/json"
+                    
                     return web.Response(
                         body=content,
                         status=200,
-                        content_type=model_response.content_type,
+                        content_type=content_type,  # Use the determined content type
                     )
             case code:
-                log.debug("SENDING RESPONSE: ERROR: unknown code")
+                log.debug(f"SENDING RESPONSE: ERROR: status code {code}")
                 return web.Response(status=code)
 
 
