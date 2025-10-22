@@ -20,11 +20,11 @@ class Endpoint:
         self.id = id
         self.api_key = api_key
 
-    def request(self, route, payload, serverless_request=None):
+    def request(self, route, payload, serverless_request=None, cost: int=100):
         """Forward requests to the parent client."""
-        return self.client.queue_endpoint_request(endpoint=self, worker_route=route, worker_payload=payload, serverless_request=serverless_request)
+        return self.client.queue_endpoint_request(endpoint=self, worker_route=route, worker_payload=payload, serverless_request=serverless_request, cost=cost)
     
-    async def _route(self, cost=0.0):
+    async def _route(self, cost=0.0, req_idx=0, timeout=60.0):
         if self.client is None or not self.client.is_open():
             raise ValueError("Client is invalid")
         try:
@@ -36,7 +36,9 @@ class Endpoint:
                     body={
                             "endpoint" : self.name,
                             "api_key" : self.api_key,
-                            "cost" : cost
+                            "cost" : cost,
+                            "request_idx": req_idx,
+                            "replay_timeout": timeout
                         },
                     method="POST"
                 )
@@ -49,11 +51,15 @@ class Endpoint:
 class RouteResponse:
     status: str
     body: dict
-
+    request_idx: int
     def __repr__(self):
         return f"<RouteResponse status={self.status}>"
 
     def __init__(self, body: dict):
+        if "request_idx" in body.keys():
+            self.request_idx = body.get("request_idx")
+        else:
+            self.request_idx = 0
         if "url" in body.keys():
             self.status = "READY"
             self.body = body

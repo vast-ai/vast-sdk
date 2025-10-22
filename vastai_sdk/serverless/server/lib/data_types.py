@@ -9,7 +9,7 @@ import inspect
 import random
 import json
 import psutil
-
+import os
 
 """
 type variable representing an incoming payload to pyworker that will used to calculate load and will then
@@ -71,6 +71,7 @@ class AuthData:
     endpoint: str
     reqnum: int
     url: str
+    request_idx: int
 
     @classmethod
     def from_json_msg(cls, json_msg: Dict[str, Any]):
@@ -198,20 +199,29 @@ class SystemMetrics:
 
 
 @dataclass
+class RequestMetrics:
+    """Tracks metrics for an active request."""
+    request_idx: int
+    reqnum: int
+    workload: float
+    status: str
+
+@dataclass
 class ModelMetrics:
     """Model specific metrics"""
 
-    # these are reset after being sent to autoscaler
     workload_served: float
     workload_received: float
     workload_cancelled: float
     workload_errored: float
-    # these are not
+    workload_rejected: float
+
     workload_pending: float
     error_msg: Optional[str]
     max_throughput: float
     requests_recieved: Set[int] = field(default_factory=set)
-    requests_working: Set[int] = field(default_factory=set)
+    requests_working: dict[int, RequestMetrics] = field(default_factory=dict)
+    requests_deleting: list[RequestMetrics] = field(default_factory=list)
     last_update: float = field(default_factory=time.time)
 
     @classmethod
@@ -221,18 +231,29 @@ class ModelMetrics:
             workload_served=0.0,
             workload_cancelled=0.0,
             workload_errored=0.0,
+            workload_rejected=0.0,
             workload_received=0.0,
             error_msg=None,
             max_throughput=0.0,
         )
-
-    @property
-    def cur_perf(self) -> float:
-        return max(self.workload_served / (time.time() - self.last_update), 0.0)
-
+    
     @property
     def workload_processing(self) -> float:
         return max(self.workload_received - self.workload_cancelled, 0.0)
+
+    @property
+    def wait_time(self) -> float:
+        if (len(self.requests_working) == 0):
+            return 0.0
+        return sum([request.workload for request in self.requests_working.values()]) / self.max_throughput
+    
+    @property
+    def cur_load(self) -> float:
+        return sum([request.workload for request in self.requests_working.values()])
+
+    @property
+    def working_request_idxs(self) -> list[int]:
+        return [req.request_idx for req in self.requests_working.values()]
 
     def set_errored(self, error_msg):
         self.reset()
@@ -243,16 +264,19 @@ class ModelMetrics:
         self.workload_received = 0
         self.workload_cancelled = 0
         self.workload_errored = 0
+        self.workload_rejected = 0
         self.last_update = time.time()
 
 
 @dataclass
-class AutoScalaerData:
+class AutoScalerData:
     """Data that is reported to autoscaler"""
 
     id: int
     loadtime: float
     cur_load: float
+    rej_load: float
+    new_load: float
     error_msg: str
     max_perf: float
     cur_perf: float
@@ -261,6 +285,7 @@ class AutoScalaerData:
     num_requests_working: int
     num_requests_recieved: int
     additional_disk_usage: float
+    working_request_idxs: list[int]
     url: str
 
 
@@ -283,8 +308,6 @@ class LogAction(Enum):
     ModelError = 2
     Info = 3
 
-
-
 RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
 # on_response: handles the generate_client_response logic (takes web.Request and ClientResponse)
 ClientResponseHandler = Callable[[web.Request, ClientResponse], Awaitable[Union[web.Response, web.StreamResponse]]]
@@ -298,6 +321,8 @@ class HandlerConfig:
     route: str
     healthcheck: Optional[str] = None
     benchmark_data: list[dict[str, Any]] = field(default_factory=list)
+    # Optional: custom EndpointHandler class (if None, use generic)
+    handler_class: Optional[Type[EndpointHandler]] = None
     # Optional: custom ApiPayload class (if None, uses generic)
     payload_class: Optional[Type[ApiPayload]] = None
     # Optional: custom logic to parse/modify request JSON before creating ApiPayload
@@ -310,11 +335,11 @@ class HandlerConfig:
 
 @dataclass
 class WorkerConfig:
-    model_server_port: int
-    model_log_file: str
+    model_server_url: str =os.environ.get("MODEL_SERVER_HOST", "http://127.0.0.1")
+    model_server_port: int =int(os.environ.get("MODEL_SERVER_PORT", "18000"))
+    model_log_file: str = os.environ.get("MODEL_LOG_FILE", "/tmp/model.log")
     benchmark_data: list[dict[str, Any]] = field(default_factory=list)
     handlers: list[HandlerConfig] = field(default_factory=list)
-    model_server_url: str = "http://127.0.0.1"
     model_healthcheck_url: str = "/health"
     benchmark_route: Optional[str] = None
     allow_parallel_requests: bool = False
@@ -343,6 +368,11 @@ class GenericEndpointFactory:
         else:
             # Build handlers from config
             for handler_config in self.config.handlers:
+                if handler_config.handler_class is not None:
+                    # Use custom handler class
+                    handler = handler_config.handler_class()
+                    self._handlers[handler_config.route] = handler
+                    continue
                 handler = self._create_handler(handler_config)
                 self._handlers[handler_config.route] = handler
     

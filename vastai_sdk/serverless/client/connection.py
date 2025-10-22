@@ -1,10 +1,8 @@
 import aiohttp
 import random
 import asyncio
-VAST_WEB_URL = "https://console.vast.ai"
-VAST_SERVERLESS_URL = "https://run.vast.ai"
 
-async def _make_request(client, route : str, api_key : str, url=VAST_WEB_URL, body={}, params={}, method="GET", retries=5):
+async def _make_request(client, route : str, api_key: str, url:str = "", body={}, params={}, method="GET", retries=5):
 
     auth_header = f"Bearer {api_key}"
     headers = {"Authorization" : auth_header}
@@ -37,8 +35,6 @@ async def _make_request(client, route : str, api_key : str, url=VAST_WEB_URL, bo
 
                 retry_after = resp.headers.get("Retry-After")
                 wait_time = float(retry_after) if retry_after else min(2 ** attempt + random.uniform(0, 1), 30)
-                print(f"Retrying in {wait_time:.2f}s (attempt {attempt}/{retries}) [{resp.status}]")
-                print(await resp.json())
                 await asyncio.sleep(wait_time)
         except Exception as ex:
             client.logger.error(f"Attempt {attempt} failed: {ex}")

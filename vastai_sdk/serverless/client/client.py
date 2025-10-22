@@ -7,6 +7,8 @@ import os
 import tempfile
 import logging
 import random
+import time
+import collections
 
 class ServerlessRequest(asyncio.Future):
     """A promise-like Future that also supports .then()."""
@@ -14,6 +16,10 @@ class ServerlessRequest(asyncio.Future):
         super().__init__()
         self.on_work_start_callbacks = []
         self.status = "New"
+        self.create_time = time.time()
+        self.start_time = None
+        self.complete_time = None
+        self.req_idx = 0
 
     def then(self, callback):
         def _done(fut):
@@ -38,7 +44,9 @@ class ServerlessRequest(asyncio.Future):
                     cb()
 
 class Serverless:
-    SSL_CERT_URL = "https://console.vast.ai/static/jvastai_root.cer"
+    SSL_CERT_URL        = "https://console.vast.ai/static/jvastai_root.cer"
+    VAST_WEB_URL        = "https://console.vast.ai"
+    VAST_SERVERLESS_URL = "https://run.vast.ai"
 
     def __init__(self, api_key: str, debug=False, instance="prod"):
         if api_key is None or api_key == "":
@@ -54,7 +62,7 @@ class Serverless:
             case _:
                 self.autoscaler_url = "https://run.vast.ai"
 
-
+        self.latencies = collections.deque(maxlen=50)
         self.debug = debug
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -78,7 +86,8 @@ class Serverless:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self.logger.info("Started aiohttp ClientSession")
-            self._session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(limit=1000, ssl= await self.get_ssl_context())  # or True with your context
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
     
     def is_open(self):
@@ -114,6 +123,13 @@ class Serverless:
             os.unlink(tmpfile.name)
 
         return self._ssl_context
+    
+    def get_avg_request_time(self):
+        return 60.0
+        if len(self.latencies) < 10:
+            return 10.0
+        else:
+            return sum(self.latencies) / len(self.latencies) + 2.0
 
     async def get_endpoint(self, name="") -> Endpoint:
         endpoints = await self.get_endpoints()
@@ -126,6 +142,7 @@ class Serverless:
         try:
             response = await _make_request(
                 client=self,
+                url=self.VAST_WEB_URL,
                 route="/api/v0/endptjobs/",
                 api_key=self.api_key,
                 body={"client_id": "me"}
@@ -140,77 +157,86 @@ class Serverless:
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
-    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None):
+    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None, cost: int = 100):
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
             serverless_request = ServerlessRequest()
 
         async def task(request: ServerlessRequest):
+            request_idx: int = 0
             try:
-                if request.status != "Retrying":
-                    request.status = "Queued"
-
-                # Initial high-cost route to wake up stopped workers
-                route = await endpoint._route(cost=100)
-                self.logger.debug("Sending initial route call")
-
-                poll_interval = 1
-                elapsed_time = 0
-                attempt = 0
-                while route.status != "READY":
+                while True:
                     if request.status != "Retrying":
-                        request.status = "Polling"
-                    #  if elapsed_time >= max_wait_time:
-                    #     raise TimeoutError("Timed out waiting for worker to become ready")
-                    await asyncio.sleep(poll_interval)
-                    # Call route with no cost to poll endpoint status
-                    route = await endpoint._route()
-                    # exponential backoff + jitter
-                    poll_interval = min(2 ** attempt + random.uniform(0, 1), 30)
-                    attempt += 1
-                    self.logger.debug("Sending polling route call...")
+                        request.status = "Queued"
+                    self.logger.debug("Sending initial route call")
+                    # Initial high-cost route to wake up stopped workers
+                    route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
+                    request_idx = route.request_idx
+                    if (request_idx):
+                        self.logger.debug(f"Got initial request index {request_idx}")
+                    else:
+                        self.logger.error("Did not get request_idx from initial route")
 
-                self.logger.debug("Found worker machine, starting work")
-                if request.status != "Retrying":
-                    request.status = "In Progress"
+                    poll_interval = 1
+                    elapsed_time = 0
+                    attempt = 0
+                    while route.status != "READY":
+                        if request.status != "Retrying":
+                            request.status = "Polling"
+                        #  if elapsed_time >= max_wait_time:
+                        #     raise TimeoutError("Timed out waiting for worker to become ready")
+                        await asyncio.sleep(poll_interval)
+                        # Call route with no cost to poll endpoint status
+                        route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
+                        request_idx = route.request_idx
+                        # exponential backoff + jitter
+                        poll_interval = min(2 ** attempt + random.uniform(0, 1), 30)
+                        attempt += 1
+                        self.logger.debug("Sending polling route call...")
 
-                # Trigger the on_work_start callback
-                await request.trigger_on_work_start()
+                    self.logger.debug("Found worker machine, starting work")
+                    if request.status != "Retrying":
+                        request.status = "In Progress"
+                        request.start_time = time.time()
 
-                # Now, route is ready for sending request to worker
-                worker_url = route.get_url()
-                auth_data = route.body
-                payload = worker_payload
-                worker_request_body = {
-                                        "auth_data" : auth_data,
-                                        "payload" : payload
-                                    }
-                
-                try:
-                    worker_response = await _make_request(
-                        client=self,
-                        url=worker_url,
-                        route=worker_route,
-                        api_key=endpoint.api_key,
-                        body=worker_request_body,
-                        method="POST",
-                        retries=1
-                    )
-                except Exception as ex:
-                    raise Exception(
-                        f"ERROR: Worker request failed:\nReason={ex}"
-                    )
-                
-                response = {
-                    "response" : worker_response,
-                    "url" : worker_url
-                }
+                    # Trigger the on_work_start callback
+                    await request.trigger_on_work_start()
 
-                # Resolve future, task complete 
-                request.status = "Complete"
-                self.logger.info("Endpoint request task completed")
-                request.set_result(response)
-                return
+                    # Now, route is ready for sending request to worker
+                    worker_url = route.get_url()
+                    auth_data = route.body
+                    payload = worker_payload
+                    worker_request_body = {
+                                            "auth_data" : auth_data,
+                                            "payload" : payload
+                                        }
+                    
+                    try:
+                        worker_response = await _make_request(
+                            client=self,
+                            url=worker_url,
+                            route=worker_route,
+                            api_key=endpoint.api_key,
+                            body=worker_request_body,
+                            method="POST",
+                            retries=1
+                        )
+                    except Exception as ex:
+                        continue
+
+                    # Resolve future, task complete 
+                    request.status = "Complete"
+                    request.complete_time = time.time()
+                    self.latencies.append(request.complete_time - request.start_time)
+                    self.logger.info("Endpoint request task completed")
+
+                    response = {
+                        "response" : worker_response,
+                        "latency" : request.complete_time - request.start_time,
+                        "url" : worker_url
+                    }
+                    request.set_result(response)
+                    return
 
 
             except Exception as ex:
