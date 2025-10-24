@@ -1,12 +1,12 @@
 import asyncio
-from vastai_sdk import Serverless, ServerlessRequest
+from vastai_sdk import ServerlessClient, ServerlessRequest
 import os
 
 API_KEY = os.environ.get("VAST_API_KEY")
 
 async def main():
-    v = Serverless(API_KEY, debug=False)
-    endpoint = await v.get_endpoint(name="my_endpoint")
+    client = ServerlessClient(API_KEY, debug=True)
+    endpoint = await client.get_endpoint(name="my_endpoint")
 
     payload = {
         "input" : {
@@ -34,7 +34,7 @@ async def main():
 
     response = await endpoint.request(route="/v1/completions", payload=payload, serverless_request=req)
     print(response)
-    await v.close()
+    await client.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
