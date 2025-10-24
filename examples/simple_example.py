@@ -5,8 +5,8 @@ import os
 API_KEY = os.environ.get("VAST_API_KEY")
 
 async def main():
-    client = Serverless(API_KEY, debug=True)
-    endpoint = await client.get_endpoint(name="my_endpoint")
+    client = Serverless(API_KEY, debug=True, instance="local")
+    endpoint = await client.get_endpoint(name="test")
 
     payload = {
         "input" : {
@@ -18,7 +18,7 @@ async def main():
     }
     
     response = await endpoint.request("/v1/completions", payload)
-    print(response["choices"][0]["text"])
+    print(response)#["choices"][0]["text"])
     await client.close()
 
 if __name__ == "__main__":

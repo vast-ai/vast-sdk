@@ -11,7 +11,7 @@ import time
 import collections
 
 class ServerlessRequest(asyncio.Future):
-    """A promise-like Future that also supports .then()."""
+    """A request to a Serverless endpoint managed by the client"""
     def __init__(self):
         super().__init__()
         self.on_work_start_callbacks = []
@@ -51,7 +51,9 @@ class Serverless:
     def __init__(self, api_key: str, debug=False, instance="prod"):
         if api_key is None or api_key == "":
             raise ValueError("api_key cannot be empty")
-        self.api_key = api_key
+        self.api_key = api_key or os.environ.get("VAST_API_KEY")
+        if not self.api_key:
+            raise AttributeError("API key missing. Please set VAST_API_KEY in your environment variables.")
         match instance:
             case "prod":
                 self.autoscaler_url = "https://run.vast.ai"
@@ -86,7 +88,7 @@ class Serverless:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self.logger.info("Started aiohttp ClientSession")
-            connector = aiohttp.TCPConnector(limit=1000, ssl= await self.get_ssl_context())  # or True with your context
+            connector = aiohttp.TCPConnector(limit=5000, ssl= await self.get_ssl_context())
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
     
@@ -157,7 +159,7 @@ class Serverless:
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
-    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None, cost: int = 100):
+    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None, cost: int = 100, max_wait_time: float = None):
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
             serverless_request = ServerlessRequest()
@@ -166,10 +168,9 @@ class Serverless:
             request_idx: int = 0
             try:
                 while True:
-                    if request.status != "Retrying":
-                        request.status = "Queued"
+                    request.status = "Queued"
                     self.logger.debug("Sending initial route call")
-                    # Initial high-cost route to wake up stopped workers
+
                     route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
                     request_idx = route.request_idx
                     if (request_idx):
@@ -181,9 +182,8 @@ class Serverless:
                     elapsed_time = 0
                     attempt = 0
                     while route.status != "READY":
-                        if request.status != "Retrying":
-                            request.status = "Polling"
-                        #  if elapsed_time >= max_wait_time:
+                        request.status = "Polling"
+                          if elapsed_time >= max_wait_time:
                         #     raise TimeoutError("Timed out waiting for worker to become ready")
                         await asyncio.sleep(poll_interval)
                         # Call route with no cost to poll endpoint status
