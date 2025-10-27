@@ -1,9 +1,6 @@
 import asyncio
 from vastai_sdk import Serverless
 import os
-import paramiko
-from scp import SCPClient
-from urllib.parse import urlparse
 import random
 import collections
 import time
@@ -87,7 +84,7 @@ def latency_callback(response):
 
 
 async def main():
-    client = Serverless(API_KEY, debug=False, instance="alpha")
+    client = Serverless(API_KEY, debug=False, instance="local")
     endpoint = await client.get_endpoint(name="comfy")
 
     prompts = [
@@ -99,9 +96,11 @@ async def main():
     asyncio.create_task(status_reporter(responses, latencies))
 
     LOAD_PER_REQUEST = 100
-    MAX_LOAD = 2000
+    MAX_LOAD = 6000
+    MIN_LOAD = 2000
+    RAMP_TIME = 10 * 60 # seconds
     start_time = time.time()
-    ramp_time = 30 * 60 # seconds
+
     while True:
         payload = {
             "input": {
@@ -115,8 +114,8 @@ async def main():
                 }
             }
         }
-        CUR_LOAD = (max(min(time.time() - start_time, ramp_time), ramp_time * (1/100.0)) / ramp_time) * MAX_LOAD
-        #CUR_LOAD = 300
+        CUR_LOAD = (min(time.time() - start_time, RAMP_TIME) / RAMP_TIME) * (MAX_LOAD - MIN_LOAD) + MIN_LOAD # lerp the load
+        #CUR_LOAD = 2000 # Hardcode a set load
         request = endpoint.request("/generate/sync", payload, cost=LOAD_PER_REQUEST).then(latency_callback)
         responses.append(request)
         await asyncio.sleep(LOAD_PER_REQUEST / CUR_LOAD)

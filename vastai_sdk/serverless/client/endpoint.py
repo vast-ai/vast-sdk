@@ -20,9 +20,9 @@ class Endpoint:
         self.id = id
         self.api_key = api_key
 
-    def request(self, route, payload, serverless_request=None, cost: int=100):
+    def request(self, route, payload, serverless_request=None, cost: int=100, retry: bool = True):
         """Forward requests to the parent client."""
-        return self.client.queue_endpoint_request(endpoint=self, worker_route=route, worker_payload=payload, serverless_request=serverless_request, cost=cost)
+        return self.client.queue_endpoint_request(endpoint=self, worker_route=route, worker_payload=payload, serverless_request=serverless_request, cost=cost, retry=retry)
     
     async def _route(self, cost=0.0, req_idx=0, timeout=60.0):
         if self.client is None or not self.client.is_open():

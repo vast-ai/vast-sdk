@@ -159,7 +159,7 @@ class Serverless:
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
-    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None, cost: int = 100, max_wait_time: float = None):
+    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None, cost: int = 100, max_wait_time: float = None, retry: bool = True):
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
             serverless_request = ServerlessRequest()
@@ -219,10 +219,14 @@ class Serverless:
                             api_key=endpoint.api_key,
                             body=worker_request_body,
                             method="POST",
-                            retries=1
+                            retries=1,
+                            timeout=600
                         )
                     except Exception as ex:
-                        continue
+                        if retry:
+                            continue
+                        else:
+                            raise ex
 
                     # Resolve future, task complete 
                     request.status = "Complete"

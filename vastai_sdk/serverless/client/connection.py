@@ -2,7 +2,7 @@ import aiohttp
 import random
 import asyncio
 
-async def _make_request(client, route : str, api_key: str, url:str = "", body={}, params={}, method="GET", retries=5):
+async def _make_request(client, route : str, api_key: str, url:str = "", body={}, params={}, method="GET", retries=5, timeout=30):
 
     auth_header = f"Bearer {api_key}"
     headers = {"Authorization" : auth_header}
@@ -23,7 +23,7 @@ async def _make_request(client, route : str, api_key: str, url:str = "", body={}
                 json=body,
                 params=params,
                 ssl=ssl_context,
-                timeout=aiohttp.ClientTimeout(total=30)
+                timeout=aiohttp.ClientTimeout(total=timeout)
             ) as resp:
                 text = await resp.text()
 
