@@ -47,6 +47,8 @@ class Serverless:
     ):
         if api_key is None or api_key == "":
             raise AttributeError("API key missing. Please set VAST_API_KEY in your environment variables.")
+        self.api_key = api_key
+
         match instance:
             case "prod":
                 self.autoscaler_url = "https://run.vast.ai"
@@ -71,11 +73,12 @@ class Serverless:
             )
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
-            self.logger.setLevel(logging.INFO)
+            self.logger.setLevel(logging.DEBUG)
         else:
             # If debug is False, disable logging
             self.logger.addHandler(logging.NullHandler())
-
+        self.logger.propagate = False
+        
         self.connection_limit = connection_limit
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
