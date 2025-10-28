@@ -15,7 +15,6 @@ class ServerlessRequest(asyncio.Future):
     """A request to a Serverless endpoint managed by the client"""
     def __init__(self):
         super().__init__()
-        self.on_work_start_callbacks = []
         self.status = "New"
         self.create_time = time.time()
         self.start_time = None
@@ -30,19 +29,6 @@ class ServerlessRequest(asyncio.Future):
             callback(fut.result())
         self.add_done_callback(_done)
         return self
-    
-    def add_on_work_start_callback(self, callback):
-        """Register a callback (sync or async) that will be invoked when work starts."""
-        self.on_work_start_callbacks.append(callback)
-    
-    async def trigger_on_work_start(self):
-        """Run the registered callback when worker starts."""
-        if len(self.on_work_start_callbacks) > 0:
-            for cb in self.on_work_start_callbacks:
-                if asyncio.iscoroutinefunction(cb):
-                    await cb()
-                else:
-                    cb()
 
 class Serverless:
     SSL_CERT_URL        = "https://console.vast.ai/static/jvastai_root.cer"
@@ -60,9 +46,6 @@ class Serverless:
         max_poll_interval: float = 15.0
     ):
         if api_key is None or api_key == "":
-            raise ValueError("api_key cannot be empty")
-        self.api_key = api_key or os.environ.get("VAST_API_KEY")
-        if not self.api_key:
             raise AttributeError("API key missing. Please set VAST_API_KEY in your environment variables.")
         match instance:
             case "prod":
@@ -238,9 +221,6 @@ class Serverless:
                     if request.status != "Retrying":
                         request.status = "In Progress"
                         request.start_time = time.time()
-
-                    # Trigger the on_work_start callback
-                    await request.trigger_on_work_start()
 
                     # Now, route is ready for sending request to worker
                     worker_url = route.get_url()
