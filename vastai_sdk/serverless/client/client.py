@@ -21,7 +21,7 @@ class ServerlessRequest(asyncio.Future):
         self.complete_time = None
         self.req_idx = 0
 
-    def then(self, callback):
+    def then(self, callback) -> "ServerlessRequest":
         def _done(fut):
             if fut.exception() is not None:
                 print(fut.exception())
@@ -78,7 +78,7 @@ class Serverless:
             # If debug is False, disable logging
             self.logger.addHandler(logging.NullHandler())
         self.logger.propagate = False
-        
+
         self.connection_limit = connection_limit
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
