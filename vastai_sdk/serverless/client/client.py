@@ -9,6 +9,7 @@ import logging
 import random
 import time
 import collections
+from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Union
 
 class ServerlessRequest(asyncio.Future):
     """A request to a Serverless endpoint managed by the client"""
@@ -48,7 +49,16 @@ class Serverless:
     VAST_WEB_URL        = "https://console.vast.ai"
     VAST_SERVERLESS_URL = "https://run.vast.ai"
 
-    def __init__(self, api_key: str, debug=False, instance="prod"):
+    def __init__(
+        self,
+        api_key: Optional[str] = os.environ.get("VAST_API_KEY", None),
+        *,
+        debug: bool = False,
+        instance: str = "prod",
+        connection_limit: int = 500,
+        default_request_timeout: float = 600.0,
+        max_poll_interval: float = 15.0
+    ):
         if api_key is None or api_key == "":
             raise ValueError("api_key cannot be empty")
         self.api_key = api_key or os.environ.get("VAST_API_KEY")
@@ -66,6 +76,8 @@ class Serverless:
 
         self.latencies = collections.deque(maxlen=50)
         self.debug = debug
+        self.default_request_timeout = float(default_request_timeout)
+        self.max_poll_interval = float(max_poll_interval)
         self.logger = logging.getLogger(self.__class__.__name__)
 
         if self.debug:
@@ -81,14 +93,21 @@ class Serverless:
             # If debug is False, disable logging
             self.logger.addHandler(logging.NullHandler())
 
-
+        self.connection_limit = connection_limit
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
+
+    async def __aenter__(self):
+        await self._get_session()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self.logger.info("Started aiohttp ClientSession")
-            connector = aiohttp.TCPConnector(limit=5000, ssl= await self.get_ssl_context())
+            connector = aiohttp.TCPConnector(limit=self.connection_limit, ssl= await self.get_ssl_context())
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
     
@@ -125,13 +144,18 @@ class Serverless:
             os.unlink(tmpfile.name)
 
         return self._ssl_context
-    
-    def get_avg_request_time(self):
+
+    def get_avg_request_time(self) -> float:
+        """
+        Rolling estimate for routing timeout. A small safety margin is added.
+        Currently unused. default to 60.0
+        """
         return 60.0
         if len(self.latencies) < 10:
-            return 10.0
-        else:
-            return sum(self.latencies) / len(self.latencies) + 2.0
+            return 30.0  # conservative default until we have data
+        avg = sum(self.latencies) / len(self.latencies)
+        # Clamp to reasonable bounds
+        return float(max(5.0, min(avg + 2.0, 600.0)))
 
     async def get_endpoint(self, name="") -> Endpoint:
         endpoints = await self.get_endpoints()
@@ -147,7 +171,7 @@ class Serverless:
                 url=self.VAST_WEB_URL,
                 route="/api/v0/endptjobs/",
                 api_key=self.api_key,
-                body={"client_id": "me"}
+                params={"client_id": "me"}
             )
         except Exception as ex:
             raise Exception(
@@ -159,15 +183,27 @@ class Serverless:
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
-    def queue_endpoint_request(self, endpoint: Endpoint, worker_route: str, worker_payload: dict, serverless_request: ServerlessRequest = None, cost: int = 100, max_wait_time: float = None, retry: bool = True):
+    def queue_endpoint_request(
+        self,
+        endpoint: Endpoint,
+        worker_route: str,
+        worker_payload: dict,
+        serverless_request: Optional[ServerlessRequest] = None,
+        cost: int = 100,
+        max_wait_time: Optional[float] = None,
+        retry: bool = True,
+        max_retries: int = None,
+    ) -> ServerlessRequest:
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
             serverless_request = ServerlessRequest()
 
         async def task(request: ServerlessRequest):
             request_idx: int = 0
+            total_attempts = 0
             try:
                 while True:
+                    total_attempts += 1
                     request.status = "Queued"
                     self.logger.debug("Sending initial route call")
 
@@ -183,16 +219,20 @@ class Serverless:
                     attempt = 0
                     while route.status != "READY":
                         request.status = "Polling"
-                        if max_wait_time and elapsed_time >= max_wait_time:
-                            raise TimeoutError("Timed out waiting for worker to become ready")
+                        if max_wait_time is not None and elapsed_time >= max_wait_time:
+                            raise asyncio.TimeoutError("Timed out waiting for worker to become ready")
+
                         await asyncio.sleep(poll_interval)
-                        # Call route with no cost to poll endpoint status
-                        route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
-                        request_idx = route.request_idx
-                        # exponential backoff + jitter
-                        poll_interval = min(2 ** attempt + random.uniform(0, 1), 30)
+                        elapsed_time += poll_interval
+
+                        # Poll with zero cost
+                        route = await endpoint._route(cost=0, req_idx=request_idx, timeout=self.get_avg_request_time())
+                        request_idx = route.request_idx or request_idx
+
+                        # exponential backoff + jitter (cap)
                         attempt += 1
-                        self.logger.debug("Sending polling route call...")
+                        poll_interval = min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval)
+                        self.logger.debug("Polling route...")
 
                     self.logger.debug("Found worker machine, starting work")
                     if request.status != "Retrying":
@@ -223,10 +263,13 @@ class Serverless:
                             timeout=600
                         )
                     except Exception as ex:
-                        if retry:
+                        if retry and (max_retries is None or retry and total_attempts < max_retries):
+                            request.status = "Retrying"
+                            # small backoff before re-routing
+                            await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
                             continue
-                        else:
-                            raise ex
+                        # Exhausted retries -> fail the future
+                        raise
 
                     # Resolve future, task complete 
                     request.status = "Complete"
@@ -237,19 +280,30 @@ class Serverless:
                     response = {
                         "response" : worker_response,
                         "latency" : request.complete_time - request.start_time,
-                        "url" : worker_url
+                        "url" : worker_url,
+                        "reuqest_idx" : request_idx
                     }
                     request.set_result(response)
                     return
 
-
+            except asyncio.CancelledError:
+                request.status = "Cancelled"
+                request.set_exception(asyncio.CancelledError())
+                return
             except Exception as ex:
                 request.status = "Errored"
-                self.logger.error(f"Error on worker response, retrying: {ex}")
+                # Fail the future so awaiters / then().catch() are notified
+                request.set_exception(ex)
+                self.logger.error(f"Request errored: {ex}")
                 return
-                    #request.set_exception(ex)
 
         # Create asyncio task for request lifetime management
-        asyncio.create_task(task(serverless_request))
+        bg_task = asyncio.create_task(task(serverless_request))
+
+        def _propagate_cancel(fut: ServerlessRequest):
+            if fut.cancelled():
+                bg_task.cancel()
+
+        serverless_request.add_done_callback(_propagate_cancel)
         self.logger.info("Queued endpoint request")
         return serverless_request
