@@ -3,7 +3,7 @@ from vastai_sdk import Serverless, ServerlessRequest
 
 async def main():
     async with Serverless() as client:
-        endpoint = await client.get_endpoint(name="my_endpoint")
+        endpoint = await client.get_endpoint(name="endpoint")
 
         payload = {
             "input" : {

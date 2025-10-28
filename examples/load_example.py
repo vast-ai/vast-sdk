@@ -2,8 +2,8 @@ import asyncio
 from vastai_sdk import Serverless, ServerlessRequest
 
 async def main():
-    async with Serverless(instance="alpha") as client:
-        endpoint = await client.get_endpoint(name="test")
+    async with Serverless() as client:
+        endpoint = await client.get_endpoint(name="my-endpoint")
 
         payload = {
             "input" : {
@@ -24,8 +24,8 @@ async def main():
             def work_finished_callback(response):
                 print(response["response"]["choices"][0]["text"])
             req.then(work_finished_callback)
-            responses.append(endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=50.0))
-            await asyncio.sleep(50 / CUR_LOAD)
+            responses.append(endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=100.0))
+            await asyncio.sleep(100 / CUR_LOAD)
 
 if __name__ == "__main__":
     asyncio.run(main())
