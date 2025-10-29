@@ -1,5 +1,6 @@
 # Vast.ai Python SDK
 [![PyPI version](https://badge.fury.io/py/vastai-sdk.svg)](https://badge.fury.io/py/vastai-sdk)
+
 The official Vast.ai SDK pip package.
 
 ## Install
