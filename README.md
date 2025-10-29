@@ -6,28 +6,51 @@ The official Vast.ai SDK pip package.
 ```bash
 pip install vastai-sdk
 ```
-## Example
+## Examples
 
+NOTE: Ensure your Vast.ai API key is set in your working environment as `VAST_API_KEY`. Alternatively, you may pass the API key in as a parameter to either client.
+
+### Using the VastAI() CLI client
+
+1. Create the client
 ```python
-import vastai_sdk
-vastai = vastai_sdk.VastAI()
+from vastai import VastAI
+vastai = VastAI() # or, VastAI("YOUR_API_KEY")
+```
+2. Run commands
+```python
+vastai.search_offers()
+```
+3. Get help
+```python
+help(v.create_instances)
 ```
 
+### Using the Serverless client
 
+1. Create the client
 ```python
-$ pip install vastai-sdk
-$ python
-Python 3.11.2 (main, Aug 26 2024, 07:20:54) [GCC 12.2.0] on linux
-Type "help", "copyright", "credits" or "license" for more information.
->>> import vastai_sdk
->>> import os
->>> VAST_API_KEY = "my-api-key
->>> v = vastai_sdk.VastAI(VAST_API_KEY) # or just set VAST_API_KEY environment variable
->>> v.search_offers()
+from vastai import Serverless
+serverless = Serverless() # or, Serverless("YOUR_API_KEY")
 ```
-
-
-## Calling Help
+2. Get an endpoint
 ```python
->>> help(v.create_instance)
+endpoint = await serverless.get_endpoint("my-endpoint")
+```
+3. Make a request
+```python
+request_body = {
+                "input" : {
+                    "model": "Qwen/Qwen3-8B",
+                    "prompt" : "Who are you?",
+                    "max_tokens" : 100,
+                    "temperature" : 0.7
+                }
+            }
+response = await serverless.request("/v1/completions", request_body)
+```
+4. Read the response
+```python
+text = response["response"]["choices"][0]["text"]
+print(text)
 ```
