@@ -1,6 +1,6 @@
 # Vast.ai Python SDK
-The official Vast.ai SDK pip package.
 [![PyPI version](https://badge.fury.io/py/vastai-sdk.svg)](https://badge.fury.io/py/vastai-sdk)
+The official Vast.ai SDK pip package.
 
 ## Install
 ```bash
@@ -10,7 +10,7 @@ pip install vastai-sdk
 
 NOTE: Ensure your Vast.ai API key is set in your working environment as `VAST_API_KEY`. Alternatively, you may pass the API key in as a parameter to either client.
 
-### Using the VastAI() CLI client
+### Using the VastAI CLI client
 
 1. Create the client
 ```python
@@ -54,3 +54,5 @@ response = await serverless.request("/v1/completions", request_body)
 text = response["response"]["choices"][0]["text"]
 print(text)
 ```
+
+Find more examples in the `examples` directory
