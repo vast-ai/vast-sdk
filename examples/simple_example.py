@@ -1,6 +1,5 @@
 import asyncio
 from vastai import Serverless
-import os
 
 async def main():
     async with Serverless() as client:
