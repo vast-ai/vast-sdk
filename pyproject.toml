@@ -4,12 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vastai_sdk_vasttest"
+<<<<<<< HEAD
 version = "0.2.0"
+=======
+version = "0.1.19"
+>>>>>>> eb36668eaadd764222fecb58b7db9d5a840b59b3
 description = "SDK for Vast.ai GPU Cloud Service"
 readme = {file = "README.md", content-type = "text/markdown"}
 authors = [
     {name = "Chris McKenzie", email = "chris@vast.ai"},
     {name = "Lucas Armand", email = "lucas@vast.ai"},
+<<<<<<< HEAD
+=======
+    {name = "Zuby Javed", email = "zuby@vast.ai"},
+>>>>>>> eb36668eaadd764222fecb58b7db9d5a840b59b3
 ]
 license = {text = "MIT AND (Apache-2.0 OR BSD-2-Clause)"}
 requires-python = ">=3.8"
