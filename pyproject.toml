@@ -1,40 +1,42 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
-[project]
-name = "vastai_sdk_vasttest"
+[tool.poetry]
+name = "vastai-sdk"
 version = "0.2.0"
 description = "SDK for Vast.ai GPU Cloud Service"
-readme = {file = "README.md", content-type = "text/markdown"}
+readme = "README.md"
 authors = [
-    {name = "Chris McKenzie", email = "chris@vast.ai"},
-    {name = "Lucas Armand", email = "lucas@vast.ai"},
-    {name = "Zuby Javed", email = "zuby@vast.ai"},
+  "Chris McKenzie <chris@vast.ai>",
+  "Lucas Armand <lucas@vast.ai>",
+  "Zuby Javed <zuby@vast.ai>"
 ]
-license = {text = "MIT AND (Apache-2.0 OR BSD-2-Clause)"}
-requires-python = ">=3.8"
-dependencies = [
-    "requests>=2.25",
-    "jsonschema>=3.2",
-    "xdg>=1.0.0",
-    "borb~=2.1.25",
-    "python-dateutil",
-    "pyparsing",
-    "pytz",
-    "urllib3",
-    "aiohttp",
-    "asyncio",
-]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
+homepage = "https://vast.ai"
+repository = "https://github.com/vast-ai/vast-sdk"
+packages = [
+  { include = "vastai" },
+  { include = "vastai_sdk" }
 ]
 
-[project.urls]
+
+[tool.poetry.dependencies]
+python = ">=3.8"
+requests = ">=2.25"
+jsonschema = ">=3.2"
+xdg = ">=1.0.0"
+borb = "~2.1.25"
+python-dateutil = "*"
+pyparsing = "*"
+pytz = "*"
+urllib3 = "*"
+aiohttp = "*"
+asyncio = "*"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+
+[tool.poetry.urls]
 Homepage = "https://vast.ai"
 Source = "https://github.com/vast-ai/vast-sdk"
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["vastai_sdk*"]

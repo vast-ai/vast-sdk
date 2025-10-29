@@ -1,5 +1,5 @@
 import asyncio
-from vastai_sdk import Serverless
+from vastai import Serverless
 import os
 
 async def main():

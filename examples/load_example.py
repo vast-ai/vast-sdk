@@ -1,5 +1,5 @@
 import asyncio
-from vastai_sdk import Serverless, ServerlessRequest
+from vastai import Serverless, ServerlessRequest
 
 async def main():
     async with Serverless() as client:
