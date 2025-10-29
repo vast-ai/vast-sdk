@@ -16,19 +16,13 @@ async def _make_request(
 ):
     """
     Make an HTTP request with exponential backoff.
-    - For GET, we do NOT send a JSON body.
-    - Retries: only for 408/429/5xx; 4xx (except 408/429) fail fast.
     """
     auth_header = f"Bearer {api_key}"
     headers = {
         "Authorization": auth_header,
-        "X-Request-ID": str(uuid.uuid4()),
     }
 
-    # Optional: avoid putting API key in query at all (prefer header)
-    params = dict(params) if params else {}
-    if getattr(client, "send_api_key_in_query", True):
-        params["api_key"] = api_key
+    params["api_key"] = api_key
 
     session = await client._get_session()
     ssl_context = await client.get_ssl_context() if client else None
@@ -60,8 +54,6 @@ async def _make_request(
                     except Exception:
                         raise Exception(f"Invalid JSON from {url + route}:\n{text}")
 
-                # Retryable?
-                retry_after = resp.headers.get("Retry-After")
                 retryable = (resp.status in (408, 429)) or (500 <= resp.status < 600)
                 if not retryable:
                     raise Exception(f"HTTP {resp.status} from {url + route}: {text}")
