@@ -220,11 +220,6 @@ class Serverless:
                         poll_interval = min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval)
                         self.logger.debug("Polling route...")
 
-                    self.logger.debug("Found worker machine, starting work")
-                    if request.status != "Retrying":
-                        request.status = "In Progress"
-                        request.start_time = time.time()
-
                     # Now, route is ready for sending request to worker
                     worker_url = route.get_url()
                     auth_data = route.body
@@ -235,6 +230,10 @@ class Serverless:
                                         }
                     
                     try:
+                        self.logger.debug("Found worker machine, starting work")
+                        if request.status != "Retrying":
+                            request.status = "In Progress"
+                            request.start_time = time.time()
                         worker_response = await _make_request(
                             client=self,
                             url=worker_url,
@@ -246,7 +245,7 @@ class Serverless:
                             timeout=600
                         )
                     except Exception as ex:
-                        if retry and (max_retries is None or retry and total_attempts < max_retries):
+                        if retry and (max_retries is None or total_attempts < max_retries):
                             request.status = "Retrying"
                             # small backoff before re-routing
                             await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
