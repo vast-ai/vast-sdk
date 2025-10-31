@@ -1,6 +1,8 @@
 import asyncio
 from vastai import Serverless, ServerlessRequest
 
+MAX_TOKENS = 128
+
 async def main():
     async with Serverless() as client:
         endpoint = await client.get_endpoint(name="my-endpoint")
@@ -9,7 +11,7 @@ async def main():
             "input" : {
                 "model": "Qwen/Qwen3-8B",
                 "prompt" : "Who are you?",
-                "max_tokens" : 100,
+                "max_tokens" : MAX_TOKENS,
                 "temperature" : 0.7
             }
         }
@@ -24,7 +26,7 @@ async def main():
             def work_finished_callback(response):
                 print(response["response"]["choices"][0]["text"])
             req.then(work_finished_callback)
-            responses.append(endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=100.0))
+            responses.append(endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=MAX_TOKENS))
             await asyncio.sleep(100 / CUR_LOAD)
 
 if __name__ == "__main__":

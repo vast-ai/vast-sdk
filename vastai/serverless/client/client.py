@@ -188,7 +188,7 @@ class Serverless:
                 text = await resp.text()
                 raise RuntimeError(f"get_endpoint_workers failed: HTTP {resp.status} - {text}")
 
-            data = await resp.json(content_type=None)  # accept correct JSON even if content-type is not perfect
+            data = await resp.json(content_type=None)
             if not isinstance(data, list):
                 raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
 
@@ -204,6 +204,7 @@ class Serverless:
         max_wait_time: Optional[float] = None,
         retry: bool = True,
         max_retries: int = None,
+        stream: bool = False
     ) -> ServerlessRequest:
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
@@ -236,7 +237,6 @@ class Serverless:
                         await asyncio.sleep(poll_interval)
                         elapsed_time += poll_interval
 
-                        # Poll with zero cost
                         route = await endpoint._route(cost=0, req_idx=request_idx, timeout=self.get_avg_request_time())
                         request_idx = route.request_idx or request_idx
 
@@ -267,15 +267,14 @@ class Serverless:
                             body=worker_request_body,
                             method="POST",
                             retries=1,
-                            timeout=600
+                            timeout=600,
+                            stream=stream
                         )
                     except Exception as ex:
                         if retry and (max_retries is None or total_attempts < max_retries):
                             request.status = "Retrying"
-                            # small backoff before re-routing
                             await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
                             continue
-                        # Exhausted retries -> fail the future
                         raise
 
                     # Resolve future, task complete 

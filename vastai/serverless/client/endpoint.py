@@ -19,7 +19,7 @@ class Endpoint:
         self.id = id
         self.api_key = api_key
 
-    def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True):
+    def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True, stream: bool = False):
         """Forward requests to the parent client."""
         return self.client.queue_endpoint_request(
             endpoint=self,
@@ -27,8 +27,10 @@ class Endpoint:
             worker_payload=payload,
             serverless_request=serverless_request,
             cost=cost,
-            retry=retry
+            retry=retry,
+            stream=stream
         )
+
     
     def get_workers(self):
         return self.client.get_endpoint_workers(self)
