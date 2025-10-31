@@ -1,5 +1,6 @@
 from .connection import _make_request
 from .endpoint import Endpoint
+from .worker import Worker
 import asyncio
 import aiohttp
 import ssl
@@ -9,7 +10,7 @@ import logging
 import random
 import time
 import collections
-from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Union
+from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Union, List
 
 class ServerlessRequest(asyncio.Future):
     """A request to a Serverless endpoint managed by the client"""
@@ -169,6 +170,30 @@ class Serverless:
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
+    async def get_endpoint_workers(self, endpoint: Endpoint) -> List[Worker]:
+        """
+        Equivalent to:
+          curl -X POST https://run.vast.ai/get_endpoint_workers/ \
+               -H "Content-Type: application/json" \
+               -d '{"id": <endpoint_id>, "api_key": "<VAST_API_KEY>"}'
+        """
+        if not isinstance(endpoint, Endpoint):
+            raise ValueError("endpoint must be an Endpoint")
+
+        url = f"{self.autoscaler_url}{"/get_endpoint_workers/"}"
+        payload = {"id": endpoint.id, "api_key": self.api_key}
+
+        async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"get_endpoint_workers failed: HTTP {resp.status} - {text}")
+
+            data = await resp.json(content_type=None)
+            if not isinstance(data, list):
+                raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
+
+            return [Worker.from_dict(item) for item in data]
+
     def queue_endpoint_request(
         self,
         endpoint: Endpoint,
@@ -179,6 +204,7 @@ class Serverless:
         max_wait_time: Optional[float] = None,
         retry: bool = True,
         max_retries: int = None,
+        stream: bool = False
     ) -> ServerlessRequest:
         """Return a Future that will resolve once the request completes."""
         if serverless_request is None:
@@ -211,7 +237,6 @@ class Serverless:
                         await asyncio.sleep(poll_interval)
                         elapsed_time += poll_interval
 
-                        # Poll with zero cost
                         route = await endpoint._route(cost=0, req_idx=request_idx, timeout=self.get_avg_request_time())
                         request_idx = route.request_idx or request_idx
 
@@ -242,15 +267,14 @@ class Serverless:
                             body=worker_request_body,
                             method="POST",
                             retries=1,
-                            timeout=600
+                            timeout=600,
+                            stream=stream
                         )
                     except Exception as ex:
                         if retry and (max_retries is None or total_attempts < max_retries):
                             request.status = "Retrying"
-                            # small backoff before re-routing
                             await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
                             continue
-                        # Exhausted retries -> fail the future
                         raise
 
                     # Resolve future, task complete 
