@@ -1,5 +1,6 @@
 from .connection import _make_request
 from .endpoint import Endpoint
+from .worker import Worker
 import asyncio
 import aiohttp
 import ssl
@@ -9,7 +10,7 @@ import logging
 import random
 import time
 import collections
-from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Union
+from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Union, List
 
 class ServerlessRequest(asyncio.Future):
     """A request to a Serverless endpoint managed by the client"""
@@ -169,6 +170,30 @@ class Serverless:
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
     
+    async def get_endpoint_workers(self, endpoint: Endpoint) -> List[Worker]:
+        """
+        Equivalent to:
+          curl -X POST https://run.vast.ai/get_endpoint_workers/ \
+               -H "Content-Type: application/json" \
+               -d '{"id": <endpoint_id>, "api_key": "<VAST_API_KEY>"}'
+        """
+        if not isinstance(endpoint, Endpoint):
+            raise ValueError("endpoint must be an Endpoint")
+
+        url = f"{self.autoscaler_url}{"/get_endpoint_workers/"}"
+        payload = {"id": endpoint.id, "api_key": self.api_key}
+
+        async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"get_endpoint_workers failed: HTTP {resp.status} - {text}")
+
+            data = await resp.json(content_type=None)  # accept correct JSON even if content-type is not perfect
+            if not isinstance(data, list):
+                raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
+
+            return [Worker.from_dict(item) for item in data]
+
     def queue_endpoint_request(
         self,
         endpoint: Endpoint,

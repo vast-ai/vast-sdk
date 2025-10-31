@@ -30,6 +30,9 @@ class Endpoint:
             retry=retry
         )
     
+    def get_workers(self):
+        return self.client.get_endpoint_workers(self)
+
     async def _route(self, cost: float = 0.0, req_idx: int = 0, timeout: float = 60.0):
             if self.client is None or not self.client.is_open():
                 raise ValueError("Client is invalid")
