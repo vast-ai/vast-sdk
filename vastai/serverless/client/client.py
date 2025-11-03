@@ -180,7 +180,7 @@ class Serverless:
         if not isinstance(endpoint, Endpoint):
             raise ValueError("endpoint must be an Endpoint")
 
-        url = f"{self.autoscaler_url}{"/get_endpoint_workers/"}"
+        url = f"{self.autoscaler_url}/get_endpoint_workers/"
         payload = {"id": endpoint.id, "api_key": self.api_key}
 
         async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
