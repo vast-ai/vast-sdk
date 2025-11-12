@@ -237,7 +237,7 @@ class Serverless:
                         await asyncio.sleep(poll_interval)
                         elapsed_time += poll_interval
 
-                        route = await endpoint._route(cost=0, req_idx=request_idx, timeout=self.get_avg_request_time())
+                        route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
                         request_idx = route.request_idx or request_idx
 
                         # exponential backoff + jitter (cap)
