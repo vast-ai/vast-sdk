@@ -67,6 +67,10 @@ then
     uv venv --python-preference only-managed "$ENV_PATH" -p 3.10
     source "$ENV_PATH/bin/activate"
 
+    if [ "$WORKER_SDK" = true ]; then
+    uv pip install git+https://github.com/vast-ai/vast-sdk.git@server-side-sdk
+    fi
+    
     uv pip install -r "${SERVER_DIR}/requirements.txt"
 
     touch ~/.no_auto_tmux
