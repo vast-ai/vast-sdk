@@ -1,40 +1,32 @@
 import asyncio
-from vastai_sdk import Serverless, ServerlessRequest
-import os
+from vastai import Serverless, ServerlessRequest
 
-API_KEY = os.environ.get("VAST_API_KEY")
+MAX_TOKENS = 128
 
 async def main():
-    v = Serverless(API_KEY, debug=False)
-    endpoint = await v.get_endpoint(name="my_endpoint")
+    async with Serverless() as client:
+        endpoint = await client.get_endpoint(name="my-endpoint")
 
-    payload = {
-        "input" : {
-            "model": "Qwen/Qwen3-8B",
-            "prompt" : "Who are you?",
-            "max_tokens" : 100,
-            "temperature" : 0.7
+        payload = {
+            "input" : {
+                "model": "Qwen/Qwen3-8B",
+                "prompt" : "Who are you?",
+                "max_tokens" : MAX_TOKENS,
+                "temperature" : 0.7
+            }
         }
-    }
-    
-    # Create a ServerlessRequest object to attach callbacks before submitting the request
-    req = ServerlessRequest()
+        
+        # Create a ServerlessRequest object to attach callbacks before submitting the request
+        req = ServerlessRequest()
 
-    # Attach a callback to run when the machine starts work on the request
-    def work_start_callback():
-        print("Request is being processed")
+        # Attach a callback to run when the machine finished work on the request
+        def work_finished_callback(response):
+            print(f"Request finished. Got response of length {len(response["response"]["choices"][0]["text"])}")
 
-    req.add_on_work_start_callback(work_start_callback)
+        req.then(work_finished_callback)
 
-    # Attach a callback to run when the machine finished work on the request
-    def work_finished_callback(response):
-        print(f"Request finished. Got response of length {len(response["choices"][0]["text"])}")
-
-    req.then(work_finished_callback)
-
-    response = await endpoint.request(route="/v1/completions", payload=payload, serverless_request=req)
-    print(response)
-    await v.close()
+        response = await endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=MAX_TOKENS)
+        print(response)
 
 if __name__ == "__main__":
     asyncio.run(main())

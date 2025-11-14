@@ -1,25 +1,23 @@
 import asyncio
-from vastai_sdk import Serverless
-import os
+from vastai import Serverless
 
-API_KEY = os.environ.get("VAST_API_KEY")
+MAX_TOKENS = 128
 
 async def main():
-    client = Serverless(API_KEY, debug=True, instance="local")
-    endpoint = await client.get_endpoint(name="test")
+    async with Serverless() as client:
+        endpoint = await client.get_endpoint(name="my-endpoint")
 
-    payload = {
-        "input" : {
-            "model": "Qwen/Qwen3-8B",
-            "prompt" : "Who are you?",
-            "max_tokens" : 100,
-            "temperature" : 0.7
+        payload = {
+            "input" : {
+                "model": "Qwen/Qwen3-8B",
+                "prompt" : "Who are you?",
+                "max_tokens" : MAX_TOKENS,
+                "temperature" : 0.7
+            }
         }
-    }
-    
-    response = await endpoint.request("/v1/completions", payload)
-    print(response)#["choices"][0]["text"])
-    await client.close()
+        
+        response = await endpoint.request("/v1/completions", payload, cost=MAX_TOKENS)
+        print(response["response"]["choices"][0]["text"])
 
 if __name__ == "__main__":
     asyncio.run(main())

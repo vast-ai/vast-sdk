@@ -1,75 +1,59 @@
-# 🪄 Vast.ai Magic Comes To Python!
-It's everything you love from the [Vast.ai CLI](https://github.com/vast-ai/vast-cli) tool, wrapped neatly in an easy-to-use Python interface!
-
+# Vast.ai Python SDK
 [![PyPI version](https://badge.fury.io/py/vastai-sdk.svg)](https://badge.fury.io/py/vastai-sdk)
 
-## 📦 What's in the pip?
-Why, it’s not just an SDK—it’s an entire development philosophy in a single import statement! With just a humble `pip install`, you unlock:
+The official Vast.ai SDK pip package.
 
- * ⚡ **Lightning-fast integrations**: So easy, it practically writes your code for you.
- * 🛡️ **Error-free operations**: Bugs? Banished. Exceptions? Extinct. Our SDK makes them a thing of the past!
- * 🌍 **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
+## Install
+```bash
+pip install vastai-sdk
+```
+## Examples
 
-## 👀 Let's Sneak A Peek!
-Under the hood we are using what the [CLI tool](https://github.com/vast-ai/vast-cli) uses and so the documentation is the same. The arguments are the same. 
+NOTE: Ensure your Vast.ai API key is set in your working environment as `VAST_API_KEY`. Alternatively, you may pass the API key in as a parameter to either client.
 
-🐚 shell: `vastai cast --spell='abracadabra'` 
+### Using the VastAI CLI client
 
-🐍 python: `vastai.cast(spell='abracadabra')`
-
-Just a little something like this and we're ready to roll!
+1. Create the client
 ```python
-import vastai_sdk
-vastai = vastai_sdk.VastAI()
+from vastai import VastAI
+vastai = VastAI() # or, VastAI("YOUR_API_KEY")
+```
+2. Run commands
+```python
+vastai.search_offers()
+```
+3. Get help
+```python
+help(v.create_instances)
 ```
 
-In fact, try this right now. I'll wait!
+### Using the Serverless client
 
+1. Create the client
 ```python
-$ pip install vastai-sdk
-$ python
-Python 3.11.2 (main, Aug 26 2024, 07:20:54) [GCC 12.2.0] on linux
-Type "help", "copyright", "credits" or "license" for more information.
->>> import vastai_sdk
->>> v = vastai_sdk.VastAI()
->>> v.search_offers()
-````
-This is easy, you got this! 
-
-### What about the return values?
-JSONable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
-
-### Alright, but what about an API key, what's the catch?
-You can provide it in the class instantiation: `vastai.VastAI("My-magnificent-key")`
-
-OR, if you leave it blank it will look for a key in the same place as the CLI, right there in your friendly `$HOME` directory.
-
-The `creds_source` @property will tell you where what's being used came from. Example:
-
+from vastai import Serverless
+serverless = Serverless() # or, Serverless("YOUR_API_KEY")
+```
+2. Get an endpoint
 ```python
->>> v=vastai_sdk.VastAI("Not-My-Real-Key-Don't-Worry!")
->>> v.creds_source
-'CODE'
->>> v.api_key
-"Not-My-Real-Key-Don't-Worry!"
->>>
+endpoint = await serverless.get_endpoint("my-endpoint")
+```
+3. Make a request
+```python
+request_body = {
+                "input" : {
+                    "model": "Qwen/Qwen3-8B",
+                    "prompt" : "Who are you?",
+                    "max_tokens" : 100,
+                    "temperature" : 0.7
+                }
+            }
+response = await serverless.request("/v1/completions", request_body)
+```
+4. Read the response
+```python
+text = response["response"]["choices"][0]["text"]
+print(text)
 ```
 
-### Introspection, `__doc__`, `__sig__`?
-Yes, yes, and yes. It's all in there. Try this at the handy python prompt
-
-```python
->>> help(v.create_instance)
-```
-Pretty nice, right? Now do this! (No Spoilers!)
-
-```python
->>> help(v.<tab>
-```
-
-All the helpers are there so your vscode, emacs, ipython, and neovim sessions will fly as your fingertips tab away.
-
-### Help, support, all that stuff?
-Sure. Just head over to GitHub issues.
-
-Thanks for using [Vast.ai](https://vast.ai). We 💖 you!
+Find more examples in the `examples` directory

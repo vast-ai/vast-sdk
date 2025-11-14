@@ -1,4 +1,4 @@
-from vastai_sdk.serverless.server.lib.data_types import (
+from vastai.serverless.server.lib.data_types import (
     EndpointHandler,
     ApiPayload,
     JsonDataException,

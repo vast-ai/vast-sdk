@@ -1,4 +1,4 @@
-from vastai_sdk.serverless.server.lib import data_types, backend, server
+from vastai.serverless.server.lib import data_types, backend, server
 from dataclasses import dataclass
 from aiohttp import web, ClientResponse
 
