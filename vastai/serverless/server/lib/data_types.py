@@ -66,12 +66,12 @@ class ApiPayload(ABC):
 class AuthData:
     """data used to authenticate requester"""
 
-    signature: str
     cost: str
     endpoint: str
     reqnum: int
-    url: str
     request_idx: int
+    signature: str
+    url: str
 
     @classmethod
     def from_json_msg(cls, json_msg: Dict[str, Any]):
@@ -191,11 +191,12 @@ class SystemMetrics:
         self.additional_disk_usage = disk_usage - self.last_disk_usage
         self.last_disk_usage = disk_usage
 
-    def reset(self):
+    def reset(self, expected: float | None) -> None:
         # autoscaler excepts model_loading_time to be populated only once, when the instance has
         # finished benchmarking and is ready to receive requests. This applies to restarted instances
         # as well: they should send model_loading_time once when they are done loading
-        self.model_loading_time = None
+        if self.model_loading_time == expected:
+            self.model_loading_time = None
 
 
 @dataclass
@@ -205,17 +206,30 @@ class RequestMetrics:
     reqnum: int
     workload: float
     status: str
+    success: bool = False
+
+@dataclass
+class BenchmarkResult:
+    request_idx: int
+    workload: float
+    task: Awaitable[ClientResponse]
+    response: Optional[ClientResponse] = None
+
+    @property
+    def is_successful(self) -> bool:
+        return self.response is not None and self.response.status == 200
 
 @dataclass
 class ModelMetrics:
     """Model specific metrics"""
 
+    # these are reset after being sent to autoscaler
     workload_served: float
     workload_received: float
     workload_cancelled: float
     workload_errored: float
     workload_rejected: float
-
+    # these are not
     workload_pending: float
     error_msg: Optional[str]
     max_throughput: float
@@ -245,7 +259,7 @@ class ModelMetrics:
     def wait_time(self) -> float:
         if (len(self.requests_working) == 0):
             return 0.0
-        return sum([request.workload for request in self.requests_working.values()]) / self.max_throughput
+        return sum([request.workload for request in self.requests_working.values()]) / max(self.max_throughput, 0.00001)
     
     @property
     def cur_load(self) -> float:
@@ -273,6 +287,8 @@ class AutoScalerData:
     """Data that is reported to autoscaler"""
 
     id: int
+    mtoken: str
+    version: str
     loadtime: float
     cur_load: float
     rej_load: float
@@ -307,6 +323,7 @@ class LogAction(Enum):
     ModelLoaded = 1
     ModelError = 2
     Info = 3
+
 
 RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
 # on_response: handles the generate_client_response logic (takes web.Request and ClientResponse)

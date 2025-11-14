@@ -6,28 +6,31 @@ import subprocess
 import dataclasses
 import logging
 from asyncio import wait, sleep, gather, Semaphore, FIRST_COMPLETED, create_task
-import asyncio
 from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional
 from functools import cached_property
-from setuptools._distutils.util import strtobool
+from distutils.util import strtobool
 
 from anyio import open_file
 from aiohttp import web, ClientResponse, ClientSession, ClientConnectorError, ClientTimeout, TCPConnector
+import asyncio
 
 import requests
 from Crypto.Signature import pkcs1_15
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 
-from .metrics import Metrics
-from .data_types import (
+from lib.metrics import Metrics
+from lib.data_types import (
     AuthData,
     EndpointHandler,
     LogAction,
     ApiPayload_T,
     JsonDataException,
-    RequestMetrics
+    RequestMetrics,
+    BenchmarkResult
 )
+
+VERSION = "0.2.0"
 
 MSG_HISTORY_LEN = 100
 log = logging.getLogger(__file__)
@@ -57,14 +60,23 @@ class Backend:
     log_actions: List[Tuple[LogAction, str]]
     max_wait_time: float = 10.0
     reqnum = -1
+    version = VERSION
     msg_history = []
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
     unsecured: bool = dataclasses.field(
         default_factory=lambda: bool(strtobool(os.environ.get("UNSECURED", "false"))),
     )
+    report_addr: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("REPORT_ADDR", "https://run.vast.ai")
+    )
+    mtoken: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("MASTER_TOKEN", "")
+    )
 
     def __post_init__(self):
         self.metrics = Metrics()
+        self.metrics._set_version(self.version)
+        self.metrics._set_mtoken(self.mtoken)
         self._total_pubkey_fetch_errors = 0
         self._pubkey = self._fetch_pubkey()
         self.__start_healthcheck: bool = False
@@ -99,30 +111,25 @@ class Backend:
 
     #######################################Private#######################################
     def _fetch_pubkey(self):
-        command = ["curl", "-X", "GET", "https://run.vast.ai/pubkey/"]
-        result = subprocess.check_output(command, universal_newlines=True)
-        log.debug("public key:")
-        log.debug(result)
-        key = None
-        for _ in range(5):
-            try:
-                key = RSA.import_key(result)
-                break
-            except ValueError as e:
-                log.debug(f"Error downloading key: {e}")
-                time.sleep(15)
-        if key is None:
-            self._total_pubkey_fetch_errors += 1
-            if self._total_pubkey_fetch_errors >= MAX_PUBKEY_FETCH_ATTEMPTS:
-                self.backend_errored("Failed to get autoscaler pubkey")
-        return key
+        report_addr = self.report_addr.rstrip("/")
+        command = ["curl", "-X", "GET", f"{report_addr}/pubkey/"]
+        try:
+            result = subprocess.check_output(command, universal_newlines=True)
+            log.debug("public key:")
+            log.debug(result)
+            key = RSA.import_key(result)
+            if key is not None:
+                return key
+        except (ValueError , subprocess.CalledProcessError) as e:
+            log.debug(f"Error downloading key: {e}")
+        self.backend_errored("Failed to get autoscaler pubkey")
+       
 
     async def __handle_request(
         self,
         handler: EndpointHandler[ApiPayload_T],
         request: web.Request,
     ) -> Union[web.Response, web.StreamResponse]:
-
         """use this function to forward requests to the model endpoint"""
         try:
             data = await request.json()
@@ -141,16 +148,6 @@ class Backend:
             raise asyncio.CancelledError
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
-            log.debug(f"got request, {request_metrics.reqnum}")
-            self.metrics._request_start(request_metrics)
-            if self.allow_parallel_requests is False:
-                log.debug(f"Waiting to aquire Sem for reqnum:{request_metrics.reqnum}")
-                await self.sem.acquire()
-                log.debug(
-                    f"Sem acquired for reqnum:{request_metrics.reqnum}, starting request..."
-                )
-            else:
-                log.debug(f"Starting request for reqnum:{request_metrics.reqnum}")
             try:
                 response = await self.__call_api(handler=handler, payload=payload)
                 status_code = response.status
@@ -178,9 +175,20 @@ class Backend:
         
         if self.metrics.model_metrics.wait_time > self.max_wait_time:
             self.metrics._request_reject(request_metrics)
-            return web.Response(status=500)
+            return web.Response(status=429)
 
+        acquired = False
         try:
+            self.metrics._request_start(request_metrics)
+            if self.allow_parallel_requests is False:
+                log.debug(f"Waiting to aquire Sem for reqnum:{request_metrics.reqnum}")
+                await self.sem.acquire()
+                acquired = True
+                log.debug(
+                    f"Sem acquired for reqnum:{request_metrics.reqnum}, starting request..."
+                )
+            else:
+                log.debug(f"Starting request for reqnum:{request_metrics.reqnum}")
             done, pending = await wait(
                 [
                     create_task(make_request()),
@@ -188,7 +196,10 @@ class Backend:
                 ],
                 return_when=FIRST_COMPLETED,
             )
-            [task.cancel() for task in pending]
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
             done_task = done.pop()
             try:
                 return done_task.result()
@@ -203,7 +214,7 @@ class Backend:
             return web.Response(status=500)
         finally:
             # Always release the semaphore if it was acquired
-            if not self.allow_parallel_requests:
+            if acquired:
                 self.sem.release()
             self.metrics._request_end(request_metrics)
 
@@ -278,7 +289,7 @@ class Backend:
         message = {
             key: value
             for (key, value) in (dataclasses.asdict(auth_data).items())
-            if key != "signature"
+            if key != "signature" and key != "__request_id"
         }
         if auth_data.reqnum < (self.reqnum - MSG_HISTORY_LEN):
             log.debug(
@@ -288,7 +299,7 @@ class Backend:
         elif message in self.msg_history:
             log.debug(f"message: {message} already in message history")
             return False
-        elif verify_signature(json.dumps(message, indent=4), auth_data.signature):
+        elif verify_signature(json.dumps(message, indent=4, sort_keys=True), auth_data.signature):
             self.reqnum = max(auth_data.reqnum, self.reqnum)
             self.msg_history.append(message)
             self.msg_history = self.msg_history[-MSG_HISTORY_LEN:]
@@ -307,10 +318,10 @@ class Backend:
                 with open(BENCHMARK_INDICATOR_FILE, "r") as f:
                     log.debug("already ran benchmark")
                     # trigger model load
-                    payload = self.benchmark_handler.make_benchmark_payload()
-                    _ = await self.__call_api(
-                        handler=self.benchmark_handler, payload=payload
-                    )
+                    # payload = self.benchmark_handler.make_benchmark_payload()
+                    # _ = await self.__call_api(
+                    #     handler=self.benchmark_handler, payload=payload
+                    # )
                     return float(f.readline())
             except FileNotFoundError:
                 pass
@@ -325,18 +336,26 @@ class Backend:
 
             for run in range(1, self.benchmark_handler.benchmark_runs + 1):
                 start = time.time()
-                tasks = []
-                total_workload = 0
+                benchmark_requests = []
 
-                for _ in range(concurrent_requests):
+                for i in range(concurrent_requests):
                     payload = self.benchmark_handler.make_benchmark_payload()
-                    total_workload += payload.count_workload()
-                    tasks.append(
-                        self.__call_api(handler=self.benchmark_handler, payload=payload)
+                    workload = payload.count_workload()
+                    task = self.__call_api(handler=self.benchmark_handler, payload=payload)
+                    benchmark_requests.append(
+                        BenchmarkResult(request_idx=i, workload=workload, task=task)
                     )
 
-                responses = await gather(*tasks)
+                responses = await gather(*[br.task for br in benchmark_requests])
+                for br, response in zip(benchmark_requests, responses):
+                    br.response = response
+
+                total_workload = sum(br.workload for br in benchmark_requests if br.is_successful)
                 time_elapsed = time.time() - start
+                successful_responses = sum([1 for br in benchmark_requests if br.is_successful])
+                if successful_responses == 0:
+                    self.backend_errored("No successful responses from benchmark")
+                    log.debug(f"benchmark failed: {successful_responses}/{concurrent_requests} successful responses")
 
                 throughput = total_workload / time_elapsed
                 sum_throughput += throughput
@@ -350,7 +369,7 @@ class Backend:
                             f"Run: {run}, concurrent_requests: {concurrent_requests}",
                             f"Total workload: {total_workload}, time_elapsed: {time_elapsed}s",
                             f"Throughput: {throughput} workload/s",
-                            f"Successful responses: {len([r for r in responses if r.status == 200])}",
+                            f"Successful responses: {successful_responses}/{concurrent_requests}",
                             "#" * 60,
                         ]
                     )
@@ -377,7 +396,7 @@ class Backend:
                         )
                         # some backends need a few seconds after logging successful startup before
                         # they can begin accepting requests
-                        await sleep(5)
+                        # await sleep(5)
                         try:
                             max_throughput = await run_benchmark()
                             self.__start_healthcheck = True
@@ -398,13 +417,13 @@ class Backend:
 
         async def tail_log():
             log.debug(f"tailing file: {self.model_log_file}")
-            async with await open_file(self.model_log_file) as f:
+            async with await open_file(self.model_log_file, encoding='utf-8', errors='ignore') as f:
                 while True:
                     line = await f.readline()
                     if line:
                         await handle_log_line(line.rstrip())
                     else:
-                        time.sleep(LOG_POLL_INTERVAL)
+                        await asyncio.sleep(LOG_POLL_INTERVAL)
 
         ###########
 
