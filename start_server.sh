@@ -68,10 +68,12 @@ then
     source "$ENV_PATH/bin/activate"
 
     if [ "$WORKER_SDK" = true ]; then
-    uv pip install git+https://github.com/vast-ai/vast-sdk.git@server-side-sdk
+        uv pip install git+https://github.com/vast-ai/vast-sdk.git@server-side-sdk
     fi
-    
-    uv pip install -r "${SERVER_DIR}/requirements.txt"
+
+    if [ -d "${SERVER_DIR}/requirements.txt" ]; then
+        uv pip install -r "${SERVER_DIR}/requirements.txt"
+    fi
 
     touch ~/.no_auto_tmux
 else
