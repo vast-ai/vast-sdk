@@ -1,7 +1,8 @@
 from vastai.serverless.server.lib import data_types, backend, server
 from dataclasses import dataclass
 from aiohttp import web, ClientResponse
-
+import logging
+import sys
 
 class Worker:
     """
@@ -11,6 +12,13 @@ class Worker:
     """
 
     def __init__(self, config: data_types.WorkerConfig):
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            stream=sys.stdout
+        )
+        
         handler_factory = data_types.GenericEndpointFactory(config)
         
         # Get all endpoint handlers
