@@ -5,7 +5,7 @@ import ssl
 from asyncio import run, gather
 
 
-from lib.backend import Backend
+from .backend import Backend
 from aiohttp import web
 
 log = logging.getLogger(__file__)

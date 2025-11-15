@@ -8,7 +8,7 @@ from functools import cache
 import asyncio
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, ClientResponseError
 
-from lib.data_types import AutoScalerData, SystemMetrics, ModelMetrics, RequestMetrics
+from .data_types import AutoScalerData, SystemMetrics, ModelMetrics, RequestMetrics
 from typing import Awaitable, NoReturn, List
 
 METRICS_UPDATE_INTERVAL = 1
