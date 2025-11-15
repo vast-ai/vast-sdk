@@ -14,7 +14,7 @@ class Worker:
     def __init__(self, config: data_types.WorkerConfig):
         
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.DEBUG,
             format='%(asctime)s - %(levelname)s - %(message)s',
             stream=sys.stdout
         )
@@ -43,4 +43,5 @@ class Worker:
 
 
     def run(self):
+        print("Starting worker!")
         server.start_server(self.backend, self.routes)
