@@ -66,12 +66,12 @@ class ApiPayload(ABC):
 class AuthData:
     """data used to authenticate requester"""
 
+    signature: str
     cost: str
     endpoint: str
     reqnum: int
-    request_idx: int
-    signature: str
     url: str
+    request_idx: int
 
     @classmethod
     def from_json_msg(cls, json_msg: Dict[str, Any]):
@@ -191,12 +191,11 @@ class SystemMetrics:
         self.additional_disk_usage = disk_usage - self.last_disk_usage
         self.last_disk_usage = disk_usage
 
-    def reset(self, expected: float | None) -> None:
+    def reset(self):
         # autoscaler excepts model_loading_time to be populated only once, when the instance has
         # finished benchmarking and is ready to receive requests. This applies to restarted instances
         # as well: they should send model_loading_time once when they are done loading
-        if self.model_loading_time == expected:
-            self.model_loading_time = None
+        self.model_loading_time = None
 
 
 @dataclass
@@ -206,30 +205,17 @@ class RequestMetrics:
     reqnum: int
     workload: float
     status: str
-    success: bool = False
-
-@dataclass
-class BenchmarkResult:
-    request_idx: int
-    workload: float
-    task: Awaitable[ClientResponse]
-    response: Optional[ClientResponse] = None
-
-    @property
-    def is_successful(self) -> bool:
-        return self.response is not None and self.response.status == 200
 
 @dataclass
 class ModelMetrics:
     """Model specific metrics"""
 
-    # these are reset after being sent to autoscaler
     workload_served: float
     workload_received: float
     workload_cancelled: float
     workload_errored: float
     workload_rejected: float
-    # these are not
+
     workload_pending: float
     error_msg: Optional[str]
     max_throughput: float
@@ -287,8 +273,6 @@ class AutoScalerData:
     """Data that is reported to autoscaler"""
 
     id: int
-    mtoken: str
-    version: str
     loadtime: float
     cur_load: float
     rej_load: float
@@ -324,7 +308,6 @@ class LogAction(Enum):
     ModelError = 2
     Info = 3
 
-
 RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
 # on_response: handles the generate_client_response logic (takes web.Request and ClientResponse)
 ClientResponseHandler = Callable[[web.Request, ClientResponse], Awaitable[Union[web.Response, web.StreamResponse]]]
@@ -333,20 +316,31 @@ WorkloadCalculator = Callable[[Dict[str, Any]], float]
 
 
 @dataclass
+class LogActionConfig:
+    """Configuration for defining log actions"""
+    on_load: list[str] = field(default_factory=list)
+    on_error: list[str] = field(default_factory=list)
+    on_info: list[str] = field(default_factory=list)
+
+    @property
+    def log_actions(self) -> list[LogAction]:
+        log_actions_ = []
+        log_actions_.extend([LogAction.ModelLoaded(), log for log in self.on_load])
+        log_actions_.extend([LogAction.ModelError(),  log for log in self.on_error])
+        log_actions_.extend([LogAction.Info(),        log for log in self.on_info])
+        return log_actions_
+
+
+@dataclass
 class HandlerConfig:
-    """Friendly configuration for defining handlers"""
+    """Configuration for defining handlers"""
     route: str
     healthcheck: Optional[str] = None
     benchmark_data: list[dict[str, Any]] = field(default_factory=list)
-    # Optional: custom EndpointHandler class (if None, use generic)
     handler_class: Optional[Type[EndpointHandler]] = None
-    # Optional: custom ApiPayload class (if None, uses generic)
     payload_class: Optional[Type[ApiPayload]] = None
-    # Optional: custom logic to parse/modify request JSON before creating ApiPayload
     on_request: Optional[RequestPayloadParser] = None
-    # Optional: custom logic to handle model response and create client response
     on_response: Optional[ClientResponseHandler] = None
-    # Optional: custom workload calculation
     calculate_workload: Optional[WorkloadCalculator] = None
 
 
@@ -361,7 +355,7 @@ class WorkerConfig:
     benchmark_route: Optional[str] = None
     allow_parallel_requests: bool = False
     max_model_latency: Optional[float] = None,
-    log_actions: list[tuple[LogAction, str]] = field(default_factory=list)
+    log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
 
 
 class GenericEndpointFactory:

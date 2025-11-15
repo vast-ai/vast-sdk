@@ -2,7 +2,7 @@ from .vastai_sdk import VastAI
 from .serverless.client.client import Serverless, ServerlessRequest
 from .serverless.client.endpoint import Endpoint
 from .serverless.server.worker import Worker
-from .serverless.server.lib.data_types import WorkerConfig, HandlerConfig
+from .serverless.server.lib.data_types import WorkerConfig, HandlerConfig, LogActionConfig
 
 __all__ = [
             "VastAI", 
@@ -11,6 +11,7 @@ __all__ = [
             "Endpoint",
             "Worker",
             "WorkerConfig",
-            "HandlerConfig"
+            "HandlerConfig",
+            "LogActionConfig"
         ]
 

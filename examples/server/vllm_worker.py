@@ -1,29 +1,47 @@
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Union, Type, Dict, Any
+from aiohttp import web, ClientResponse
+import json
+import logging
+import nltk
+import random
+import os
+
+from vastai import Worker, WorkerConfig, HandlerConfig, LogActionConfig
 from vastai.serverless.server.lib.data_types import (
     EndpointHandler,
     ApiPayload,
     JsonDataException,
     WorkerConfig,
-    HandlerConfig,
-    LogAction,
+    HandlerConfig
 )
-import os
-import json
-import random
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Union, Type, Dict, Any, Optional
-from aiohttp import web, ClientResponse
-import nltk
-import logging
+
+# vLLM model configuration
+MODEL_SERVER_URL           = 'http://127.0.0.1'
+MODEL_SERVER_PORT          = 18000
+MODEL_LOG_FILE             = '/var/log/portal/vllm.log'
+MODEL_HEALTHCHECK_ENDPOINT = "/health"
+
+# vLLM-specific log messages
+MODEL_LOAD_LOG_MSG = [
+    "Application startup complete.",
+]
+
+MODEL_ERROR_LOG_MSGS = [
+    "INFO exited: vllm",
+    "RuntimeError: Engine",
+]
+
+MODEL_INFO_LOG_MSGS = [
+    '"message":"Download'
+]
+
+log = logging.getLogger(__name__)
 
 nltk.download("words")
 WORD_LIST = nltk.corpus.words.words()
-log = logging.getLogger(__name__)
-
-"""
-Generic dataclass accepts any dictionary in input.
-"""
-
 
 @dataclass
 class vLLMPayload(ApiPayload, ABC):
@@ -75,10 +93,6 @@ class GenericHandler(EndpointHandler[vLLMPayload], ABC):
     @abstractmethod
     def endpoint(self) -> str:
         pass
-
-    @property
-    def healthcheck_endpoint(self) -> Optional[str]:
-        return os.environ.get("MODEL_HEALTH_ENDPOINT")
 
     @classmethod
     def payload_cls(cls) -> Type[vLLMPayload]:
@@ -198,99 +212,37 @@ class ChatCompletionsHandler(GenericHandler):
         return ChatCompletionsData.for_test()
 
 
-# vLLM-specific log messages
-MODEL_SERVER_START_LOG_MSG = [
-    "Application startup complete.",  # vLLM
-    "llama runner started",  # Ollama
-    '"message":"Connected","target":"text_generation_router"',  # TGI
-    '"message":"Connected","target":"text_generation_router::server"',  # TGI
-]
 
-MODEL_SERVER_ERROR_LOG_MSGS = [
-    "INFO exited: vllm",  # vLLM
-    "RuntimeError: Engine",  # vLLM
-    "Error: pull model manifest:",  # Ollama
-    "stalled; retrying",  # Ollama
-    "Error: WebserverFailed",  # TGI
-    "Error: DownloadError",  # TGI
-    "Error: ShardCannotStart",  # TGI
-]
+# Create handlers
+completions_handler = HandlerConfig(
+    route="/v1/completions",
+    healthcheck=MODEL_HEALTHCHECK_ENDPOINT,
+    payload_class=CompletionsData,
+    benchmark_data=[],
+)
 
+chat_completions_handler = HandlerConfig(
+    route="/v1/chat/completions",
+    healthcheck=MODEL_HEALTHCHECK_ENDPOINT,
+    payload_class=ChatCompletionsData,
+    benchmark_data=[],
+)
 
-def create_vllm_config(
-    model_server_url: Optional[str] = None,
-    model_server_port: Optional[int] = None,
-    model_log_file: Optional[str] = None,
-    healthcheck_endpoint: Optional[str] = None,
-    allow_parallel_requests: bool = True,
-    benchmark_runs: int = 3,
-    benchmark_words: int = 256,
-) -> WorkerConfig:
-    """
-    Create a preconfigured WorkerConfig for vLLM.
-    
-    Args:
-        model_server_url: URL of the model server (defaults to MODEL_SERVER_URL env var or http://127.0.0.1)
-        model_server_port: Port of the model server (defaults to 18000 or extracted from MODEL_SERVER_URL)
-        model_log_file: Path to model log file (defaults to MODEL_LOG env var or /var/log/portal/vllm.log)
-        healthcheck_endpoint: Health check endpoint (defaults to MODEL_HEALTH_ENDPOINT env var or /health)
-        allow_parallel_requests: Whether to allow parallel requests
-        benchmark_runs: Number of benchmark runs
-        benchmark_words: Number of words in benchmark prompts
-    
-    Returns:
-        WorkerConfig configured for vLLM
-    """
-    # Get configuration from environment or use defaults
-    if model_server_url is None:
-        model_server_url = os.environ.get('MODEL_SERVER_URL', 'http://127.0.0.1')
-    
-    # Extract port from URL if not provided
-    if model_server_port is None:
-        if ':' in model_server_url.split('//')[1]:
-            model_server_port = int(model_server_url.split(':')[-1].rstrip('/'))
-            model_server_url = ':'.join(model_server_url.split(':')[:-1])
-        else:
-            model_server_port = 18000
-    
-    if model_log_file is None:
-        model_log_file = os.environ.get('MODEL_LOG', '/var/log/portal/vllm.log')
-    
-    if healthcheck_endpoint is None:
-        healthcheck_endpoint = os.environ.get('MODEL_HEALTH_ENDPOINT', '/health')
-    
-    # Create log actions
-    log_actions = [
-        *[(LogAction.ModelLoaded, msg) for msg in MODEL_SERVER_START_LOG_MSG],
-        (LogAction.Info, '"message":"Download'),
-        *[(LogAction.ModelError, msg) for msg in MODEL_SERVER_ERROR_LOG_MSGS],
-    ]
-    
-    # Create handlers
-    completions_handler = HandlerConfig(
-        route="/v1/completions",
-        healthcheck=healthcheck_endpoint,
-        payload_class=CompletionsData,
-        benchmark_data=[],  # Will use for_test() method
-    )
-    
-    chat_completions_handler = HandlerConfig(
-        route="/v1/chat/completions",
-        healthcheck=healthcheck_endpoint,
-        payload_class=ChatCompletionsData,
-        benchmark_data=[],  # Will use for_test() method
-    )
-    
-    return WorkerConfig(
-        model_server_port=model_server_port,
-        model_log_file=model_log_file,
-        model_server_url=model_server_url,
-        handlers=[completions_handler, chat_completions_handler],
-        allow_parallel_requests=allow_parallel_requests,
-        benchmark_route="/v1/completions",
-        log_actions=log_actions,
-    )
+# Create log actions
+log_action_config = LogActionConfig(
+    on_load=MODEL_LOAD_LOG_MSG,
+    on_error=MODEL_ERROR_LOG_MSGS,
+    on_info=MODEL_INFO_LOG_MSGS
+)
 
+worker_config = WorkerConfig(
+    model_server_url=MODEL_SERVER_URL,
+    model_server_port=MODEL_SERVER_PORT,
+    model_log_file=MODEL_LOG_FILE,
+    handlers=[completions_handler, chat_completions_handler],
+    allow_parallel_requests=True,
+    benchmark_route="/v1/completions",
+    log_action_config=log_action_config
+)
 
-# Exported vLLM config - callable to create with defaults
-vLLM = create_vllm_config
+Worker(worker_config).run()

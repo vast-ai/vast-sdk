@@ -72,6 +72,9 @@ class Backend:
     mtoken: str = dataclasses.field(
         default_factory=lambda: os.environ.get("MASTER_TOKEN", "")
     )
+    healthcheck_url: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("MODEL_HEALTH_ENDPOINT", "")
+    )
 
     def __post_init__(self):
         self.metrics = Metrics()

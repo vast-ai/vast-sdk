@@ -43,5 +43,4 @@ class Worker:
 
 
     def run(self):
-        print("Starting worker!")
         server.start_server(self.backend, self.routes)

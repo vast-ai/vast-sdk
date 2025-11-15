@@ -40,6 +40,9 @@ echo_var ENV_PATH
 echo_var DEBUG_LOG
 echo_var PYWORKER_LOG
 echo_var MODEL_LOG
+echo_var WORKER_SDK
+echo_var PYWORKER_REPO
+echo_var PYWORKER_REF
 
 # Populate /etc/environment with quoted values
 if ! grep -q "VAST" /etc/environment; then
@@ -50,38 +53,70 @@ if ! grep -q "VAST" /etc/environment; then
         done > /etc/environment
 fi
 
-if [ ! -d "$ENV_PATH" ]
-then
+setup_env() {
     echo "setting up venv"
-    if ! which uv; then
+
+    # Ensure uv is installed
+    if ! command -v uv >/dev/null 2>&1; then
         curl -LsSf https://astral.sh/uv/install.sh | sh
-        source ~/.local/bin/env
+        [[ -f ~/.local/bin/env ]] && source ~/.local/bin/env
     fi
 
     # Fork testing
-    [[ ! -d $SERVER_DIR ]] && git clone "${PYWORKER_REPO:-https://github.com/vast-ai/pyworker}" "$SERVER_DIR"
+    [[ ! -d "$SERVER_DIR" ]] && git clone "${PYWORKER_REPO:-https://github.com/vast-ai/pyworker}" "$SERVER_DIR"
     if [[ -n ${PYWORKER_REF:-} ]]; then
         (cd "$SERVER_DIR" && git checkout "$PYWORKER_REF")
     fi
 
+    # (Re)create venv
     uv venv --python-preference only-managed "$ENV_PATH" -p 3.10
+
+    # Activate the newly created venv
+    # shellcheck disable=SC1090
     source "$ENV_PATH/bin/activate"
 
-    if [ "$WORKER_SDK" = true ]; then
-        uv pip install git+https://github.com/vast-ai/vast-sdk.git@server-side-sdk
-    fi
-
-    if [ -d "${SERVER_DIR}/requirements.txt" ]; then
+    # Install requirements if present
+    if [ -f "${SERVER_DIR}/requirements.txt" ]; then
         uv pip install -r "${SERVER_DIR}/requirements.txt"
     fi
 
     touch ~/.no_auto_tmux
+}
+
+# Decide if we actually have a usable venv
+NEED_ENV_SETUP=false
+
+# Missing directory, or clearly broken / incomplete venv
+if [ ! -d "$ENV_PATH" ] \
+   || [ ! -x "$ENV_PATH/bin/python" ] \
+   || [ ! -f "$ENV_PATH/bin/activate" ]; then
+    NEED_ENV_SETUP=true
+fi
+
+# If we don't have the server checkout yet, treat as needing setup as well
+if [ ! -d "$SERVER_DIR" ]; then
+    NEED_ENV_SETUP=true
+fi
+
+if [ "$NEED_ENV_SETUP" = true ]; then
+    setup_env
 else
+    # uv installer may have dropped this file; source it if present
     [[ -f ~/.local/bin/env ]] && source ~/.local/bin/env
-    source "$WORKSPACE_DIR/worker-env/bin/activate"
+
+    # Activate existing venv (use ENV_PATH, not WORKSPACE_DIR/worker-env)
+    # shellcheck disable=SC1090
+    source "$ENV_PATH/bin/activate"
+
     echo "environment activated"
     echo "venv: $VIRTUAL_ENV"
 fi
+
+if [ "${WORKER_SDK:-false}" = true ]; then
+    echo "Using Vast.ai SDK"
+    uv pip install git+https://github.com/vast-ai/vast-sdk.git@server-side-sdk
+fi
+
 
 if [ "$USE_SSL" = true ]; then
 
@@ -122,13 +157,14 @@ fi
 
 export REPORT_ADDR WORKER_PORT USE_SSL UNSECURED
 
-if [ $"WORKER_SDK" = true]; then
-    [ ! -d "$SERVER_DIR/worker.py" ] && echo "worker.py not found!" && exit 1
-    WORKER_PATH = "worker"
+if [ "${WORKER_SDK:-false}" = true ]; then
+    [ ! -f "$SERVER_DIR/worker.py" ] && echo "worker.py not found!" && exit 1
+    WORKER_PATH="worker"
 else
     [ ! -d "$SERVER_DIR/workers/$BACKEND" ] && echo "$BACKEND not supported!" && exit 1
-    WORKER_PATH = "workers.$BACKEND.server"
+    WORKER_PATH="workers.$BACKEND.server"
 fi
+
 
 cd "$SERVER_DIR"
 echo "launching PyWorker server"
@@ -137,5 +173,4 @@ echo "launching PyWorker server"
 # from the run prior to reboot. past logs are saved in $MODEL_LOG.old for debugging only
 [ -e "$MODEL_LOG" ] && cat "$MODEL_LOG" >> "$MODEL_LOG.old" && : > "$MODEL_LOG"
 
-(python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG") &
-echo "launching PyWorker server done"
+python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
