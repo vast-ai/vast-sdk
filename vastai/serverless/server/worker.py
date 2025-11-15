@@ -15,8 +15,8 @@ class Worker:
         
         logging.basicConfig(
             level=logging.DEBUG,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            stream=sys.stdout
+            format="%(asctime)s[%(levelname)-5s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
         
         handler_factory = data_types.GenericEndpointFactory(config)
