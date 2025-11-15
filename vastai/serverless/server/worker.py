@@ -31,7 +31,7 @@ class Worker:
             model_log_file=config.model_log_file,
             allow_parallel_requests=config.allow_parallel_requests,
             benchmark_handler=benchmark_handler,
-            log_actions=config.log_actions
+            log_actions=config.log_action_config.log_actions
         )
         
         self.routes = []
