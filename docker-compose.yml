@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  test-container:
+    build: .
+    container_name: test-container
+    # or use image: vast-pyworker if you’ve already built/pushed it
+    environment:
+      BACKEND: "comfyui"            # override as needed
+      HF_TOKEN: "your_hf_token_here"
+      MODEL_LOG: "/workspace/model.log"
+      COMFY_MODEL: "some-model-name"  # required if BACKEND=comfyui
+      CONTAINER_ID: "12345"
+      REPORT_ADDR: "https://run.vast.ai"
+      VAST_TCP_PORT_3000: "3000"
+      USE_SSL: "true"
+      PUBLIC_IPADDR: "0.0.0.0"
+      WORKER_PORT: "3000"
+      WORKER_SDK: "true"
+      PYWORKER_REPO: "https://github.com/LucasArmandVast/example-worker"
+    ports:
+      - "3001:3000"
+    # optional: always restart
+    restart: no
