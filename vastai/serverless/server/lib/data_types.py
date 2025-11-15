@@ -342,9 +342,9 @@ class LogActionConfig:
     @property
     def log_actions(self) -> list[LogAction]:
         log_actions_ = []
-        log_actions_.extend([(LogAction.ModelLoaded(), log) for log in self.on_load])
-        log_actions_.extend([(LogAction.ModelError(),  log) for log in self.on_error])
-        log_actions_.extend([(LogAction.Info(),        log) for log in self.on_info])
+        log_actions_.extend([(LogAction.ModelLoaded, log) for log in self.on_load])
+        log_actions_.extend([(LogAction.ModelError,  log) for log in self.on_error])
+        log_actions_.extend([(LogAction.Info,        log) for log in self.on_info])
         return log_actions_
 
 
