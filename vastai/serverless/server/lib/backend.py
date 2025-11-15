@@ -19,8 +19,8 @@ from Crypto.Signature import pkcs1_15
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 
-from lib.metrics import Metrics
-from lib.data_types import (
+from .metrics import Metrics
+from .data_types import (
     AuthData,
     EndpointHandler,
     LogAction,
