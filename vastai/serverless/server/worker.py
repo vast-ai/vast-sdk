@@ -300,10 +300,8 @@ class Worker:
         self.backend = backend.Backend(
             model_server_url=f"{config.model_server_url}:{config.model_server_port}",
             model_log_file=config.model_log_file,
-            allow_parallel_requests=config.allow_parallel_requests,
             benchmark_handler=benchmark_handler,
             log_actions=config.log_action_config.log_actions,
-            max_queue_time=config.max_queue_time
         )
         
         # Attach endpoint handlers to HTTP routes

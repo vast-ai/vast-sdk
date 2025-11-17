@@ -53,12 +53,10 @@ class Backend:
 
     model_server_url: str
     model_log_file: str
-    allow_parallel_requests: bool
     benchmark_handler: (
         EndpointHandler  # this endpoint handler will be used for benchmarking
     )
     log_actions: List[Tuple[LogAction, str]]
-    max_queue_time: float = 10.0
     reqnum = -1
     version = VERSION
     msg_history = []
@@ -176,14 +174,14 @@ class Backend:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=401)
         
-        if self.metrics.model_metrics.wait_time > self.max_queue_time:
+        if self.metrics.model_metrics.wait_time > handler.max_queue_time:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=429)
 
         acquired = False
         try:
             self.metrics._request_start(request_metrics)
-            if self.allow_parallel_requests is False:
+            if handler.allow_parallel_requests is False:
                 log.debug(f"Waiting to aquire Sem for reqnum:{request_metrics.reqnum}")
                 await self.sem.acquire()
                 acquired = True
@@ -335,7 +333,7 @@ class Backend:
 
             max_throughput = 0
             sum_throughput = 0
-            concurrent_requests = 10 if self.allow_parallel_requests else 1
+            concurrent_requests = 10 if self.benchmark_handler.allow_parallel_requests else 1
 
             for run in range(1, self.benchmark_handler.benchmark_runs + 1):
                 start = time.time()
