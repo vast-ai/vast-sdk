@@ -14,54 +14,6 @@ RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
 ClientResponseHandler = Callable[[web.Request, ClientResponse], Awaitable[Union[web.Response, web.StreamResponse]]]
 WorkloadCalculator = Callable[[Dict[str, Any]], float]
 
-class Worker:
-    """
-    This class provides a simple to use abstraction over the pyworker backend.
-    All custom implementations of pyworker can be created by configuring a Worker object.
-    The pyworker starts by calling Worker.run()
-    """
-
-    def __init__(self, config: data_types.WorkerConfig):
-        
-        # Configure logging for the pyworker internals
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s[%(levelname)-5s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-        
-        handler_factory = data_types.GenericEndpointFactory(config)
-        
-        # Get all endpoint handlers
-        handlers = handler_factory.get_all_handlers()
-        benchmark_handler = handler_factory.get_benchmark_handler()
-        
-        # Create backend
-        self.backend = backend.Backend(
-            model_server_url=f"{config.model_server_url}:{config.model_server_port}",
-            model_log_file=config.model_log_file,
-            allow_parallel_requests=config.allow_parallel_requests,
-            benchmark_handler=benchmark_handler,
-            log_actions=config.log_action_config.log_actions,
-            max_queue_time=config.max_queue_time
-        )
-        
-        # Attach endpoint handlers to HTTP routes
-        self.routes = []
-        for route_path, handler in handlers.items():
-            self.routes.append(
-                web.post(route_path, self.backend.create_handler(handler))
-            )
-        
-    async def run(self, **kwargs):
-        # Just delegate to the async server entry
-        await server.start_server_async(self.backend, self.routes, **kwargs)
-
-    def run_sync(self, **kwargs):
-        # Old behavior for CLI / simple use
-        server.start_server(self.backend, self.routes, **kwargs)
-
-
 @dataclass
 class LogActionConfig:
     """Configuration for defining log actions"""
@@ -321,3 +273,49 @@ class EndpointHandlerFactory:
     def model_server_base_url(self) -> str:
         """Get the full model server base URL"""
         return f"{self.config.model_server_url}:{self.config.model_server_port}"
+    
+class Worker:
+    """
+    This class provides a simple to use abstraction over the pyworker backend.
+    All custom implementations of pyworker can be created by configuring a Worker object.
+    The pyworker starts by calling Worker.run()
+    """
+
+    def __init__(self, config: WorkerConfig):
+        
+        # Configure logging for the pyworker internals
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s[%(levelname)-5s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        
+        handler_factory = EndpointHandlerFactory(config)
+        
+        # Get all endpoint handlers
+        handlers = handler_factory.get_all_handlers()
+        benchmark_handler = handler_factory.get_benchmark_handler()
+        
+        # Create backend
+        self.backend = backend.Backend(
+            model_server_url=f"{config.model_server_url}:{config.model_server_port}",
+            model_log_file=config.model_log_file,
+            allow_parallel_requests=config.allow_parallel_requests,
+            benchmark_handler=benchmark_handler,
+            log_actions=config.log_action_config.log_actions,
+            max_queue_time=config.max_queue_time
+        )
+        
+        # Attach endpoint handlers to HTTP routes
+        self.routes = []
+        for route_path, handler in handlers.items():
+            self.routes.append(
+                web.post(route_path, self.backend.create_handler(handler))
+            )
+        
+    async def run(self, **kwargs):
+        await server.start_server_async(self.backend, self.routes, **kwargs)
+
+    def run_sync(self, **kwargs):
+        server.start_server(self.backend, self.routes, **kwargs)
+
