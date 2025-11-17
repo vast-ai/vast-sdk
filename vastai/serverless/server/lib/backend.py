@@ -334,7 +334,7 @@ class Backend:
             max_throughput = 0
             sum_throughput = 0
             concurrent_requests = 10 if self.benchmark_handler.allow_parallel_requests else 1
-
+            log.debug(f"Concurrency: {concurrent_requests} Benchmark Runs: {self.benchmark_handler.benchmark_runs}")
             for run in range(1, self.benchmark_handler.benchmark_runs + 1):
                 start = time.time()
                 benchmark_requests = []
