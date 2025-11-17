@@ -51,7 +51,7 @@ class HandlerConfig:
     payload_class: Optional[Type[ApiPayload]] = None
     on_request: Optional[RequestPayloadParser] = None
     on_response: Optional[ClientResponseHandler] = None
-    calculate_workload: Optional[WorkloadCalculator] = None
+    workload_calculator: Optional[WorkloadCalculator] = None
 
 
 @dataclass
@@ -106,7 +106,7 @@ class EndpointHandlerFactory:
         user_payload_class = handler_config.payload_class
         user_request_parser = handler_config.on_request
         user_response_handler = handler_config.on_response
-        user_workload_calculator = handler_config.calculate_workload
+        user_workload_calculator = handler_config.workload_calculator
         
         # If user provided a custom payload class, use it
         if user_payload_class:
