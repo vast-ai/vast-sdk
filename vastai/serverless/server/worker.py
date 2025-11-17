@@ -190,12 +190,27 @@ class EndpointHandlerFactory:
         class GenericEndpointHandler(EndpointHandler[PayloadClass]):
             _route: str = field(default=route_path)
             _healthcheck_endpoint: Optional[str] = field(default=healthcheck_path)
-            max_queue_time = handler_config.max_queue_time
-            allow_parallel_requests = handler_config.allow_parallel_requests
-            if handler_config.benchmark_config:
-                benchmark_runs = handler_config.benchmark_config.runs
-                concurrency = handler_config.benchmark_config.concurrency
 
+            allow_parallel_requests: bool = field(
+                default=handler_config.allow_parallel_requests
+            )
+            max_queue_time: float = field(
+                default=handler_config.max_queue_time
+            )
+            benchmark_runs: int = field(
+                default=(
+                    handler_config.benchmark_config.runs
+                    if handler_config.benchmark_config
+                    else 8
+                )
+            )
+            concurrency: int = field(
+                default=(
+                    handler_config.benchmark_config.concurrency
+                    if handler_config.benchmark_config and handler_config.benchmark_config.concurrency
+                    else 10
+                )
+            )
             @property
             def endpoint(self) -> str:
                 """The endpoint is the same as the route"""
