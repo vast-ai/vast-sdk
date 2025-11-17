@@ -1,10 +1,11 @@
 from vastai.serverless.server.lib import data_types, backend, server
-from vastai.serverless.server.lib.data_types import ApiPayload, EndpointHandler, LogAction
+from vastai.serverless.server.lib.data_types import ApiPayload, EndpointHandler, LogAction, JsonDataException
 from dataclasses import dataclass, field
 from aiohttp import web, ClientResponse
 from abc import ABC, abstractmethod
 import logging
 import sys
+import json
 import random
 import logging
 from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type
@@ -133,8 +134,13 @@ class EndpointHandlerFactory:
                     return cls(data=test_data.copy())
                 
                 def generate_payload_json(self) -> Dict[str, Any]:
-                    return self.data
+                    return self.data["input"]
                 
+
+                @classmethod
+                def from_dict(cls, data: Dict[str, Any]) -> "GenericApiPayload":
+                    return cls(input=data["input"])
+
                 def count_workload(self) -> float:
                     # Use custom workload calculator if provided
                     if user_workload_calculator:
@@ -153,7 +159,28 @@ class EndpointHandlerFactory:
                             json_msg = user_request_parser(json_msg)
                         except Exception as e:
                             raise Exception(f"Error in user response handler: {e}")
-                    
+                        
+                    errors = {}
+
+                    # Validate required parameters
+                    required_params = ["input"]
+                    for param in required_params:
+                        if param not in json_msg:
+                            errors[param] = "missing parameter"
+
+                    if errors:
+                        raise JsonDataException(errors)
+
+                    try:
+                        # Create clean data dict and delegate to from_dict
+                        clean_data = {"input": json_msg["input"]}
+
+                        return cls.from_dict(clean_data)
+
+                    except (json.JSONDecodeError, JsonDataException) as e:
+                        errors["parameters"] = str(e)
+                        raise JsonDataException(errors)
+
                     return cls(data=json_msg)
             
             PayloadClass = GenericApiPayload

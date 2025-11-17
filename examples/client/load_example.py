@@ -18,7 +18,7 @@ async def main():
         
         responses = []
 
-        CUR_LOAD = 500
+        CUR_LOAD = 100
         while True:
             # Create a ServerlessRequest object to attach callbacks before submitting the request
             req = ServerlessRequest()
