@@ -116,7 +116,7 @@ class EndpointHandlerFactory:
             # Create a generic ApiPayload class
             @dataclass
             class GenericApiPayload(ApiPayload):
-                data: Dict[str, Any] = field(default_factory=dict)
+                input: Dict[str, Any] = field(default_factory=dict)
                 
                 @classmethod
                 def for_test(cls) -> "GenericApiPayload":
@@ -131,20 +131,20 @@ class EndpointHandlerFactory:
                                 raise(Exception(f"Error generating benchmark data for \"{handler_config.route}\" handler: {ex}"))
                     else:
                         raise(Exception("HandlerConfig must specify a BenchmarkConfig"))
-                    return cls(data=test_data.copy())
+                    return cls(input=test_data.copy())
                 
                 def generate_payload_json(self) -> Dict[str, Any]:
-                    return self.data
+                    return self.input
                 
 
                 @classmethod
-                def from_dict(cls, data: Dict[str, Any]) -> "GenericApiPayload":
-                    return cls(input=data["input"])
+                def from_dict(cls, input: Dict[str, Any]) -> "GenericApiPayload":
+                    return cls(input=input["input"])
 
                 def count_workload(self) -> float:
                     # Use custom workload calculator if provided
                     if user_workload_calculator:
-                        return user_workload_calculator(self.data)
+                        return user_workload_calculator(self.input)
                     # Default to 100 unless overridden
                     return 100.0
                 
