@@ -316,7 +316,7 @@ class EndpointHandlerFactory:
                 else:
                     benchmark_handler = handler
         if not benchmark_handler:
-            raise("Missing EndpointHandler with BenchmarkConfig")
+            raise Exception("Missing EndpointHandler with BenchmarkConfig")
         return benchmark_handler
     
     def has_handlers(self) -> bool:
