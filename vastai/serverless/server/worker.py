@@ -228,13 +228,18 @@ class EndpointHandlerFactory:
 
                 # 4. Non-streaming (buffered) passthrough
                 body = await model_response.read()
+
+
+                # Make a mutable copy of the headers
+                headers = model_response.headers.copy()
+                headers.pop("Content-Type", None)  # avoid conflict
+
                 return web.Response(
                     body=body,
                     status=model_response.status,
                     content_type=content_type or None,
-                    headers=model_response.headers,
+                    headers=headers,
                 )
-
         
         return GenericEndpointHandler()
     

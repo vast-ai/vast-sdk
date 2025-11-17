@@ -4,8 +4,8 @@ from vastai import Serverless, ServerlessRequest
 MAX_TOKENS = 128
 
 async def main():
-    async with Serverless() as client:
-        endpoint = await client.get_endpoint(name="my-endpoint")
+    async with Serverless(debug=True) as client:
+        endpoint = await client.get_endpoint(name="my-vllm-endpoint")
 
         payload = {
             "input" : {
