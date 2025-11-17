@@ -134,7 +134,7 @@ class EndpointHandlerFactory:
                     return cls(data=test_data.copy())
                 
                 def generate_payload_json(self) -> Dict[str, Any]:
-                    return self.data["input"]
+                    return self.data
                 
 
                 @classmethod
