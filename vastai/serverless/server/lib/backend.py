@@ -58,7 +58,7 @@ class Backend:
         EndpointHandler  # this endpoint handler will be used for benchmarking
     )
     log_actions: List[Tuple[LogAction, str]]
-    max_wait_time: float = 10.0
+    max_queue_time: float = 10.0
     reqnum = -1
     version = VERSION
     msg_history = []
@@ -176,7 +176,7 @@ class Backend:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=401)
         
-        if self.metrics.model_metrics.wait_time > self.max_wait_time:
+        if self.metrics.model_metrics.wait_time > self.max_queue_time:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=429)
 

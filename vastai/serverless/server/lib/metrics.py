@@ -103,7 +103,7 @@ class Metrics:
     
     def _request_reject(self, request: RequestMetrics):
         """
-        this function is called if the current wait time for the model is above max_wait_time
+        this function is called if the current wait time for the model is above max_queue_time
         """
         self.model_metrics.requests_recieved.add(request.reqnum)
         self.model_metrics.requests_deleting.append(request)

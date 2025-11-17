@@ -1,4 +1,6 @@
 from vastai import Worker, WorkerConfig, HandlerConfig
+import asyncio 
+import time
 
 handler_config = HandlerConfig(
     endpoint="/v1/completions",
@@ -11,4 +13,8 @@ worker_config = WorkerConfig(
     handlers=[handler_config]
 )
 
-Worker(worker_config).run()
+pyworker = asyncio.run(Worker(worker_config).run())
+
+while True:
+    print("worker.py still running")
+    time.sleep(1)

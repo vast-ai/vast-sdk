@@ -1,8 +1,18 @@
 from vastai.serverless.server.lib import data_types, backend, server
-from dataclasses import dataclass
+from vastai.serverless.server.lib.data_types import ApiPayload, EndpointHandler, LogAction
+from dataclasses import dataclass, field
 from aiohttp import web, ClientResponse
+from abc import ABC, abstractmethod
 import logging
 import sys
+import random
+import logging
+from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type
+
+# Callable types
+RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
+ClientResponseHandler = Callable[[web.Request, ClientResponse], Awaitable[Union[web.Response, web.StreamResponse]]]
+WorkloadCalculator = Callable[[Dict[str, Any]], float]
 
 class Worker:
     """
@@ -13,6 +23,7 @@ class Worker:
 
     def __init__(self, config: data_types.WorkerConfig):
         
+        # Configure logging for the pyworker internals
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s[%(levelname)-5s] %(message)s",
@@ -31,16 +42,282 @@ class Worker:
             model_log_file=config.model_log_file,
             allow_parallel_requests=config.allow_parallel_requests,
             benchmark_handler=benchmark_handler,
-            log_actions=config.log_action_config.log_actions
+            log_actions=config.log_action_config.log_actions,
+            max_queue_time=config.max_queue_time
         )
         
+        # Attach endpoint handlers to HTTP routes
         self.routes = []
         for route_path, handler in handlers.items():
             self.routes.append(
                 web.post(route_path, self.backend.create_handler(handler))
             )
         
+    async def run(self, **kwargs):
+        # Just delegate to the async server entry
+        await server.start_server_async(self.backend, self.routes, **kwargs)
+
+    def run_sync(self, **kwargs):
+        # Old behavior for CLI / simple use
+        server.start_server(self.backend, self.routes, **kwargs)
 
 
-    def run(self):
-        server.start_server(self.backend, self.routes)
+@dataclass
+class LogActionConfig:
+    """Configuration for defining log actions"""
+    on_load: list[str] = field(default_factory=list)
+    on_error: list[str] = field(default_factory=list)
+    on_info: list[str] = field(default_factory=list)
+
+    @property
+    def log_actions(self) -> list[LogAction]:
+        log_actions_ = []
+        log_actions_.extend([(LogAction.ModelLoaded, log) for log in self.on_load])
+        log_actions_.extend([(LogAction.ModelError,  log) for log in self.on_error])
+        log_actions_.extend([(LogAction.Info,        log) for log in self.on_info])
+        return log_actions_
+    
+@dataclass
+class BenchmarkConfig:
+    """Configuration for defining a benchmark"""
+    dataset: list[dict] | None = None
+    generator: Callable[[], dict] | None = None  # optional sample factory
+    runs: int = 8
+    concurrency: int | None = 10  # default: 10 if parallel enabled else 1
+    warmup_requests: int = 1
+    stop_on_zero_success: bool = True  # mark errored if a run yields 0 successful responses
+
+@dataclass
+class HandlerConfig:
+    """Configuration for defining handlers"""
+    route: str
+    healthcheck: Optional[str] = None
+    allow_parallel_requests: bool = False
+    max_queue_time: Optional[float] = 30.0,
+    benchmark_config: Optional[BenchmarkConfig] = None
+    handler_class: Optional[Type[EndpointHandler]] = None
+    payload_class: Optional[Type[ApiPayload]] = None
+    on_request: Optional[RequestPayloadParser] = None
+    on_response: Optional[ClientResponseHandler] = None
+    calculate_workload: Optional[WorkloadCalculator] = None
+
+
+@dataclass
+class WorkerConfig:
+    model_server_url: str = None
+    model_server_port: int = None
+    model_log_file: str = None
+    benchmark_data: list[dict[str, Any]] = field(default_factory=list)
+    handlers: list[HandlerConfig] = field(default_factory=list)
+    model_healthcheck_url: str = None
+    benchmark_route: Optional[str] = None
+    log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
+
+
+class EndpointHandlerFactory:
+    """Factory for creating endpoint handlers from WorkerConfig"""
+    
+    def __init__(self, config: WorkerConfig):
+        self.config = config
+        self._handlers: Dict[str, EndpointHandler] = {}
+        self._build_handlers()
+    
+    def _build_handlers(self) -> None:
+        """Build endpoint handlers from config"""
+        # If no handlers, create a default handler at /
+        if not self.config.handlers:
+            default_handler_config = HandlerConfig(
+                route="/",
+                healthcheck=self.config.model_healthcheck_url
+            )
+            handler = self._create_handler(default_handler_config)
+            self._handlers["/"] = handler
+        else:
+            # Build handlers from config
+            for handler_config in self.config.handlers:
+                # TODO: Override values from handler class with HandlerConfig values
+                if handler_config.handler_class is not None:
+                    # Use custom handler class
+                    handler = handler_config.handler_class()
+                    self._handlers[handler_config.route] = handler
+                    continue
+                handler = self._create_handler(handler_config)
+                self._handlers[handler_config.route] = handler
+    
+    def _create_handler(self, handler_config: HandlerConfig) -> EndpointHandler:
+        """Create a generic endpoint handler from HandlerConfig"""
+        
+        # Extract config values with defaults
+        route_path = handler_config.route
+        healthcheck_path = handler_config.healthcheck or self.config.model_healthcheck_url
+        benchmark_config = handler_config.benchmark_config
+        user_payload_class = handler_config.payload_class
+        user_request_parser = handler_config.on_request
+        user_response_handler = handler_config.on_response
+        user_workload_calculator = handler_config.calculate_workload
+        
+        # If user provided a custom payload class, use it
+        if user_payload_class:
+            PayloadClass = user_payload_class
+        else:
+            # Create a generic ApiPayload class
+            @dataclass
+            class GenericApiPayload(ApiPayload):
+                data: Dict[str, Any] = field(default_factory=dict)
+                
+                @classmethod
+                def for_test(cls) -> "GenericApiPayload":
+                    # Use random.choice from benchmark_data if available
+                    if benchmark_config:
+                        if benchmark_config.dataset:
+                            test_data = random.choice(benchmark_config.dataset)
+                        elif benchmark_config.generator:
+                            try:
+                                test_data = benchmark_config.generator()
+                            except Exception as ex:
+                                raise(Exception(f"Error generating benchmark data for \"{handler_config.route}\" handler: {ex}"))
+                    else:
+                        raise(Exception("HandlerConfig must specify a BenchmarkConfig"))
+                    return cls(data=test_data.copy())
+                
+                def generate_payload_json(self) -> Dict[str, Any]:
+                    return self.data
+                
+                def count_workload(self) -> float:
+                    # Use custom workload calculator if provided
+                    if user_workload_calculator:
+                        return user_workload_calculator(self.data)
+                    # Default to 100 unless overridden
+                    return 100.0
+                
+                @classmethod
+                def from_json_msg(cls, json_msg: Dict[str, Any]) -> "GenericApiPayload":
+                    if not isinstance(json_msg, dict):
+                        raise JsonDataException({"data": "payload must be a dictionary"})
+                    
+                    # Apply user's request parser if provided
+                    if user_request_parser:
+                        try:
+                            json_msg = user_request_parser(json_msg)
+                        except Exception as e:
+                            raise Exception(f"Error in user response handler: {e}")
+                    
+                    return cls(data=json_msg)
+            
+            PayloadClass = GenericApiPayload
+        
+        # Create a generic EndpointHandler class
+        @dataclass
+        class GenericEndpointHandler(EndpointHandler[PayloadClass]):
+            _route: str = field(default=route_path)
+            _healthcheck_endpoint: Optional[str] = field(default=healthcheck_path)
+            max_queue_time = handler_config.max_queue_time
+            allow_parallel_requests = handler_config.allow_parallel_requests
+            if handler_config.benchmark_config:
+                benchmark_runs = handler_config.benchmark_config.runs
+                concurrency = handler_config.benchmark_config.concurrency
+
+            @property
+            def endpoint(self) -> str:
+                """The endpoint is the same as the route"""
+                return self._route
+
+            @property
+            def healthcheck_endpoint(self) -> Optional[str]:
+                return self._healthcheck_endpoint
+            
+            @classmethod
+            def payload_cls(cls) -> Type[PayloadClass]:
+                return PayloadClass
+            
+            def make_benchmark_payload(self) -> PayloadClass:
+                """Just call the payload class's for_test() method"""
+                return PayloadClass.for_test()
+            
+            async def generate_client_response(
+                self,
+                client_request: web.Request,
+                model_response: ClientResponse,
+            ) -> Union[web.Response, web.StreamResponse]:
+                # 1. If user supplied a custom on_response, let them override everything.
+                if user_response_handler:
+                    try:
+                        return await user_response_handler(client_request, model_response)
+                    except Exception as e:
+                        raise Exception(f"Error in user response handler: {e}")
+                        # fall back to default behavior
+
+                # 2. Auto-detect “streaming” responses
+                content_type = model_response.content_type or ""
+                is_stream = (
+                    content_type.startswith("text/event-stream") or
+                    content_type in ("application/x-ndjson", "application/jsonl") or
+                    "stream" in content_type.lower()
+                ) or (model_response.headers.get("Transfer-Encoding") == "chunked")
+
+                # 3. Streaming passthrough
+                if is_stream:
+                    res = web.StreamResponse(
+                        status=model_response.status,
+                    )
+                    # propagate a subset of headers if you want
+                    if content_type:
+                        res.content_type = content_type
+
+                    await res.prepare(client_request)
+
+                    async for chunk in model_response.content.iter_any():
+                        if not chunk:
+                            continue
+                        await res.write(chunk)
+
+                    await res.write_eof()
+                    return res
+
+                # 4. Non-streaming (buffered) passthrough
+                body = await model_response.read()
+                return web.Response(
+                    body=body,
+                    status=model_response.status,
+                    content_type=content_type or None,
+                    headers=model_response.headers,
+                )
+
+        
+        return GenericEndpointHandler()
+    
+    def get_handler(self, route: str) -> Optional[EndpointHandler]:
+        """Get handler for a specific route"""
+        return self._handlers.get(route)
+    
+    def get_all_handlers(self) -> Dict[str, EndpointHandler]:
+        """Get all registered handlers"""
+        return self._handlers.copy()
+    
+    def get_benchmark_handler(self) -> Optional[EndpointHandler]:
+        """
+        Get the benchmark handler. 
+        If benchmark_route is specified in config, use that handler.
+        Otherwise, return the first available handler.
+        Returns None if no handlers exist.
+        """
+        if not self._handlers:
+            return None
+        
+        # If benchmark_route is specified and exists, use it
+        if self.config.benchmark_route:
+            handler = self._handlers.get(self.config.benchmark_route)
+            if handler:
+                return handler
+        
+        # Otherwise, return the first handler
+        return next(iter(self._handlers.values()))
+    
+    def has_handlers(self) -> bool:
+        """Check if any handlers are registered"""
+        return len(self._handlers) > 0
+    
+    @property
+    def model_server_base_url(self) -> str:
+        """Get the full model server base URL"""
+        return f"{self.config.model_server_url}:{self.config.model_server_port}"
