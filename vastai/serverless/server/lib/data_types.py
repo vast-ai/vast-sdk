@@ -97,6 +97,8 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     and converting it to json to be forwarded to model API
     """
 
+    has_benchmark: bool = True
+    concurrency: int = 10
     benchmark_runs: int = 8
     allow_parallel_requests: bool = False
     max_queue_time: float = 30.0

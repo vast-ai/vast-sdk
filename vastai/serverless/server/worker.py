@@ -130,7 +130,7 @@ class EndpointHandlerFactory:
                             except Exception as ex:
                                 raise(Exception(f"Error generating benchmark data for \"{handler_config.route}\" handler: {ex}"))
                     else:
-                        raise(Exception("HandlerConfig must specify a BenchmarkConfig"))
+                        raise(Exception(f"Error generating benchmark data for \"{handler_config.route}\" handler: Missing BenchmarkConfig!"))
                     return cls(input=test_data.copy())
                 
                 def generate_payload_json(self) -> Dict[str, Any]:
@@ -190,7 +190,12 @@ class EndpointHandlerFactory:
         class GenericEndpointHandler(EndpointHandler[PayloadClass]):
             _route: str = field(default=route_path)
             _healthcheck_endpoint: Optional[str] = field(default=healthcheck_path)
-
+            has_benchmark: bool = field(
+                default=(
+                    True if handler_config.benchmark_config
+                    else False
+                )
+            )
             allow_parallel_requests: bool = field(
                 default=handler_config.allow_parallel_requests
             )
@@ -302,15 +307,17 @@ class EndpointHandlerFactory:
         """
         if not self._handlers:
             return None
-        
-        # If benchmark_route is specified and exists, use it
-        if self.config.benchmark_route:
-            handler = self._handlers.get(self.config.benchmark_route)
-            if handler:
-                return handler
-        
-        # Otherwise, return the first handler
-        return next(iter(self._handlers.values()))
+
+        benchmark_handler: EndpointHandler = None
+        for handler in self._handlers:
+            if handler.has_benchmark:
+                if benchmark_handler is not None:
+                    raise Exception("Cannot define BenchmarkConfig for more than one EndpointHandler!")
+                else:
+                    benchmark_handler = handler
+        if not benchmark_handler:
+            raise("Missing EndpointHandler with BenchmarkConfig")
+        return benchmark_handler
     
     def has_handlers(self) -> bool:
         """Check if any handlers are registered"""
