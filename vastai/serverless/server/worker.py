@@ -309,7 +309,7 @@ class EndpointHandlerFactory:
             return None
 
         benchmark_handler: EndpointHandler = None
-        for handler in self._handlers:
+        for handler in self._handlers.values():
             if handler.has_benchmark:
                 if benchmark_handler is not None:
                     raise Exception("Cannot define BenchmarkConfig for more than one EndpointHandler!")
