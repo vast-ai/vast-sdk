@@ -4,21 +4,22 @@ import os
 
 from vastai import Worker, WorkerConfig, HandlerConfig, LogActionConfig, BenchmarkConfig
 
-# vLLM model configuration
-MODEL_SERVER_URL           = 'http://127.0.0.1'
-MODEL_SERVER_PORT          = 18000
-MODEL_LOG_FILE             = '/var/log/portal/vllm.log'
+# TGI  model configuration
+MODEL_SERVER_URL           = 'http://0.0.0.0'
+MODEL_SERVER_PORT          = 5001
+MODEL_LOG_FILE             = '/var/log/portal/comfyui.log'
 MODEL_HEALTHCHECK_ENDPOINT = "/health"
 
-# vLLM-specific log messages
+# TGI-specific log messages
 MODEL_LOAD_LOG_MSG = [
-    "Application startup complete.",
+    '"message":"Connected","target":"text_generation_router"',
+    '"message":"Connected","target":"text_generation_router::server"',
 ]
 
 MODEL_ERROR_LOG_MSGS = [
-    "INFO exited: vllm",
-    "RuntimeError: Engine",
-    "Traceback (most recent call last):"
+    "Error: WebserverFailed",
+    "Error: DownloadError",
+    "Error: ShardCannotStart",
 ]
 
 MODEL_INFO_LOG_MSGS = [
@@ -28,7 +29,8 @@ MODEL_INFO_LOG_MSGS = [
 nltk.download("words")
 WORD_LIST = nltk.corpus.words.words()
 
-def completions_benchmark_generator() -> dict:
+
+def benchmark_generator() -> dict:
     prompt = " ".join(random.choices(WORD_LIST, k=int(250)))
     model = os.environ.get("MODEL_NAME")
     if not model:
@@ -43,6 +45,7 @@ def completions_benchmark_generator() -> dict:
 
     return benchmark_data
 
+
 worker_config = WorkerConfig(
     model_server_url=MODEL_SERVER_URL,
     model_server_port=MODEL_SERVER_PORT,
@@ -50,20 +53,13 @@ worker_config = WorkerConfig(
     model_healthcheck_url=MODEL_HEALTHCHECK_ENDPOINT,
     handlers=[
         HandlerConfig(
-            route="/v1/completions",
-            workload_calculator= lambda data: data.get("max_tokens", 100),
+            route="/generate",
             allow_parallel_requests=True,
             max_queue_time=60.0,
             benchmark_config=BenchmarkConfig(
-                generator=completions_benchmark_generator,
-                concurrency=100
+                generator=benchmark_generator,
+                concurrency=50
             )
-        ),
-        HandlerConfig(
-            route="/v1/chat/completions",
-            workload_calculator= lambda data: data.get("max_tokens", 100),
-            allow_parallel_requests=True,
-            max_queue_time=60.0,
         )
     ],
     log_action_config=LogActionConfig(

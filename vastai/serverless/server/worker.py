@@ -1,10 +1,8 @@
-from vastai.serverless.server.lib import data_types, backend, server
+from vastai.serverless.server.lib import backend, server
 from vastai.serverless.server.lib.data_types import ApiPayload, EndpointHandler, LogAction, JsonDataException
 from dataclasses import dataclass, field
 from aiohttp import web, ClientResponse
-from abc import ABC, abstractmethod
 import logging
-import sys
 import json
 import random
 import logging
@@ -36,9 +34,7 @@ class BenchmarkConfig:
     dataset: list[dict] | None = None
     generator: Callable[[], dict] | None = None  # optional sample factory
     runs: int = 8
-    concurrency: int | None = 10  # default: 10 if parallel enabled else 1
-    warmup_requests: int = 1
-    stop_on_zero_success: bool = True  # mark errored if a run yields 0 successful responses
+    concurrency: int | None = 10
 
 @dataclass
 class HandlerConfig:

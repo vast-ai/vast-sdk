@@ -3,7 +3,7 @@ from vastai import Serverless
 import random
 
 async def main():
-    async with Serverless(debug=True) as client:
+    async with Serverless() as client:
         endpoint = await client.get_endpoint(name="my-comfy-endpoint")
 
         payload = {
