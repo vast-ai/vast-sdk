@@ -174,14 +174,12 @@ class EndpointHandlerFactory:
                     try:
                         # Create clean data dict and delegate to from_dict
                         clean_data = {"input": json_msg["input"]}
-
                         return cls.from_dict(clean_data)
 
                     except (json.JSONDecodeError, JsonDataException) as e:
                         errors["parameters"] = str(e)
                         raise JsonDataException(errors)
 
-                    return cls(data=json_msg)
             
             PayloadClass = GenericApiPayload
         
@@ -238,15 +236,14 @@ class EndpointHandlerFactory:
                 client_request: web.Request,
                 model_response: ClientResponse,
             ) -> Union[web.Response, web.StreamResponse]:
-                # 1. If user supplied a custom on_response, let them override everything.
+                # User implemented override
                 if user_response_handler:
                     try:
                         return await user_response_handler(client_request, model_response)
                     except Exception as e:
                         raise Exception(f"Error in user response handler: {e}")
-                        # fall back to default behavior
 
-                # 2. Auto-detect “streaming” responses
+                # Detect streaming
                 content_type = model_response.content_type or ""
                 is_stream = (
                     content_type.startswith("text/event-stream") or
@@ -254,12 +251,11 @@ class EndpointHandlerFactory:
                     "stream" in content_type.lower()
                 ) or (model_response.headers.get("Transfer-Encoding") == "chunked")
 
-                # 3. Streaming passthrough
                 if is_stream:
+                    # Streaming passthrough
                     res = web.StreamResponse(
                         status=model_response.status,
                     )
-                    # propagate a subset of headers if you want
                     if content_type:
                         res.content_type = content_type
 
@@ -272,21 +268,19 @@ class EndpointHandlerFactory:
 
                     await res.write_eof()
                     return res
+                else:
+                    # Non-streaming
+                    body = await model_response.read()
 
-                # 4. Non-streaming (buffered) passthrough
-                body = await model_response.read()
+                    headers = model_response.headers.copy()
+                    headers.pop("Content-Type", None)
 
-
-                # Make a mutable copy of the headers
-                headers = model_response.headers.copy()
-                headers.pop("Content-Type", None)  # avoid conflict
-
-                return web.Response(
-                    body=body,
-                    status=model_response.status,
-                    content_type=content_type or None,
-                    headers=headers,
-                )
+                    return web.Response(
+                        body=body,
+                        status=model_response.status,
+                        content_type=content_type or None,
+                        headers=headers,
+                    )
         
         return GenericEndpointHandler()
     
@@ -301,9 +295,8 @@ class EndpointHandlerFactory:
     def get_benchmark_handler(self) -> Optional[EndpointHandler]:
         """
         Get the benchmark handler. 
-        If benchmark_route is specified in config, use that handler.
-        Otherwise, return the first available handler.
-        Returns None if no handlers exist.
+        Raises errors if there are too many / too little BenchmarkConfigs
+        Should be exactly one EndpointHandler with a BenchmarkConfig
         """
         if not self._handlers:
             return None
