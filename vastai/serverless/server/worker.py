@@ -10,7 +10,7 @@ from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type
 
 # Callable types
 RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
-ClientResponseHandler = Callable[[web.Request, ClientResponse], Awaitable[Union[web.Response, web.StreamResponse]]]
+ClientResponseGenerator = Callable[[web.Request, ClientResponse], Awaitable[Union[web.Response, web.StreamResponse]]]
 WorkloadCalculator = Callable[[Dict[str, Any]], float]
 
 @dataclass
@@ -46,8 +46,8 @@ class HandlerConfig:
     benchmark_config: Optional[BenchmarkConfig] = None
     handler_class: Optional[Type[EndpointHandler]] = None
     payload_class: Optional[Type[ApiPayload]] = None
-    on_request: Optional[RequestPayloadParser] = None
-    on_response: Optional[ClientResponseHandler] = None
+    request_parser: Optional[RequestPayloadParser] = None
+    response_generator: Optional[ClientResponseGenerator] = None
     workload_calculator: Optional[WorkloadCalculator] = None
 
 
@@ -101,8 +101,8 @@ class EndpointHandlerFactory:
         healthcheck_path = handler_config.healthcheck
         benchmark_config = handler_config.benchmark_config
         user_payload_class = handler_config.payload_class
-        user_request_parser = handler_config.on_request
-        user_response_handler = handler_config.on_response
+        user_request_parser = handler_config.request_parser
+        user_response_generator = handler_config.response_generator
         user_workload_calculator = handler_config.workload_calculator
         
         # If user provided a custom payload class, use it
@@ -233,12 +233,13 @@ class EndpointHandlerFactory:
                 model_response: ClientResponse,
             ) -> Union[web.Response, web.StreamResponse]:
                 # User implemented override
-                if user_response_handler:
+                if user_response_generator:
                     try:
-                        return await user_response_handler(client_request, model_response)
+                        return await user_response_generator(client_request, model_response)
                     except Exception as e:
-                        raise Exception(f"Error in user response handler: {e}")
+                        raise Exception(f"Error in user response generator: {e}")
 
+                # Reasonable default: return response, handle streaming if present
                 # Detect streaming
                 content_type = model_response.content_type or ""
                 is_stream = (
