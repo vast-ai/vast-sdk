@@ -24,21 +24,18 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
         else:
             ssl_context = None
 
-        async def main():
-            log.debug("starting server...")
-            app = web.Application()
-            app.add_routes(routes)
-            runner = web.AppRunner(app)
-            await runner.setup()
-            site = web.TCPSite(
-                runner,
-                ssl_context=ssl_context,
-                port=int(os.environ["WORKER_PORT"]),
-                **kwargs
-            )
-            await gather(site.start(), backend._start_tracking())
-
-        run(main())
+        log.debug("starting server...")
+        app = web.Application()
+        app.add_routes(routes)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(
+            runner,
+            ssl_context=ssl_context,
+            port=int(os.environ["WORKER_PORT"]),
+            **kwargs
+        )
+        await gather(site.start(), backend._start_tracking())
 
     except Exception as e:
         err_msg = f"PyWorker failed to launch: {e}"
@@ -56,7 +53,7 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
             finally:
                 await metrics.aclose()
 
-        run(beacon())
+        await beacon()
 
 
 
