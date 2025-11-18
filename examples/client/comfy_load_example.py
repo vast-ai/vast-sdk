@@ -5,7 +5,7 @@ import random
 COST_PER_REQUEST = 100
 
 async def main():
-    async with Serverless(instance="local") as client:
+    async with Serverless() as client:
         endpoint = await client.get_endpoint(name="my-comfy-endpoint")
 
         payload = {
@@ -23,13 +23,13 @@ async def main():
         
         responses = []
 
-        CUR_LOAD = 500
+        CUR_LOAD = 300
         while True:
             # Create a ServerlessRequest object to attach callbacks before submitting the request
             req = ServerlessRequest()
             # Attach a callback to run when the machine finished work on the request
             def work_finished_callback(response):
-                print(f"{len(responses)} in flight")    
+                print(f"{len([x for x in responses if x.status != "Complete"])} in flight")    
             req.then(work_finished_callback)
             responses.append(endpoint.request(route="/generate/sync", payload=payload, serverless_request=req, cost=COST_PER_REQUEST))
             await asyncio.sleep(COST_PER_REQUEST / CUR_LOAD)
