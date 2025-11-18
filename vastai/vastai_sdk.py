@@ -17,7 +17,7 @@ from .vast import parser, APIKEY_FILE
 from . import vast as _vast
 from textwrap import dedent
 
-logging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
+#ogging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
 logger = logging.getLogger()
 
 

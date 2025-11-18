@@ -5,3 +5,7 @@ env/
 *egg*
 .venv
 poetry.lock
+local
+Dockerfile
+docker-compose.yml
+.dockerignore
