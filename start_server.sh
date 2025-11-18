@@ -169,4 +169,5 @@ fi
 cd "$SERVER_DIR"
 echo "launching PyWorker server"
 
-python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
+(python3 -m "workers.$BACKEND.server" |& tee -a "$PYWORKER_LOG") &
+echo "launching PyWorker server done"
