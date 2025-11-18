@@ -98,7 +98,7 @@ class EndpointHandlerFactory:
         
         # Extract config values with defaults
         route_path = handler_config.route
-        healthcheck_path = handler_config.healthcheck or self.config.model_healthcheck_url
+        healthcheck_path = handler_config.healthcheck
         benchmark_config = handler_config.benchmark_config
         user_payload_class = handler_config.payload_class
         user_request_parser = handler_config.on_request
