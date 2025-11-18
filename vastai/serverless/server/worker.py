@@ -355,8 +355,8 @@ class Worker:
             )
         
     async def run(self, **kwargs):
-        await server.start_server_async(self.backend, self.routes, **kwargs)
+        await server.start_server(self.backend, self.routes, **kwargs)
 
-    def run_sync(self, **kwargs):
-        server.start_server(self.backend, self.routes, **kwargs)
+    def run_async(self, **kwargs):
+        server.start_server_async(self.backend, self.routes, **kwargs)
 
