@@ -5,7 +5,7 @@ MAX_TOKENS = 128
 
 async def main():
     async with Serverless() as client:
-        endpoint = await client.get_endpoint(name="my-endpoint")
+        endpoint = await client.get_endpoint(name="my-vllm-endpoint")
 
         payload = {
             "input" : {

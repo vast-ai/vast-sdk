@@ -72,10 +72,10 @@ server_url_default = "https://console.vast.ai"
 #server_url_default = "http://localhost:5002"
 #server_url_default  = "https://vast.ai/api/v0"
 
-logging.basicConfig(
-    level=os.getenv("LOGLEVEL") or logging.WARN,
-    format="%(levelname)s - %(message)s"
-)
+#logging.basicConfig(
+#    level=os.getenv("LOGLEVEL") or logging.WARN,
+#    format="%(levelname)s - %(message)s"
+#)
 
 def parse_version(version: str) -> tuple[int, ...]:
     parts = version.split(".")
