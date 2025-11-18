@@ -38,6 +38,7 @@ benchmark_prompts = [
     "Pope Francis DJ in leather jacket, mixing on giant console; dramatic.",
 ]
 
+
 def parse_request(json_msg):
     return {"input" : json_msg}
 

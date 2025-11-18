@@ -28,6 +28,7 @@ MODEL_INFO_LOG_MSGS = [
 nltk.download("words")
 WORD_LIST = nltk.corpus.words.words()
 
+
 def completions_benchmark_generator() -> dict:
     prompt = " ".join(random.choices(WORD_LIST, k=int(250)))
     model = os.environ.get("MODEL_NAME")
@@ -51,7 +52,7 @@ worker_config = WorkerConfig(
     handlers=[
         HandlerConfig(
             route="/v1/completions",
-            workload_calculator= lambda data: data.get("max_tokens", 100),
+            workload_calculator= lambda data: data.get("max_tokens", 0),
             allow_parallel_requests=True,
             max_queue_time=60.0,
             benchmark_config=BenchmarkConfig(
@@ -61,7 +62,7 @@ worker_config = WorkerConfig(
         ),
         HandlerConfig(
             route="/v1/chat/completions",
-            workload_calculator= lambda data: data.get("max_tokens", 100),
+            workload_calculator= lambda data: data.get("max_tokens", 0),
             allow_parallel_requests=True,
             max_queue_time=60.0,
         )

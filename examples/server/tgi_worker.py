@@ -1,13 +1,12 @@
 import nltk
 import random
-import os
 
 from vastai import Worker, WorkerConfig, HandlerConfig, LogActionConfig, BenchmarkConfig
 
-# TGI  model configuration
+# TGI model configuration
 MODEL_SERVER_URL           = 'http://0.0.0.0'
 MODEL_SERVER_PORT          = 5001
-MODEL_LOG_FILE             = '/var/log/portal/comfyui.log'
+MODEL_LOG_FILE             = "/workspace/infer.log"
 MODEL_HEALTHCHECK_ENDPOINT = "/health"
 
 # TGI-specific log messages
@@ -32,19 +31,20 @@ WORD_LIST = nltk.corpus.words.words()
 
 def benchmark_generator() -> dict:
     prompt = " ".join(random.choices(WORD_LIST, k=int(250)))
-    model = os.environ.get("MODEL_NAME")
-    if not model:
-        raise ValueError("MODEL_NAME environment variable not set")
 
     benchmark_data = {
-        "model": model,
-        "prompt": prompt,
-        "temperature": 0.7,
-        "max_tokens": 500,
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 128,
+            "temperature": 0.7,
+            "return_full_text": False
+        }
     }
 
     return benchmark_data
 
+def parse_request(json_msg):
+    return {"input" : json_msg}
 
 worker_config = WorkerConfig(
     model_server_url=MODEL_SERVER_URL,
@@ -56,10 +56,19 @@ worker_config = WorkerConfig(
             route="/generate",
             allow_parallel_requests=True,
             max_queue_time=60.0,
+            request_parser=parse_request,
             benchmark_config=BenchmarkConfig(
                 generator=benchmark_generator,
                 concurrency=50
-            )
+            ),
+            workload_calculator= lambda x: x["parameters"]["max_new_tokens"]
+        ),
+        HandlerConfig(
+            route="/generate_stream",
+            allow_parallel_requests=True,
+            max_queue_time=60.0,
+            request_parser=parse_request,
+            workload_calculator= lambda x: x["parameters"]["max_new_tokens"]
         )
     ],
     log_action_config=LogActionConfig(
