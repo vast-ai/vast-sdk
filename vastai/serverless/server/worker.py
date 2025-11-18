@@ -354,9 +354,9 @@ class Worker:
                 web.post(route_path, self.backend.create_handler(handler))
             )
         
-    async def run(self, **kwargs):
+    async def run_async(self, **kwargs):
         await server.start_server(self.backend, self.routes, **kwargs)
 
-    def run_async(self, **kwargs):
+    def run(self, **kwargs):
         server.start_server_async(self.backend, self.routes, **kwargs)
 
