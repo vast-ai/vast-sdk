@@ -138,7 +138,7 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
         pass
     
     @abstractmethod
-    async def call_remote_function(params: dict):
+    async def call_remote_dispatch(params: dict):
         """
         define a remote dispatch function for this endpoint, return the result
         """

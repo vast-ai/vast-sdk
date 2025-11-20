@@ -212,6 +212,16 @@ class EndpointHandlerFactory:
                     else 10
                 )
             )
+            is_remote_dispatch: bool = field(
+                default=handler_config.is_remote_dispatch
+            )
+            remote_dispatch_func: Callable[..., Awaitable[Any]] = field(
+                default=(
+                    handler_config.remote_dispatch_func
+                    if handler_config.is_remote_dispatch and handler_config.remote_dispatch_func is not None
+                    else None
+                )
+            )
             @property
             def endpoint(self) -> str:
                 """The endpoint is the same as the route"""
@@ -229,6 +239,16 @@ class EndpointHandlerFactory:
                 """Just call the payload class's for_test() method"""
                 return PayloadClass.for_test()
             
+            async def call_remote_dispatch(params: dict):
+                """
+                define a remote dispatch function for this endpoint, return the result
+                """
+                try:
+                    if self.remote_dispatch_func is not None:
+                        return await self.remote_dispatch_func(params)
+                except Exception as ex:
+                    raise f"Error calling remote dispatch function: {ex}"
+                
             async def generate_client_response(
                 self,
                 client_request: web.Request,

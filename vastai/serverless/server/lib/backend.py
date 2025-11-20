@@ -93,6 +93,8 @@ class Backend:
 
     @cached_property
     def session(self):
+        if not self.model_server_url:
+            raise ValueError("Attempting to create Session with non-existent model server url. Please specify a model server URL and Port")
         log.debug(f"starting session with {self.model_server_url}")
         connector = TCPConnector(
             force_close=True, # Required for long running jobs
@@ -168,10 +170,8 @@ class Backend:
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
-                if handler.is_remote_dispatch:
-                    response = await self.__call_remote_func(handler=handler, payload=payload)
-                else:
-                    response = await self.__call_api(handler=handler, payload=payload)
+                response = await self.__call_backend(handler=handler, payload=payload)
+             
                 status_code = response.status
                 log.debug(
                     " ".join(
@@ -328,6 +328,13 @@ class Backend:
     def backend_errored(self, msg: str) -> None:
         self.metrics._model_errored(msg)
 
+    async def __call_backend(self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
+    ) -> ClientResponse:
+        if handler.is_remote_dispatch:
+            return await self.__call_remote_dispatch(handler=handler, payload=payload)
+        else:
+            return await self.__call_api(handler=handler, payload=payload)
+
     async def __call_api(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
@@ -335,13 +342,13 @@ class Backend:
         log.debug(f"posting to endpoint: '{handler.endpoint}', payload: {api_payload}")
         return await self.session.post(url=handler.endpoint, json=api_payload)
 
-    async def __call_remote_func(
+    async def __call_remote_dispatch(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
         json_payload = payload.generate_payload_json()
-        remote_func_params = payload.get("params")
+        remote_func_params = json_payload.get("params")
         log.debug("Calling remote dispatch function on {handler.route} with params {remote_func_params}")
-        return await handler.call_remote_function(params=remote_func_params)
+        return await handler.call_remote_dispatch(params=remote_func_params)
 
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
@@ -401,7 +408,7 @@ class Backend:
 
             log.debug("Initial run to trigger model loading...")
             payload = self.benchmark_handler.make_benchmark_payload()
-            await self.__call_api(handler=self.benchmark_handler, payload=payload)
+            await self.__call_backend(handler=self.benchmark_handler, payload=payload)
 
             max_throughput = 0
             sum_throughput = 0
@@ -413,7 +420,7 @@ class Backend:
                 for i in range(concurrent_requests):
                     payload = self.benchmark_handler.make_benchmark_payload()
                     workload = payload.count_workload()
-                    task = self.__call_api(handler=self.benchmark_handler, payload=payload)
+                    task = self.__call_backend(handler=self.benchmark_handler, payload=payload)
                     benchmark_requests.append(
                         BenchmarkResult(request_idx=i, workload=workload, task=task)
                     )
