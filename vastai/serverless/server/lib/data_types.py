@@ -102,6 +102,8 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     benchmark_runs: int = 8
     allow_parallel_requests: bool = False
     max_queue_time: float = 30.0
+    is_remote_dispatch: bool = False
+    remote_dispatch_func: Callable = None
 
     @property
     @abstractmethod
@@ -132,6 +134,13 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     ) -> Union[web.Response, web.StreamResponse]:
         """
         defines how to convert a model API response to a response to PyWorker client
+        """
+        pass
+    
+    @abstractmethod
+    async def call_remote_function(params: dict):
+        """
+        define a remote dispatch function for this endpoint, return the result
         """
         pass
 

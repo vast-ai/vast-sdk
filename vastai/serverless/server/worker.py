@@ -49,6 +49,8 @@ class HandlerConfig:
     request_parser: Optional[RequestPayloadParser] = None
     response_generator: Optional[ClientResponseGenerator] = None
     workload_calculator: Optional[WorkloadCalculator] = None
+    is_remote_dispatch: bool = False
+    remote_dispatch_function: Optional[Callable] = None
 
 
 @dataclass

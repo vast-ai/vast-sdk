@@ -168,7 +168,10 @@ class Backend:
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
-                response = await self.__call_api(handler=handler, payload=payload)
+                if handler.is_remote_dispatch:
+                    response = await self.__call_remote_func(handler=handler, payload=payload)
+                else:
+                    response = await self.__call_api(handler=handler, payload=payload)
                 status_code = response.status
                 log.debug(
                     " ".join(
@@ -331,6 +334,14 @@ class Backend:
         api_payload = payload.generate_payload_json()
         log.debug(f"posting to endpoint: '{handler.endpoint}', payload: {api_payload}")
         return await self.session.post(url=handler.endpoint, json=api_payload)
+
+    async def __call_remote_func(
+        self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
+    ) -> ClientResponse:
+        json_payload = payload.generate_payload_json()
+        remote_func_params = payload.get("params")
+        log.debug("Calling remote dispatch function on {handler.route} with params {remote_func_params}")
+        return await handler.call_remote_function(params=remote_func_params)
 
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
