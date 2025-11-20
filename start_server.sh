@@ -62,12 +62,6 @@ setup_env() {
         [[ -f ~/.local/bin/env ]] && source ~/.local/bin/env
     fi
 
-    # Fork testing
-    [[ ! -d "$SERVER_DIR" ]] && git clone "${PYWORKER_REPO:-https://github.com/vast-ai/pyworker}" "$SERVER_DIR"
-    if [[ -n ${PYWORKER_REF:-} ]]; then
-        (cd "$SERVER_DIR" && git checkout "$PYWORKER_REF")
-    fi
-
     # (Re)create venv
     uv venv --python-preference only-managed "$ENV_PATH" -p 3.10
 
@@ -114,7 +108,7 @@ fi
 
 if [ "${WORKER_SDK:-false}" = true ]; then
     echo "Using Vast.ai SDK"
-    uv pip install git+https://github.com/vast-ai/vast-sdk.git@server-side-sdk
+    uv pip install git+https://github.com/vast-ai/vast-sdk.git@vast-serve
 fi
 
 
@@ -168,6 +162,7 @@ fi
 
 cd "$SERVER_DIR"
 echo "launching PyWorker server"
+WORKER_PATH = "/worker.py"
 
 (python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG") &
 echo "launching PyWorker server done"

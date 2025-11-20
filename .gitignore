@@ -9,3 +9,4 @@ local
 Dockerfile
 docker-compose.yml
 .dockerignore
+worker.py
