@@ -167,8 +167,7 @@ fi
 
 
 cd "$SERVER_DIR"
-echo "launching PyWorker server"
-WORKER_PATH = "/worker.py"
+echo "launching PyWorker server at $WORKER_PATH"
 
-(python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG") &
-echo "launching PyWorker server done"
+python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
+

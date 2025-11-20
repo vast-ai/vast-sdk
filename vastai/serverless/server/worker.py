@@ -215,10 +215,10 @@ class EndpointHandlerFactory:
             is_remote_dispatch: bool = field(
                 default=handler_config.is_remote_dispatch
             )
-            remote_dispatch_func: Callable[..., Awaitable[Any]] = field(
+            remote_dispatch_function: Callable[..., Awaitable[Any]] = field(
                 default=(
-                    handler_config.remote_dispatch_func
-                    if handler_config.is_remote_dispatch and handler_config.remote_dispatch_func is not None
+                    handler_config.remote_dispatch_function
+                    if handler_config.is_remote_dispatch and handler_config.remote_dispatch_function is not None
                     else None
                 )
             )
@@ -239,13 +239,13 @@ class EndpointHandlerFactory:
                 """Just call the payload class's for_test() method"""
                 return PayloadClass.for_test()
             
-            async def call_remote_dispatch(params: dict):
+            async def call_remote_dispatch_function(params: dict):
                 """
                 define a remote dispatch function for this endpoint, return the result
                 """
                 try:
-                    if self.remote_dispatch_func is not None:
-                        return await self.remote_dispatch_func(params)
+                    if self.remote_dispatch_function is not None:
+                        return await self.remote_dispatch_function(params)
                 except Exception as ex:
                     raise f"Error calling remote dispatch function: {ex}"
                 

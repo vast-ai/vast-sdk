@@ -348,7 +348,7 @@ class Backend:
         json_payload = payload.generate_payload_json()
         remote_func_params = json_payload.get("params")
         log.debug("Calling remote dispatch function on {handler.route} with params {remote_func_params}")
-        return await handler.call_remote_dispatch(params=remote_func_params)
+        return await handler.call_remote_dispatch_function(params=remote_func_params)
 
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
