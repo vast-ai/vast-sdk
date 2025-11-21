@@ -6,21 +6,16 @@ import base64
 def download_base64(data_b64: str, output_path: str = "generated_image.png"):
     with open(output_path, "wb") as f:
         f.write(base64.b64decode(data_b64))
-    print(f"\nSaved image as: {output_path}")
 
 
 async def worker(name: str, sem: asyncio.Semaphore):
     while True:
         async with sem:
-            result = await comfy_endpoint.generate_image(
+            image_b64 = await comfy_endpoint.generate_image(
                 "Trippy, psychedlic visuals, with swirls, eyeballs, spirits, figures. Reminsicent of Google DeepDream"
             )
-            image_b64 = result.get("image_base64") or result.get("result")
-            if not image_b64:
-                print(f"[{name}] No base64 image found in result:", result)
-            else:
-                download_base64(image_b64, f"generated_image.png")
-        await asyncio.sleep(0.2)
+            download_base64(image_b64, f"generated_image.png")
+        await asyncio.sleep(0.5)
 
 
 async def main():
