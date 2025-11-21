@@ -10,7 +10,7 @@ class Template:
         self,
         api_key: str,
         image_name: str,
-        env_vars: str,
+        env_vars: dict,
         disk_space: int,
         template_name: Optional[str] = None,
         onstart_cmd: str = "",
@@ -33,10 +33,11 @@ class Template:
                 "runtype": "ssh",
             }
             headers = {"Authorization": f"Bearer {self.api_key}"}
-            env_vars = self.env_vars if self.env_vars else ""
-            env_vars = "-p 3000:3000 " + env_vars
+            env_vars_string = "-p 3000:3000"
+            for name, val in self.env_vars.items():
+                env_vars_string += f" -e {name}={val}"
 
-            request_body["env"] = env_vars
+            request_body["env"] = env_vars_string
 
             response = requests.post(
                 url=f"{self.WEBSERVER_URL}/api/v0/template/",

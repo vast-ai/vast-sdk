@@ -49,8 +49,17 @@ async def llm_infer(body: dict):
 
 endpoint = Endpoint(
     name="qwendpoint",
+    image_name="vastai/vllm:@vastai-automatic-tag",
+    env_vars={
+        "MODEL_NAME" : "Qwen/Qwen3-8B",
+        "VLLM_ARGS" : "--max-model-len 35840 --gpu-memory-utilization 0.80 --reasoning-parser deepseek_r1 --download-dir /workspace/models --host 127.0.0.1 --port 18000 --enable-auto-tool-choice --tool-call-parser hermes",
+        "RAY_ARGS" : "--head",
+        "USE_ALL_GPUS" : "true",
+        "HF_TOKEN": "${HF_TOKEN:-1}"
+    },
     model_backend_load_logs=["Application startup complete."],
     model_log_file="/var/log/portal/vllm.log"
 )
+endpoint.on_start("entrypoint.sh &")
 
 endpoint.ready()

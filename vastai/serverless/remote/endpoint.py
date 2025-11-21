@@ -202,6 +202,9 @@ class Endpoint:
     def on_start(self, cmd: str):
         self.__onstart_cmd += f"{cmd}\n"
 
+    def env_vars(self, vars: dict[str, str]):
+        self.env_vars.update(vars)
+
     def __upload_deploy_script(self):
         vast_upload_url = os.environ["VAST_UPLOAD_URL"]
         vast_upload_auth_token = os.environ["VAST_UPLOAD_AUTH_TOKEN"]
