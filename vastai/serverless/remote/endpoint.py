@@ -141,7 +141,13 @@ def benchmark(
     if dataset is not None and not isinstance(dataset, list):
         raise TypeError("dataset must be a list of dicts")
 
+
     def decorator(func):
+        func_mod = func.__globals__['__name__']
+        if dataset is not None:
+            dataset = [{k: serialize(v, func_mod) for k,v in datum.items()} for datum in dataset]
+        if generator is not None:
+            generator = (lambda: {k:serialize(v,func_mod) for k,v in generator().items()})
         func_name = func.__name__
 
         BENCHMARK_CONFIG_BY_ENDPOINT_NAME[endpoint_name] = {
