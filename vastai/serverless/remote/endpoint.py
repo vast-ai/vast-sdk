@@ -292,27 +292,29 @@ wget -O worker.py {worker_script_download_url} && curl -L https://raw.githubuser
             # Build the worker handling our remote dispatch functions
             remote_worker = Worker(remote_worker_config)
 
-            # Call on_init if present
-            if self.on_init_function is not None:
-                try:
-                    self.on_init_function()
-                except Exception as ex:
-                    raise Exception(f"Error in on_init function: {ex}")
+            async def main():
+                # Call on_init if present
+                if self.on_init_function is not None:
+                    try:
+                        self.on_init_function()
+                    except Exception as ex:
+                        raise Exception(f"Error in on_init function: {ex}")
 
-            worker_task = asyncio.create_task(remote_worker.run_async())
+                # Write initial log
+                model_log = Path(self.model_log_file)
 
-            model_log = Path(self.model_log_file)
-            async def model_load_task():
-                # Create parent directories if they don't exist
                 await model_log.parent.mkdir(parents=True, exist_ok=True)
                 await model_log.write_text("Remote Dispatch ready")
-            asyncio.run(model_load_task)
+                
+                if self.background_task:
+                    await asyncio.gather(
+                        remote_worker.run_async(),
+                        self.background_task(),
+                    )
+                else:
+                    await remote_worker.run_async()
 
-            # Enter the background task if present
-            if self.background_task:
-                asyncio.gather(worker_task, self.background_task())
-            else:
-                asyncio.run(worker_task)
+            asyncio.run(main())
         elif mode == "client":
             # Nothing to do here
             pass
