@@ -41,8 +41,8 @@ def serialize(obj,name:str):
 def deserialize(json,name:str):
     if type(json) in [int,str,float]:
         return json
-    elif json['type'] in [list,tuple]:
-        return getattr(__builtins__, json['type'])(deserialize(child,name) for child in json['contents'])
+    elif json['type'] in ['list','tuple']:
+        return __builtins__[json['type']](deserialize(child,name) for child in json['contents'])
     elif json['type'] == 'dict':
         return dict((deserialize(k,name), deserialize(v,name)) for k,v in json['contents'])
     elif json['type'] == 'obj':
