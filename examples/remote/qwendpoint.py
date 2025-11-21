@@ -47,6 +47,38 @@ async def llm_infer(body: dict):
 
     return resp.json() 
 
+@remote(endpoint_name="qwendpoint")
+async def llm_chat(prompt: str, max_tokens: int = 1024):
+    MODEL_SERVER_URL  = "http://127.0.0.1:18000/v1/chat/completions"
+    system_prompt = (
+        "You are Qwen.\n"
+        "You are to only speak in English.\n"
+    )
+
+    user_prompt = prompt
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    payload = {
+        "model": "Qwen/Qwen3-8B",
+        "messages": messages,
+        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": 0.7,
+    }
+
+    try:
+        resp = requests.post(MODEL_SERVER_URL, json=payload, timeout=60)
+        resp.raise_for_status()
+    except Exception as e:
+        return {"error": str(e)}
+
+    return resp.json() 
+
+
 endpoint = Endpoint(
     name="qwendpoint",
     image_name="vastai/vllm:@vastai-automatic-tag",
