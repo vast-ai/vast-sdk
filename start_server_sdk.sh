@@ -90,6 +90,6 @@ echo "launching PyWorker server at $WORKER_PATH"
 pip install git+https://github.com/vast-ai/vast-sdk.git@remote
 
 #TODO: check if torch is installed here
-python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
+vast serve "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
 
 

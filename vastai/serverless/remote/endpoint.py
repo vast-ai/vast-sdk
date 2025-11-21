@@ -218,7 +218,7 @@ class Endpoint:
         self.apt_get("wget")
         self.__onstart_cmd += f"""
 mkdir -p /workspace
-wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | VAST_REMOTE_DISPATCH_MODE=serve bash
+wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | bash
         """
 
     def ready(self):
