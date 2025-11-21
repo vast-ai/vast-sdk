@@ -248,13 +248,7 @@ class EndpointHandlerFactory:
                     raise RuntimeError(f"remote_dispatch_function is not configured for route {self._route}")
 
                 try:
-                    result = self.remote_dispatch_function(**params)
-
-                    if inspect.isawaitable(result):
-                        return await result
-                    
-                    return result
-
+                    return await self.remote_dispatch_function(**params)
                 except Exception as ex:
                     raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
                 

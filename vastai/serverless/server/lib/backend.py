@@ -6,7 +6,7 @@ import subprocess
 import dataclasses
 import logging
 from asyncio import wait, sleep, gather, Semaphore, FIRST_COMPLETED, create_task
-from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional
+from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any
 from functools import cached_property
 from distutils.util import strtobool
 from collections import deque
@@ -181,12 +181,7 @@ class Backend:
                         ]
                     )
                 )
-                if handler.is_remote_dispatch:
-                    res = response  # type: ignore[assignment]
-                else:
-                    # Normal path: response is aiohttp.ClientResponse from HTTP client
-                    res = await handler.generate_client_response(request, response)
-
+                res = await handler.generate_client_response(request, response)
                 self.metrics._request_success(request_metrics)
                 return res
             except asyncio.CancelledError:
@@ -349,18 +344,28 @@ class Backend:
 
     async def __call_remote_dispatch(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
-    ) -> web.Response:
+    ) -> ClientResponse:
         remote_func_params = payload.generate_payload_json()
         log.debug(
             f"Calling remote dispatch function on {handler.endpoint} "
             f"with params {remote_func_params}"
         )
 
-        # Call the remote dispatch function (sync or async already handled inside)
         result = await handler.call_remote_dispatch_function(params=remote_func_params)
 
-        # Wrap the Python result in a JSON HTTP response for the client
-        return web.json_response({"result": result})
+        # Wrap the result in a fake ClientResponse-like object
+        class RemoteDispatchClientResponse:
+            def __init__(self, data: Any, status: int = 200):
+                self._body = json.dumps({"result": data}).encode("utf-8")
+                self.status = status
+                self.content_type = "application/json"
+                self.headers = {"Content-Type": self.content_type}
+
+            async def read(self) -> bytes:
+                return self._body
+
+        # Type ignore is only for static type checkers; at runtime duck-typing is fine
+        return RemoteDispatchClientResponse(result) 
     
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
