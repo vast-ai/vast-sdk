@@ -37,16 +37,14 @@ async def generate_image(prompt: str):
     MODEL_SERVER_URL  = "http://127.0.0.1:18288/generate/sync"
 
     payload = {
-        "input" : {
-            "input": {
-                "modifier": "Text2Image",
-                "modifications": {
-                    "prompt": prompt,
-                    "width": 512,
-                    "height": 512,
-                    "steps": 10,
-                    "seed": random.randint(1, 1000)
-                }
+        "input": {
+            "modifier": "Text2Image",
+            "modifications": {
+                "prompt": prompt,
+                "width": 512,
+                "height": 512,
+                "steps": 10,
+                "seed": random.randint(1, 1000)
             }
         }
     }
@@ -58,7 +56,6 @@ async def generate_image(prompt: str):
         resp = requests.post(MODEL_SERVER_URL, json=payload, timeout=60)
         resp.raise_for_status()
         body = resp.json()
-
         # Extract the local path to the generated image
         local_path = body["output"][0]["local_path"]
         # Read file and base64-encode it
@@ -78,6 +75,7 @@ endpoint = Endpoint(
         "SERVERLESS" : "true",
         "COMFYUI_VERSION" : "latest",
         "VLLM_MODEL" : "Qwen/Qwen3-8B",
+        "BACKEND" : "comfyui-json",
         "COMFYUI_ARGS" : "\"--disable-auto-launch --port 18188 --disable-xformers\"",
         "BENCHMARK_TEST_WIDTH" : "512",
         "BENCHMARK_TEST_HEIGHT" : "512",
@@ -85,7 +83,7 @@ endpoint = Endpoint(
         "PROVISIONING_SCRIPT" : "https://raw.githubusercontent.com/vast-ai/base-image/refs/heads/main/derivatives/pytorch/derivatives/comfyui/provisioning_scripts/serverless/starter-template.sh",
         "HF_TOKEN": "${HF_TOKEN:-1}",
         "MODEL_LOG" : "/var/log/portal/comfyui.log",
-        "COMFYUI_API_BASE" : "http://127.0.0.1:18000",
+        "COMFYUI_API_BASE" : "http://localhost:18188",
         "MODEL_HEALTH_ENDPOINT" : "${MODEL_SERVER_URL}/health"
     },
     model_backend_load_logs=["To see the GUI go to: http://127.0.0.1:18188"],

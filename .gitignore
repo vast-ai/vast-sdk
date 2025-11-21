@@ -11,3 +11,4 @@ docker-compose.yml
 .dockerignore
 worker.py
 venv/
+*.png

@@ -56,14 +56,10 @@ def remote(endpoint_name: str):
                     "input": dict(bound_args.arguments)
                 }
 
-                print("payload:", payload)
-
                 # Make the remote request
                 async with Serverless() as client:
                     endpoint = await client.get_endpoint(name=endpoint_name)
-                    print("endpoint:", endpoint)
                     response = await endpoint.request(f"/remote/{func_name}", payload)
-                    print("response:", response)
                     return response["response"]
 
             return async_wrapper

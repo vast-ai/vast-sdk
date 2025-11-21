@@ -44,6 +44,7 @@ class WorkerGroup:
                 json=request_body,
                 headers=headers,
             )
+            print(response.text)
 
             return response.json()["id"]
         except Exception as ex:
