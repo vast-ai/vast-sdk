@@ -34,9 +34,9 @@ class Template:
             }
             headers = {"Authorization": f"Bearer {self.api_key}"}
             env_vars = self.env_vars if self.env_vars else ""
-            env_vars += " -p 3000:3000"
+            env_vars = "-p 3000:3000 " + env_vars
 
-            request_body["env"] = self.env_vars
+            request_body["env"] = env_vars
 
             response = requests.post(
                 url=f"{self.WEBSERVER_URL}/api/v0/template/",
