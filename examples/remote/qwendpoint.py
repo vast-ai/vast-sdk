@@ -96,6 +96,7 @@ endpoint = Endpoint(
         "MODEL_HEALTH_ENDPOINT" : "${MODEL_SERVER_URL}/health"
     },
     model_backend_load_logs=["Application startup complete."],
+    model_backend_error_logs=["INFO exited: vllm", "RuntimeError: Engine"],
     model_log_file="/var/log/portal/vllm.log"
 )
 endpoint.on_start("entrypoint.sh &")

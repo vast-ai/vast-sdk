@@ -87,6 +87,7 @@ endpoint = Endpoint(
         "MODEL_HEALTH_ENDPOINT" : "${MODEL_SERVER_URL}/health"
     },
     model_backend_load_logs=["To see the GUI go to: http://127.0.0.1:18188"],
+    model_backend_error_logs= ["MetadataIncompleteBuffer", "Value not in list: ", "[ERROR] Provisioning Script failed"],
     model_log_file="/var/log/portal/comfyui.log"
 )
 endpoint.on_start("entrypoint.sh &")
