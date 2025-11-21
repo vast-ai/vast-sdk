@@ -1,3 +1,4 @@
+import base64
 from typing import Any
 from importlib import import_module
 
@@ -20,6 +21,11 @@ def derelativize_module(mod,name:str):
 def serialize(obj,name:str):
     if type(obj) in [int,str,float]:
         return obj
+    elif type(obj) == bytes:
+        return {
+            "type" : "bytes",
+            "contents": base64.b64encode(obj).decode("utf-8")
+        }
     elif type(obj) in [list,tuple]:
         return {
             "type" : type(obj).__name__,
@@ -41,6 +47,8 @@ def serialize(obj,name:str):
 def deserialize(json,name:str,globals):
     if type(json) in [int,str,float]:
         return json
+    elif json['type'] == 'bytes':
+        return base64.b64decode(json['contents'])
     elif json['type'] in ['list','tuple']:
         return __builtins__[json['type']](deserialize(child,name,globals) for child in json['contents'])
     elif json['type'] == 'dict':
