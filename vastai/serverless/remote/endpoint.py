@@ -8,8 +8,6 @@ import aiofiles
 import sys
 import time
 
-from vastai.serverless.remote.serialization import serialize,deserialize
-
 from typing import Optional
 from anyio import Path
 from vastai.serverless.remote.endpoint_group import EndpointGroup
@@ -44,7 +42,6 @@ def remote(endpoint_name: str):
     """
     def decorator(func):
         func_name = func.__name__
-        func_mod = func.__globals__['__name__']
         sig = inspect.signature(func)
         if get_mode() == "client":
             @functools.wraps(func)
@@ -57,10 +54,7 @@ def remote(endpoint_name: str):
 
                 # Construct the payload in the format expected by the endpoint
                 payload = {
-                    "input": {
-                        k : serialize(v,func_mod) for k,v in bound_args.arguments.items()
-                    }
-                    # dict(bound_args.arguments)
+                    "input": dict(bound_args.arguments)
                 }
 
                 # Make the remote request
@@ -70,7 +64,7 @@ def remote(endpoint_name: str):
                     response = await endpoint.request(f"/remote/{func_name}", payload)
                     time_elapsed = time.time() - snapshot_time
                     print(f"Time elapsed: {time_elapsed} seconds")
-                    return deserialize(response["response"],func_mod)
+                    return response["response"]
 
             return async_wrapper
         elif get_mode() == "serve":
@@ -81,14 +75,9 @@ def remote(endpoint_name: str):
             )
             funcs_for_endpoint[func_name] = func
 
-            async def inner(*args,**kwargs):
-                args_ = [deserialize(a,func_mod) for a in args]
-                kwargs_ = {k : deserialize(v,func_mod) for k,v in kwargs.items()}
-                return serialize(await func(*args_,**kwargs_),func_mod)
-
             # In serve mode, the function should just run locally when called
             # (e.g. useful for tests or local invocation), so we return it unchanged.
-            return inner
+            return func
 
         # Optional: default behavior (e.g. deploy mode) – just return the original
         return func
