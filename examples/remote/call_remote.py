@@ -5,7 +5,7 @@ MAX_TOKENS = 128
 
 async def main():
     async with Serverless() as client:
-        endpoint = await client.get_endpoint(name="dispatch_test")
+        endpoint = await client.get_endpoint(name="test_dispatch")
 
         payload = {
             "input" : {

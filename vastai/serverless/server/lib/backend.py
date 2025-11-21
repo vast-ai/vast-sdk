@@ -364,7 +364,6 @@ class Backend:
             async def read(self) -> bytes:
                 return self._body
 
-        # Type ignore is only for static type checkers; at runtime duck-typing is fine
         return RemoteDispatchClientResponse(result) 
     
     def __check_signature(self, auth_data: AuthData) -> bool:
