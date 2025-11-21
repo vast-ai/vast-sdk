@@ -54,9 +54,19 @@ class Endpoint:
     def on_start(self, cmd: str):
         self.__onstart_cmd += f"{cmd}\n"
 
+    def __install_remote_worker_script(self):
+        worker_script_download_url = os.environ["VAST_WORKER_DOWNLOAD_URL"]
+        self.apt_get("wget")
+        self.__onstart_cmd += f"""
+wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=serve python3 endpoint.py
+
+"""
+
     async def ready(self):
         if (mode := get_mode()) == "deploy":
             from vastai.serverless.remote.template import Template
+
+            self.__install_remote_worker_script()
 
             vast_api_key = os.environ.get("VAST_API_KEY")
             if not vast_api_key:
