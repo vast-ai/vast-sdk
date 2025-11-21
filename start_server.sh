@@ -22,16 +22,10 @@ function echo_var(){
     echo "$1: ${!1}"
 }
 
-[ -z "$BACKEND" ] && echo "BACKEND must be set!" && exit 1
-[ -z "$MODEL_LOG" ] && echo "MODEL_LOG must be set!" && exit 1
-[ -z "$HF_TOKEN" ] && echo "HF_TOKEN must be set!" && exit 1
-[ "$BACKEND" = "comfyui" ] && [ -z "$COMFY_MODEL" ] && echo "For comfyui backends, COMFY_MODEL must be set!" && exit 1
-
 
 echo "start_server.sh"
 date
 
-echo_var BACKEND
 echo_var REPORT_ADDR
 echo_var WORKER_PORT
 echo_var WORKSPACE_DIR
@@ -39,7 +33,6 @@ echo_var SERVER_DIR
 echo_var ENV_PATH
 echo_var DEBUG_LOG
 echo_var PYWORKER_LOG
-echo_var MODEL_LOG
 echo_var WORKER_SDK
 echo_var PYWORKER_REPO
 echo_var PYWORKER_REF
@@ -114,7 +107,7 @@ fi
 
 if [ "${WORKER_SDK:-false}" = true ]; then
     echo "Using Vast.ai SDK"
-    uv pip install git+https://github.com/vast-ai/vast-sdk.git@server-side-sdk
+    uv pip install git+https://github.com/vast-ai/vast-sdk.git@vast-serve
 fi
 
 
@@ -167,7 +160,7 @@ fi
 
 
 cd "$SERVER_DIR"
-echo "launching PyWorker server"
+echo "launching PyWorker server at $WORKER_PATH"
 
-(python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG") &
-echo "launching PyWorker server done"
+python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
+
