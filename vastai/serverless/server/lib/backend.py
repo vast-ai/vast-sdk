@@ -346,7 +346,7 @@ class Backend:
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
         remote_func_params = payload.generate_payload_json()
-        log.debug(f"Calling remote dispatch function on {handler.route} with params {remote_func_params}")
+        log.debug(f"Calling remote dispatch function on {handler.endpoint} with params {remote_func_params}")
         return await handler.call_remote_dispatch_function(params=remote_func_params)
 
     def __check_signature(self, auth_data: AuthData) -> bool:
