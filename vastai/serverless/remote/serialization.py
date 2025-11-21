@@ -38,16 +38,16 @@ def serialize(obj,name:str):
             "contents": {k : serialize(v,name)  for k,v in obj.__dict__.items()}
         }
 
-def deserialize(json,name:str):
+def deserialize(json,name:str,globals):
     if type(json) in [int,str,float]:
         return json
     elif json['type'] in ['list','tuple']:
-        return __builtins__[json['type']](deserialize(child,name) for child in json['contents'])
+        return __builtins__[json['type']](deserialize(child,name,globals) for child in json['contents'])
     elif json['type'] == 'dict':
-        return dict((deserialize(k,name), deserialize(v,name)) for k,v in json['contents'])
+        return dict((deserialize(k,name,globals), deserialize(v,name,globals)) for k,v in json['contents'])
     elif json['type'] == 'obj':
         modname = derelativize_module(json['module'],name)
-        namespace = globals() if modname == '' else import_module(modname).__dict__
+        namespace = globals if modname == '' else import_module(modname).__dict__
         cls = namespace[json['class']]
         def empty_init(a):
             pass
@@ -56,7 +56,7 @@ def deserialize(json,name:str):
         obj = cls()
         cls.__init__ = old_init
         for k,v in json['contents'].items():
-            setattr(obj, k,deserialize(v,name))
+            setattr(obj, k,deserialize(v,name,globals))
         return obj
         
         
