@@ -12,6 +12,7 @@ from vastai.serverless.remote.template import Template
 
 mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
 
+REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME = {}
 
 def get_mode():
     return mode
@@ -35,31 +36,45 @@ def remote(endpoint_name: str):
     def decorator(func):
         func_name = func.__name__
         sig = inspect.signature(func)
+        if get_mode() == "client":
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                from vastai import Serverless
 
-        @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
-            from vastai import Serverless
+                # Bind arguments to get a mapping of parameter names to values
+                bound_args = sig.bind(*args, **kwargs)
+                bound_args.apply_defaults()
 
-            # Bind arguments to get a mapping of parameter names to values
-            bound_args = sig.bind(*args, **kwargs)
-            bound_args.apply_defaults()
+                # Construct the payload in the format expected by the endpoint
+                payload = {
+                    "input": dict(bound_args.arguments)
+                }
 
-            # Construct the payload in the format expected by the endpoint
-            payload = {
-                "input": dict(bound_args.arguments)
-            }
+                print("payload:", payload)
 
-            print("payload:", payload)
+                # Make the remote request
+                async with Serverless() as client:
+                    endpoint = await client.get_endpoint(name=endpoint_name)
+                    print("endpoint:", endpoint)
+                    response = await endpoint.request(f"/remote/{func_name}", payload)
+                    print("response:", response)
+                    return response["response"]
 
-            # Make the remote request
-            async with Serverless() as client:
-                endpoint = await client.get_endpoint(name=endpoint_name)
-                print("endpoint:", endpoint)
-                response = await endpoint.request(f"/remote/{func_name}", payload)
-                print("response:", response)
-                return response["response"]
+            return async_wrapper
+        elif get_mode() == "serve":
+            # Register this function under the configured endpoint so that
+            # Endpoint.ready() in serve mode can expose it via Worker.
+            funcs_for_endpoint = REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME.setdefault(
+                endpoint_name, {}
+            )
+            funcs_for_endpoint[func_name] = func
 
-        return async_wrapper
+            # In serve mode, the function should just run locally when called
+            # (e.g. useful for tests or local invocation), so we return it unchanged.
+            return func
+
+        # Optional: default behavior (e.g. deploy mode) – just return the original
+        return func
 
     return decorator
 
@@ -103,7 +118,7 @@ class Endpoint:
         self.__pip_packages_requested = False
 
         # --- Worker Configuration ---
-        self.remote_dispatch_functions = {}
+        self.remote_dispatch_functions = REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME.get(name, {})
         self.benchmark_function_name = None
         self.benchmark_dataset = []
         self.benchmark_generator = None
@@ -133,7 +148,7 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
 
 """
 
-    async def ready(self):
+    def ready(self):
         if (mode := get_mode()) == "deploy":
 
             self.__install_remote_worker_script()
@@ -231,22 +246,18 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
             worker_task = asyncio.create_task(remote_worker.run_async())
 
             model_log = Path(self.model_log_file)
-            # Create parent directories if they don't exist
-            await model_log.parent.mkdir(parents=True, exist_ok=True)
-            await model_log.write_text("Remote Dispatch ready")
+            async def model_load_task():
+                # Create parent directories if they don't exist
+                await model_log.parent.mkdir(parents=True, exist_ok=True)
+                await model_log.write_text("Remote Dispatch ready")
+            asyncio.run(model_load_task)
 
             # Enter the background task if present
             if self.background_task:
-                await asyncio.gather(worker_task, self.background_task())
+                asyncio.gather(worker_task, self.background_task())
             else:
-                await worker_task
+                asyncio.run(worker_task)
         elif mode == "client":
-            await remote_func(1, 2)
-
-async def main():
-    ep = Endpoint("test-endpoint")
-    await ep.ready()
-
-asyncio.run(main())
-
+            # Nothing to do here
+            pass
 
