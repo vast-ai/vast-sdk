@@ -83,7 +83,7 @@ fi
 export REPORT_ADDR WORKER_PORT USE_SSL UNSECURED
 
 [ ! -f "/workspace/worker.py" ] && echo "worker.py not found!" && exit 1
-WORKER_PATH="worker"
+WORKER_PATH="worker.py"
 
 echo "launching PyWorker server at $WORKER_PATH"
 
