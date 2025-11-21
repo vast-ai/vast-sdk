@@ -29,6 +29,7 @@ class Template:
                 "image": self.image_name,
                 "onstart": self.onstart_cmd,
                 "recommended_disk_space": self.disk_space,
+                "runtype": "ssh",
             }
             headers = {"Authorization": f"Bearer {self.api_key}"}
             if self.env_vars:

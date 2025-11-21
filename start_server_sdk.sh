@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 set -e -o pipefail
 
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
@@ -135,10 +136,9 @@ fi
 
 export REPORT_ADDR WORKER_PORT USE_SSL UNSECURED
 
-[ ! -f "$SERVER_DIR/worker.py" ] && echo "worker.py not found!" && exit 1
+[ ! -f "/workspace/worker.py" ] && echo "worker.py not found!" && exit 1
 WORKER_PATH="worker"
 
-cd "$SERVER_DIR"
 echo "launching PyWorker server at $WORKER_PATH"
 
 python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
