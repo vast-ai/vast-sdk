@@ -344,11 +344,19 @@ class Backend:
 
     async def __call_remote_dispatch(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
-    ) -> ClientResponse:
+    ) -> web.Response:
         remote_func_params = payload.generate_payload_json()
-        log.debug(f"Calling remote dispatch function on {handler.endpoint} with params {remote_func_params}")
-        return await handler.call_remote_dispatch_function(params=remote_func_params)
+        log.debug(
+            f"Calling remote dispatch function on {handler.endpoint} "
+            f"with params {remote_func_params}"
+        )
 
+        # Call the remote dispatch function (sync or async already handled inside)
+        result = await handler.call_remote_dispatch_function(params=remote_func_params)
+
+        # Wrap the Python result in a JSON HTTP response for the client
+        return web.json_response({"result": result})
+    
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
             return True
