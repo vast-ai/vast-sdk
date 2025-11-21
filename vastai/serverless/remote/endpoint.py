@@ -197,7 +197,7 @@ class Endpoint:
         self.__onstart_cmd += f"{cmd}\n"
 
     def __install_remote_worker_script(self):
-        worker_script_download_url = os.environ["VAST_WORKER_DOWNLOAD_URL"]
+        worker_script_download_url = os.environ["VAST_WORKER_SCRIPT_URL"]
         self.apt_get("wget")
         self.__onstart_cmd += f"""
 wget -O worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | VAST_REMOTE_DISPATCH_MODE=serve bash
