@@ -345,8 +345,7 @@ class Backend:
     async def __call_remote_dispatch(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
-        json_payload = payload.generate_payload_json()
-        remote_func_params = json_payload.get("params")
+        remote_func_params = payload.generate_payload_json()
         log.debug("Calling remote dispatch function on {handler.route} with params {remote_func_params}")
         return await handler.call_remote_dispatch_function(params=remote_func_params)
 
