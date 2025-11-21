@@ -9,7 +9,7 @@ async def matmul(a,b):
     import torch as t
     a_t = t.tensor(a, dtype=t.float32, device='cuda:0')
     b_t = t.tensor(b, dtype=t.float32, device='cuda:0')
-    c_t = a @ b
+    c_t = a_t @ b_t
     return c_t.to('cpu').tolist()
 
 ep = Endpoint(
