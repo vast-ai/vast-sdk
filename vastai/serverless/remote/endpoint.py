@@ -200,7 +200,7 @@ class Endpoint:
         worker_script_download_url = os.environ["VAST_WORKER_DOWNLOAD_URL"]
         self.apt_get("wget")
         self.__onstart_cmd += f"""
-wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=serve python3 endpoint.py
+wget -O worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | VAST_REMOTE_DISPATCH_MODE=serve bash
 
 """
 
