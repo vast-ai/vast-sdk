@@ -52,44 +52,11 @@ setup_env() {
         [[ -f ~/.local/bin/env ]] && source ~/.local/bin/env
     fi
 
-    # (Re)create venv
-    uv venv --python-preference only-managed "$ENV_PATH" -p 3.10
-
-    # Activate the newly created venv
-    # shellcheck disable=SC1090
-    source "$ENV_PATH/bin/activate"
-
     touch ~/.no_auto_tmux
 }
 
 # Decide if we actually have a usable venv
 NEED_ENV_SETUP=false
-
-# Missing directory, or clearly broken / incomplete venv
-if [ ! -d "$ENV_PATH" ] \
-   || [ ! -x "$ENV_PATH/bin/python" ] \
-   || [ ! -f "$ENV_PATH/bin/activate" ]; then
-    NEED_ENV_SETUP=true
-fi
-
-# If we don't have the server checkout yet, treat as needing setup as well
-if [ ! -d "$SERVER_DIR" ]; then
-    NEED_ENV_SETUP=true
-fi
-
-if [ "$NEED_ENV_SETUP" = true ]; then
-    setup_env
-else
-    # uv installer may have dropped this file; source it if present
-    [[ -f ~/.local/bin/env ]] && source ~/.local/bin/env
-
-    # Activate existing venv (use ENV_PATH, not WORKSPACE_DIR/worker-env)
-    # shellcheck disable=SC1090
-    source "$ENV_PATH/bin/activate"
-
-    echo "environment activated"
-    echo "venv: $VIRTUAL_ENV"
-fi
 
 if [ "${WORKER_SDK:-false}" = true ]; then
     echo "Using Vast.ai SDK"
