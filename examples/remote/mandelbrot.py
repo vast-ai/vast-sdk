@@ -7,19 +7,12 @@ import base64
     dataset=[{"width": 1024, "height": 768, "max_iter": 200}]
 )
 @remote(endpoint_name="mandelbrot_pytorch")
-async def render_mandelbrot(width: int = 1024,
-                            height: int = 768,
-                            max_iter: int = 200):
-    """
-    Render a Mandelbrot fractal image using PyTorch.
-    Tries GPU, falls back to CPU if CUDA is incompatible.
-    """
+async def render_mandelbrot(width: int = 1024, height: int = 768, max_iter: int = 200):
     import torch as t
     from io import BytesIO
     from PIL import Image
 
     def _render(device: str):
-        # Complex plane
         re = t.linspace(-2.5, 1.0, width, device=device)
         im = t.linspace(-1.5, 1.5, height, device=device)
         c_re, c_im = t.meshgrid(re, im, indexing="xy")
@@ -45,25 +38,20 @@ async def render_mandelbrot(width: int = 1024,
                 if diverged.all():
                     break
 
-            # Normalize iteration counts only for diverged points
             norm = iters.float() / max_iter  # 0..1
             norm = norm.clamp(0.0, 1.0)
 
-            # Polynomial color palette (less green-dominated)
-            # Classic kind of formula used in many fractal renderers
             r = 9.0 * (1 - norm) * (norm ** 3)
             g = 15.0 * ((1 - norm) ** 2) * (norm ** 2)
             b = 8.5 * ((1 - norm) ** 3) * norm
 
             rgb = t.stack([r, g, b], dim=-1)
 
-            # Make interior (non-diverged) points black
             inside_mask = ~diverged
             rgb[inside_mask] = 0.0
 
             rgb = rgb.clamp(0.0, 1.0)
 
-            # To uint8 image; note height/width permutation
             img = (rgb * 255).byte().permute(1, 0, 2).cpu().numpy()
 
         pil_img = Image.fromarray(img, mode="RGB")
@@ -94,9 +82,6 @@ async def render_mandelbrot(width: int = 1024,
         "device_used": device_used,
     }
 
-
-
-# Define the endpoint using the official PyTorch image
 fractal_ep = Endpoint(
     name="mandelbrot_pytorch",
     image_name="pytorch/pytorch"

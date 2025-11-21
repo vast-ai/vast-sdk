@@ -1,10 +1,10 @@
-from vastai.serverless.remote.endpoint import benchmark, remote, Endpoint
+from vastai.serverless.remote.endpoint import *
 
 @benchmark(
-    endpoint_name="hello_pytorch2",
+    endpoint_name="pytorch",
     dataset=[{'a': [[2, 0], [0, 2]], 'b': [[1, 2], [3, 4]]}]
 )
-@remote(endpoint_name='hello_pytorch2')
+@remote(endpoint_name='pytorch')
 async def matmul(a,b):
     import torch as t
     a_t = t.tensor(a, dtype=t.float32, device='cuda:0')
@@ -13,7 +13,7 @@ async def matmul(a,b):
     return c_t.to('cpu').tolist()
 
 ep = Endpoint(
-    'hello_pytorch2',
+    'pytorch',
     image_name='pytorch/pytorch'
 )
 ep.ready()
