@@ -6,6 +6,7 @@ import asyncio
 import requests
 import aiofiles
 import sys
+import time
 
 from typing import Optional
 from anyio import Path
@@ -58,8 +59,11 @@ def remote(endpoint_name: str):
 
                 # Make the remote request
                 async with Serverless() as client:
+                    snapshot_time = time.time()
                     endpoint = await client.get_endpoint(name=endpoint_name)
                     response = await endpoint.request(f"/remote/{func_name}", payload)
+                    time_elapsed = time.time() - snapshot_time
+                    print(f"Time elapsed: {time_elapsed} seconds")
                     return response["response"]
 
             return async_wrapper

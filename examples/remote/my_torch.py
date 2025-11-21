@@ -1,4 +1,4 @@
-from vastai.serverless.remote.endpoint import *
+from vastai.serverless.remote.endpoint import benchmark, remote, Endpoint
 
 @benchmark(
     endpoint_name="hello_pytorch2",
