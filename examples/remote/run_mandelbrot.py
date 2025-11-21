@@ -11,7 +11,6 @@ async def main():
         height=768,
         max_iter=300
     )
-    result = result["result"]
     print("Fractal render complete:")
     print(f"  width={result['width']}")
     print(f"  height={result['height']}")

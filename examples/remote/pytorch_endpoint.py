@@ -14,7 +14,8 @@ async def matmul(a,b):
 
 ep = Endpoint(
     'pytorch',
-    image_name='pytorch/pytorch'
+    image_name='pytorch/pytorch',
+    search_params="compute_cap<1200 num_gpus=1"
 )
 ep.ready()
 
