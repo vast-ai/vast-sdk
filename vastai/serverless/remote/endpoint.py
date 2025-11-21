@@ -226,12 +226,12 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
         """
 
     def ready(self):
-        vast_api_key = os.environ.get("VAST_API_KEY")
-        if not vast_api_key:
-            raise ValueError("VAST_API_KEY environment variable is not set")
+
 
         if (mode := get_mode()) == "deploy":
-
+            vast_api_key = os.environ.get("VAST_API_KEY")
+            if not vast_api_key:
+                raise ValueError("VAST_API_KEY environment variable is not set")
             print("Deploying...")
             self.__install_remote_worker_script()
 
@@ -351,6 +351,9 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
             # Nothing to do here
             pass
         elif mode == "down":
+            vast_api_key = os.environ.get("VAST_API_KEY")
+            if not vast_api_key:
+                raise ValueError("VAST_API_KEY environment variable is not set")
             endpoint_group = EndpointGroup(
                 vast_api_key,
                 self.name,

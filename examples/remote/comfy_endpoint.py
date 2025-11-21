@@ -23,17 +23,7 @@ def parse_request(json_msg):
 
 benchmark_dataset = [
     {
-        "input": {
-            "request_id": f"test-{random.randint(1000, 99999)}",
-            "modifier": "Text2Image",
-            "modifications": {
-                "prompt": prompt,
-                "width": 512,
-                "height": 512,
-                "steps": 20,
-                "seed": random.randint(0, sys.maxsize)
-            }
-        }
+        "prompt" : prompt
     } for prompt in benchmark_prompts
 ]
 
@@ -44,17 +34,19 @@ benchmark_dataset = [
 @remote(endpoint_name="comfy_endpoint")
 async def generate_image(prompt: str):
     import base64
-    MODEL_SERVER_URL  = "http://localhost:18188"
+    MODEL_SERVER_URL  = "http://127.0.0.1:18288/generate/sync"
 
     payload = {
-        "input": {
-            "modifier": "Text2Image",
-            "modifications": {
-                "prompt": prompt,
-                "width": 512,
-                "height": 512,
-                "steps": 10,
-                "seed": random.randint(1, 1000)
+        "input" : {
+            "input": {
+                "modifier": "Text2Image",
+                "modifications": {
+                    "prompt": prompt,
+                    "width": 512,
+                    "height": 512,
+                    "steps": 10,
+                    "seed": random.randint(1, 1000)
+                }
             }
         }
     }
