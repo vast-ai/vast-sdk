@@ -45,6 +45,7 @@ def remote(endpoint_name: str):
     def decorator(func):
         func_name = func.__name__
         func_mod = func.__globals__['__name__']
+        func_globals = func.__globals__
         sig = inspect.signature(func)
         if get_mode() == "client":
             @functools.wraps(func)
@@ -72,7 +73,7 @@ def remote(endpoint_name: str):
                     response = await endpoint.request(f"/remote/{func_name}", payload)
                     time_elapsed = time.time() - snapshot_time
                     print(f"Time elapsed: {time_elapsed} seconds")
-                    return deserialize(response["response"],func_mod)
+                    return deserialize(response["response"],func_mod,func_globals)
 
             return async_wrapper
         elif get_mode() == "serve":
@@ -83,8 +84,8 @@ def remote(endpoint_name: str):
             )
 
             async def inner(*args,**kwargs):
-                args_ = [deserialize(a,func_mod) for a in args]
-                kwargs_ = {k : deserialize(v,func_mod) for k,v in kwargs.items()}
+                args_ = [deserialize(a,func_mod,func_globals) for a in args]
+                kwargs_ = {k : deserialize(v,func_mod,func_globals) for k,v in kwargs.items()}
                 return serialize(await func(*args_,**kwargs_),func_mod)
             funcs_for_endpoint[func_name] = inner
 
