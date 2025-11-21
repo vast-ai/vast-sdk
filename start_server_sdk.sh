@@ -141,7 +141,7 @@ WORKER_PATH="worker"
 
 echo "launching PyWorker server at $WORKER_PATH"
 
-pip install git+https://github.com/vast-ai/vast-sdk.git@remote
+uv pip install git+https://github.com/vast-ai/vast-sdk.git@remote
 
 python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
 
