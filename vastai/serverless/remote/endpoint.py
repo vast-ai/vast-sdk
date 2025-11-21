@@ -7,6 +7,7 @@ import requests
 import aiofiles
 import sys
 
+from typing import Optional
 from anyio import Path
 from vastai.serverless.remote.endpoint_group import EndpointGroup
 from vastai.serverless.remote.worker_group import WorkerGroup
@@ -146,6 +147,7 @@ class Endpoint:
     def __init__(
         self,
         name: str,
+        endpoint_group_id: Optional[int] = None,
         cold_mult: int = 3,
         min_workers: int = 5,
         max_workers: int = 16,
@@ -162,6 +164,7 @@ class Endpoint:
     ):
         # --- Endpoint Configuration ---
         self.name = name
+        self.endpoint_group_id = endpoint_group_id
         self.cold_mult = cold_mult
         self.min_workers = min_workers
         self.max_workers = max_workers
@@ -223,14 +226,15 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
         """
 
     def ready(self):
+        vast_api_key = os.environ.get("VAST_API_KEY")
+        if not vast_api_key:
+            raise ValueError("VAST_API_KEY environment variable is not set")
+
         if (mode := get_mode()) == "deploy":
 
             print("Deploying...")
             self.__install_remote_worker_script()
 
-            vast_api_key = os.environ.get("VAST_API_KEY")
-            if not vast_api_key:
-                raise ValueError("VAST_API_KEY environment variable is not set")
 
             template = Template(
                 vast_api_key,
@@ -346,4 +350,14 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
         elif mode == "client":
             # Nothing to do here
             pass
+        elif mode == "down":
+            endpoint_group = EndpointGroup(
+                vast_api_key,
+                self.name,
+            ).teardown_endpoint_group()
+            template = Template(
+                vast_api_key,
+            ).teardown_template()
+
+            print("Remote Dispatch Endpoint Teardown Complete")
 

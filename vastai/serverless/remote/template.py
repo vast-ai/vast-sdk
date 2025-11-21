@@ -1,6 +1,8 @@
 from typing import Optional
 import requests
 import os
+import json
+import urllib.parse
 
 
 class Template:
@@ -9,15 +11,15 @@ class Template:
     def __init__(
         self,
         api_key: str,
-        image_name: str,
-        env_vars: dict,
-        disk_space: int,
+        image_name: Optional[str] = None,
+        env_vars: Optional[dict] = None,
+        disk_space: Optional[int] = None,
         template_name: Optional[str] = None,
         onstart_cmd: str = "",
         port : int = 3000,
     ):
         self.api_key = api_key
-        self.name = template_name if template_name else f"template-{os.urandom(15)}"
+        self.name = template_name + "-endpoint" if template_name else f"template-{os.urandom(15)}-endpoint"
         self.image_name = image_name
         self.env_vars = env_vars
         self.disk_space = disk_space
@@ -48,3 +50,27 @@ class Template:
             return response.json()["template"]["id"]
         except Exception as ex:
             raise RuntimeError(f"Failed to create template: {ex}")
+
+    def teardown_template(self):
+        try:
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+
+            order_by = [{"col": "created_at", "dir": "desc"}]
+            limit = 60
+            params = {
+                "order_by": json.dumps(order_by),
+                "limit": limit,
+            }
+            encoded_params = urllib.parse.urlencode(params)
+            url = f"{self.WEBSERVER_URL}/api/v0/template/?{encoded_params}"
+            response = requests.get(url=url, headers=headers)
+
+            template_id_to_delete = None
+            for template in response.json()["templates"]:
+                if "-endpoint" in template["name"]:
+                    template_id_to_delete = template["id"]
+                    break
+
+            response = requests.delete(url=f"{self.WEBSERVER_URL}/api/v0/template/", headers=headers, json={"template_id": template_id_to_delete})
+        except Exception as ex:
+            raise RuntimeError(f"Failed to teardown template: {ex}")
