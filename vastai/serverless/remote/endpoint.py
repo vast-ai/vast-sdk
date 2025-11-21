@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import asyncio
 
 from vastai.serverless.remote.endpoint_group import EndpointGroup
 from vastai.serverless.remote.template import Template
@@ -64,7 +63,7 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
 
 """
 
-    async def ready(self):
+    def ready(self):
         if (mode := get_mode()) == "deploy":
             from vastai.serverless.remote.template import Template
 
@@ -116,9 +115,5 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
             pass
 
 
-async def main():
-    ep = Endpoint("test-endpoint")
-    await ep.ready()
-
-
-asyncio.run(main())
+ep = Endpoint("test-endpoint")
+ep.ready()
