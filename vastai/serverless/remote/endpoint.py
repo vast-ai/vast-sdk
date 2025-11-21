@@ -14,6 +14,8 @@ mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
 
 REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME = {}
 
+BENCHMARK_CONFIG_BY_ENDPOINT_NAME = {}
+
 def get_mode():
     return mode
 
@@ -79,11 +81,63 @@ def remote(endpoint_name: str):
     return decorator
 
 
-#TODO: THe remote decorator in serve mode needs to get the endpoint URL, construct the params,
-#then call the endpoint with the structured params the pyworker endpoint expects
-@remote(endpoint_name="test-endpoint")
-async def remote_func(x: int, y: int):
-    return x + y
+def benchmark(
+    endpoint_name: str,
+    *,
+    dataset: list[dict] | None = None,
+    generator=None,
+):
+    """
+    Decorator to mark a remote function as the benchmark function for an endpoint.
+
+    Exactly one of `dataset` or `generator` should be provided.
+
+    Example:
+
+        @benchmark(
+            endpoint_name="my-endpoint",
+            dataset=[{"a": 1}, {"a": 2}, {"a": 3}],
+        )
+        @remote(endpoint_name="my-endpoint")
+        async def remote_func_a(a: int):
+            ...
+
+    Or:
+
+        import random
+
+        def benchmark_generator() -> dict:
+            return {"a": random.randint(0, 100)}
+
+        @benchmark(
+            endpoint_name="my-endpoint",
+            generator=benchmark_generator,
+        )
+        @remote(endpoint_name="my-endpoint")
+        async def remote_func_a(a: int):
+            ...
+    """
+    if dataset is not None and generator is not None:
+        raise ValueError("Specify either dataset or generator, not both")
+    if dataset is None and generator is None:
+        raise ValueError("Must specify either dataset or generator")
+
+    # Normalize dataset to a list
+    if dataset is not None and not isinstance(dataset, list):
+        raise TypeError("dataset must be a list of dicts")
+
+    def decorator(func):
+        func_name = func.__name__
+
+        BENCHMARK_CONFIG_BY_ENDPOINT_NAME[endpoint_name] = {
+            "function_name": func_name,
+            "dataset": dataset or [],
+            "generator": generator,
+        }
+
+        return func
+
+    return decorator
 
 class Endpoint:
     def __init__(
@@ -119,9 +173,11 @@ class Endpoint:
 
         # --- Worker Configuration ---
         self.remote_dispatch_functions = REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME.get(name, {})
-        self.benchmark_function_name = None
-        self.benchmark_dataset = []
-        self.benchmark_generator = None
+        benchmark_cfg = BENCHMARK_CONFIG_BY_ENDPOINT_NAME.get(name)
+        if benchmark_cfg:
+            self.benchmark_function_name = benchmark_cfg["function_name"]
+            self.benchmark_dataset = benchmark_cfg["dataset"]
+            self.benchmark_generator = benchmark_cfg["generator"]
         self.model_log_file = "/var/log/remote/debug.log"
         self.model_healthcheck_endpoint = "health"
         self.on_init_function = None
