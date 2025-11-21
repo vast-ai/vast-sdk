@@ -79,16 +79,16 @@ def remote(endpoint_name: str):
             funcs_for_endpoint = REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME.setdefault(
                 endpoint_name, {}
             )
-            funcs_for_endpoint[func_name] = func
 
             async def inner(*args,**kwargs):
                 args_ = [deserialize(a,func_mod) for a in args]
                 kwargs_ = {k : deserialize(v,func_mod) for k,v in kwargs.items()}
                 return serialize(await func(*args_,**kwargs_),func_mod)
+            funcs_for_endpoint[func_name] = inner
 
             # In serve mode, the function should just run locally when called
             # (e.g. useful for tests or local invocation), so we return it unchanged.
-            return inner
+            return func
 
         # Optional: default behavior (e.g. deploy mode) – just return the original
         return func
