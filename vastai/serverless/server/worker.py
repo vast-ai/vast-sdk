@@ -5,6 +5,7 @@ from aiohttp import web, ClientResponse
 import logging
 import json
 import random
+import inspect
 import logging
 from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type
 
@@ -243,11 +244,19 @@ class EndpointHandlerFactory:
                 """
                 define a remote dispatch function for this endpoint, return the result
                 """
+                if self.remote_dispatch_function is None:
+                    raise RuntimeError(f"remote_dispatch_function is not configured for route {self._route}")
+
                 try:
-                    if self.remote_dispatch_function is not None:
-                        return await self.remote_dispatch_function(**params)
+                    result = self.remote_dispatch_function(**params)
+
+                    if inspect.isawaitable(result):
+                        return await result
+                    
+                    return result
+
                 except Exception as ex:
-                    raise Exception(f"Error calling remote dispatch function: {ex}")
+                    raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
                 
             async def generate_client_response(
                 self,
