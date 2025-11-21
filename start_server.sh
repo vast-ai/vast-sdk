@@ -108,7 +108,7 @@ fi
 if [ "${WORKER_SDK:-false}" = true ]; then
     echo "Using Vast.ai SDK"
     uv pip install git+https://github.com/vast-ai/vast-sdk.git@remote
-
+fi
 
 if [ "$USE_SSL" = true ]; then
 
