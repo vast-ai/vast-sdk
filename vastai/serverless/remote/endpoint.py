@@ -214,9 +214,9 @@ class Endpoint:
         worker_script_download_url = self.__upload_deploy_script()
         self.apt_get("wget")
         self.__onstart_cmd += f"""
-wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | VAST_REMOTE_DISPATCH_MODE=serve bash
-
-"""
+            mkdir -p /workspace
+            wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | VAST_REMOTE_DISPATCH_MODE=serve bash
+        """
 
     def ready(self):
         if (mode := get_mode()) == "deploy":
