@@ -3,6 +3,8 @@ import os
 import inspect
 import functools
 import asyncio
+import requests
+import sys
 
 from anyio import Path
 from vastai.serverless.remote.endpoint_group import EndpointGroup
@@ -196,8 +198,16 @@ class Endpoint:
     def on_start(self, cmd: str):
         self.__onstart_cmd += f"{cmd}\n"
 
+    def __upload_deploy_script(self):
+        vast_upload_url = os.environ["VAST_UPLOAD_URL"]
+        vast_upload_auth_token = os.environ["VAST_UPLOAD_AUTH_TOKEN"]
+        vast_download_url_base = os.environ["VAST_DOWNLOAD_URL"]
+        deploy_script = sys.argv[0]
+        with open(deploy_script, 'r') as deploy_script_file:
+            blob_id = requests.post(vast_upload_url, headers = {'Authorization': f'Bearer {vast_upload_auth_token}'}, data = deploy_script_file.read()).text
+        return vast_download_url_base.rstrip('/') + '/' + blob_id
     def __install_remote_worker_script(self):
-        worker_script_download_url = os.environ["VAST_WORKER_SCRIPT_URL"]
+        worker_script_download_url = self.__upload_deploy_script()
         self.apt_get("wget")
         self.__onstart_cmd += f"""
 wget -O worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | VAST_REMOTE_DISPATCH_MODE=serve bash
