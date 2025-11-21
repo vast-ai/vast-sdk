@@ -10,10 +10,11 @@ class Template:
         self,
         api_key: str,
         image_name: str,
-        env_vars: dict,
+        env_vars: str,
         disk_space: int,
         template_name: Optional[str] = None,
         onstart_cmd: str = "",
+        port : int = 3000,
     ):
         self.api_key = api_key
         self.name = template_name if template_name else f"template-{os.urandom(15)}"
@@ -32,8 +33,10 @@ class Template:
                 "runtype": "ssh",
             }
             headers = {"Authorization": f"Bearer {self.api_key}"}
-            if self.env_vars:
-                request_body["env"] = self.env_vars
+            env_vars = self.env_vars if self.env_vars else ""
+            env_vars += " -p 3000:3000"
+
+            request_body["env"] = self.env_vars
 
             response = requests.post(
                 url=f"{self.WEBSERVER_URL}/api/v0/template/",
