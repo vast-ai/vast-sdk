@@ -1,12 +1,119 @@
+#!/usr/bin/env python3
 import os
+
+from vastai.serverless.remote.endpoint_group import EndpointGroup
+from vastai.serverless.remote.template import Template
+from vastai.serverless.remote.worker_group import WorkerGroup
+
+
+mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
+
 
 def get_mode():
     return mode
 
+
 class Endpoint:
-    def __init__(self,name):
+    def __init__(
+        self,
+        name: str,
+        cold_mult: int = 3,
+        min_workers: int = 5,
+        max_workers: int = 16,
+        min_load: int = 1,
+        min_cold_load: int = 0,
+        target_util: float = 0.9,
+        image_name: str = "vastai/base-image:@vastai-automatic-tag",
+        env_vars: dict = {},
+        search_params: str = "",
+        disk_space: int = 128,
+    ):
         self.name = name
-    # ADD NEW ENDPOINT METHODS HERE, GATE WITH THE RIGHT MODE
+        self.cold_mult = cold_mult
+        self.min_workers = min_workers
+        self.max_workers = max_workers
+        self.min_load = min_load
+        self.min_cold_load = min_cold_load
+        self.target_util = target_util
+        self.image_name = image_name
+        self.env_vars = env_vars
+        self.search_params = search_params
+        self.disk_space = disk_space
+        self.__onstart_cmd = ""
+        self.__pip_packages_requested = False
 
-mode = os.getenv('VAST_REMOTE_DISPATCH_MODE', 'client')
+    def apt_get(self, package: str):
+        self.__onstart_cmd += f"apt-get install -y {package}\n"
 
+    def uv_pip_install(self, package: str):
+        if not self.__pip_packages_requested:
+            self.__onstart_cmd += "curl -LsSf https://astral.sh/uv/install.sh | sh && uv venv && source .venv/bin/activate\n"
+            self.__pip_packages_requested = True
+
+        self.__onstart_cmd += f"uv pip install {package}\n"
+
+    def on_start(self, cmd: str):
+        self.__onstart_cmd += f"{cmd}\n"
+
+    def __install_remote_worker_script(self):
+        worker_script_download_url = os.environ["VAST_WORKER_DOWNLOAD_URL"]
+        self.apt_get("wget")
+        self.__onstart_cmd += f"""
+wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=serve python3 endpoint.py
+
+"""
+
+    def ready(self):
+        if (mode := get_mode()) == "deploy":
+            from vastai.serverless.remote.template import Template
+
+            self.__install_remote_worker_script()
+
+            vast_api_key = os.environ.get("VAST_API_KEY")
+            if not vast_api_key:
+                raise ValueError("VAST_API_KEY environment variable is not set")
+
+            template = Template(
+                vast_api_key,
+                self.image_name,
+                self.env_vars,
+                self.disk_space,
+                template_name="template-test",
+                onstart_cmd=self.__onstart_cmd,
+            )
+            template_id = template.create_template()
+
+            endpoint_group = EndpointGroup(
+                vast_api_key,
+                self.name,
+                self.cold_mult,
+                self.min_workers,
+                self.max_workers,
+                self.min_load,
+                self.min_cold_load,
+                self.target_util,
+            )
+            endpoint_group_id = endpoint_group.create_endpoint_group()
+            print("endpoint_group_id:", endpoint_group_id)
+
+            worker_group = WorkerGroup(
+                vast_api_key,
+                self.cold_mult,
+                endpoint_group_id,
+                self.name,
+                self.min_load,
+                self.search_params,
+                self.target_util,
+                template_id,
+            )
+
+            print("worker_group_id:", worker_group.create_worker_group())
+
+        elif mode == "serve":
+            pass
+        elif mode == "client":
+            pass
+
+
+ep = Endpoint("test-endpoint")
+ep.ready()
