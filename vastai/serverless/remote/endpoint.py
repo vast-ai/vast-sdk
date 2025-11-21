@@ -224,6 +224,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
     def ready(self):
         if (mode := get_mode()) == "deploy":
 
+            print("Deploying...")
             self.__install_remote_worker_script()
 
             vast_api_key = os.environ.get("VAST_API_KEY")
@@ -264,6 +265,10 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
             )
 
             worker_group.create_worker_group()
+            #INFO: blocks until worker group is ready
+            worker_group.check_worker_group_status()
+
+            print("Deployment Ready!")
 
 
         elif mode == "serve":

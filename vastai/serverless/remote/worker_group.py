@@ -1,8 +1,10 @@
 import requests
+import time
 
 
 class WorkerGroup:
     WEBSERVER_URL = "https://console.vast.ai"
+    AUTOSCALER_URL = "https://run.vast.ai/"
 
     def __init__(
         self,
@@ -45,4 +47,25 @@ class WorkerGroup:
 
             return response.json()["id"]
         except Exception as ex:
-            raise RuntimeError(f"Failed to create endpoint group: {ex}")
+            raise RuntimeError(f"Failed to create worker group: {ex}")
+
+    def check_worker_group_status(self, max_attempts: int = 60) -> bool:
+        try:
+            request_body = {"id": self.endpoint_id, "api_key": self.api_key}
+            max_attempts = 60
+            time.sleep(5) #INFO: ensures autoscaler has the info to be parsed
+            for _ in range(max_attempts):
+                response = requests.post(url=f"{self.AUTOSCALER_URL}/get_endpoint_workers/", json=request_body)
+
+                workers = response.json()
+
+
+                for worker in workers:
+                    if worker["status"] == "idle":
+                        return True
+
+                time.sleep(5)
+
+            return False
+        except Exception as ex:
+            raise RuntimeError(f"Failed to check workergroup group status: {ex}")
