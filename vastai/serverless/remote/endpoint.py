@@ -2,6 +2,10 @@
 import os
 import asyncio
 
+from vastai.serverless.remote.endpoint_group import EndpointGroup
+from vastai.serverless.remote.template import Template
+from vastai.serverless.remote.worker_group import WorkerGroup
+
 
 mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
 
@@ -11,8 +15,6 @@ def get_mode():
 
 
 class Endpoint:
-    # TODO: needs to create a template, then workergroup with the new template's params
-    # To create the template, we should use the _make_request
     def __init__(
         self,
         name: str,
@@ -81,7 +83,32 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
                 onstart_cmd=self.__onstart_cmd,
             )
             template_id = template.create_template()
-            print(f"Template ID: {template_id}")
+
+            endpoint_group = EndpointGroup(
+                vast_api_key,
+                self.name,
+                self.cold_mult,
+                self.min_workers,
+                self.max_workers,
+                self.min_load,
+                self.min_cold_load,
+                self.target_util,
+            )
+            endpoint_group_id = endpoint_group.create_endpoint_group()
+            print("endpoint_group_id:", endpoint_group_id)
+
+            worker_group = WorkerGroup(
+                vast_api_key,
+                self.cold_mult,
+                endpoint_group_id,
+                self.name,
+                self.min_load,
+                self.search_params,
+                self.target_util,
+                template_id,
+            )
+
+            print("worker_group_id:", worker_group.create_worker_group())
 
         elif mode == "serve":
             pass

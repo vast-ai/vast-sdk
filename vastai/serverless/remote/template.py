@@ -1,6 +1,5 @@
 from typing import Optional
 import requests
-from ..client.connection import _make_request
 import os
 
 

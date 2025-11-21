@@ -1,48 +1,48 @@
 import requests
 
 
-class EndpointGroup:
+class WorkerGroup:
     WEBSERVER_URL = "https://console.vast.ai"
 
     def __init__(
         self,
         api_key: str,
-        endpoint_name: str,
         cold_mult: int,
-        min_workers: int,
-        max_workers: int,
+        endpoint_id: int,
+        endpoint_name: str,
         min_load: int,
-        min_cold_load: int,
+        search_params: str,
         target_util: float,
+        template_id: int,
     ):
         self.api_key = api_key
-        self.endpoint_name = endpoint_name
         self.cold_mult = cold_mult
-        self.min_workers = min_workers
-        self.max_workers = max_workers
+        self.endpoint_id = endpoint_id
+        self.endpoint_name = endpoint_name
         self.min_load = min_load
-        self.min_cold_load = min_cold_load
+        self.search_params = search_params
         self.target_util = target_util
+        self.template_id = template_id
 
-    def create_endpoint_group(self):
+    def create_worker_group(self):
         try:
             request_body = {
-                "endpoint_name": self.endpoint_name,
                 "cold_mult": self.cold_mult,
-                "cold_workers": self.min_workers,
-                "max_workers": self.max_workers,
+                "endpoint_id": self.endpoint_id,
+                "endpoint_name": self.endpoint_name,
                 "min_load": self.min_load,
-                "min_cold_load": self.min_cold_load,
+                "search_params": self.search_params,
                 "target_util": self.target_util,
+                "template_id": self.template_id,
             }
             headers = {"Authorization": f"Bearer {self.api_key}"}
 
             response = requests.post(
-                url=f"{self.WEBSERVER_URL}/api/v0/endptjobs/",
+                url=f"{self.WEBSERVER_URL}/api/v0/autojobs/",
                 json=request_body,
                 headers=headers,
             )
 
-            return response.json()["result"]
+            return response.json()["id"]
         except Exception as ex:
             raise RuntimeError(f"Failed to create endpoint group: {ex}")
