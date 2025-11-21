@@ -181,7 +181,12 @@ class Backend:
                         ]
                     )
                 )
-                res = await handler.generate_client_response(request, response)
+                if handler.is_remote_dispatch:
+                    res = response  # type: ignore[assignment]
+                else:
+                    # Normal path: response is aiohttp.ClientResponse from HTTP client
+                    res = await handler.generate_client_response(request, response)
+
                 self.metrics._request_success(request_metrics)
                 return res
             except asyncio.CancelledError:
