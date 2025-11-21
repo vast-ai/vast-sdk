@@ -52,11 +52,16 @@ endpoint = Endpoint(
     image_name="vastai/vllm:@vastai-automatic-tag",
     max_workers=5,
     env_vars={
+        "PORTAL_CONFIG" : "\"localhost:18000:18000:/docs:vLLM API|localhost:28265:28265:/:Ray Dashboard\"",
         "MODEL_NAME" : "Qwen/Qwen3-8B",
+        "VLLM_MODEL" : "Qwen/Qwen3-8B",
         "VLLM_ARGS" : "\"--max-model-len 35840 --gpu-memory-utilization 0.80 --reasoning-parser deepseek_r1 --download-dir /workspace/models --host 127.0.0.1 --port 18000 --enable-auto-tool-choice --tool-call-parser hermes\"",
         "RAY_ARGS" : "--head",
         "USE_ALL_GPUS" : "true",
-        "HF_TOKEN": "${HF_TOKEN:-1}"
+        "HF_TOKEN": "${HF_TOKEN:-1}",
+        "MODEL_LOG" : "/var/log/portal/vllm.log",
+        "MODEL_SERVER_URL" : "http://127.0.0.1:18000",
+        "MODEL_HEALTH_ENDPOINT" : "${MODEL_SERVER_URL}/health"
     },
     model_backend_load_logs=["Application startup complete."],
     model_log_file="/var/log/portal/vllm.log"

@@ -4,6 +4,7 @@ import inspect
 import functools
 import asyncio
 import requests
+import aiofiles
 import sys
 
 from anyio import Path
@@ -324,12 +325,15 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                     except Exception as ex:
                         raise Exception(f"Error in on_init function: {ex}")
 
-                # Write initial log
+                # Prepare log file
                 model_log = Path(self.model_log_file)
-
                 await model_log.parent.mkdir(parents=True, exist_ok=True)
-                await model_log.write_text("Remote Dispatch ready")
-                
+
+                # Append instead of overwrite
+                async with aiofiles.open(model_log, "a") as f:
+                    await f.write("Remote Dispatch ready\n")
+
+                # Start background task(s)
                 if self.background_task:
                     await asyncio.gather(
                         remote_worker.run_async(),
