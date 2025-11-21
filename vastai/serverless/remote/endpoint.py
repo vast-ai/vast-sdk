@@ -155,6 +155,9 @@ class Endpoint:
         env_vars: dict = {},
         search_params: str = "",
         disk_space: int = 128,
+        model_log_file: str = "/var/log/remote/debug.log",
+        model_backend_load_logs: str = ["Remote Dispatch ready"],
+        model_healthcheck_endpoint: str = "health"
     ):
         # --- Endpoint Configuration ---
         self.name = name
@@ -180,11 +183,11 @@ class Endpoint:
             self.benchmark_function_name = benchmark_cfg["function_name"]
             self.benchmark_dataset = benchmark_cfg["dataset"]
             self.benchmark_generator = benchmark_cfg["generator"]
-        self.model_log_file = "/var/log/remote/debug.log"
-        self.model_healthcheck_endpoint = "health"
+        self.model_log_file = model_log_file
+        self.model_healthcheck_endpoint = model_healthcheck_endpoint
         self.on_init_function = None
         self.background_task = None
-        self.model_backend_load_logs = ["Remote Dispatch ready"]
+        self.model_backend_load_logs = model_backend_load_logs
 
     def apt_get(self, package: str):
         self.__onstart_cmd += f"apt-get install -y {package}\n"
