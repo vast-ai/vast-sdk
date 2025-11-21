@@ -92,6 +92,6 @@ fractal_ep = Endpoint(
     name="mandelbrot_pytorch",
     image_name="pytorch/pytorch"
 )
-fractal_ep.uv_pip_install("Pillow")
+fractal_ep.uv_pip_install(["Pillow"])
 
 fractal_ep.ready()

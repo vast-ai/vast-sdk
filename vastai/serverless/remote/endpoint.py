@@ -193,15 +193,17 @@ class Endpoint:
         self.background_task = None
         self.model_backend_load_logs = model_backend_load_logs
 
-    def apt_get(self, package: str):
-        self.__onstart_cmd += f"apt-get install -y {package}\n"
+    def apt_get(self, packages: list[str]):
+        packages_str = " ".join(packages)
+        self.__onstart_cmd += f"apt-get install -y {packages_str}\n"
 
-    def uv_pip_install(self, package: str):
+    def uv_pip_install(self, packages: list[str]):
         if not self.__pip_packages_requested:
             self.__onstart_cmd += "curl -LsSf https://astral.sh/uv/install.sh | sh && uv venv && source .venv/bin/activate\n"
             self.__pip_packages_requested = True
 
-        self.__onstart_cmd += f"uv pip install {package}\n"
+        packages_str = " ".join(packages)
+        self.__onstart_cmd += f"uv pip install {packages_str}\n"
 
     def on_start(self, cmd: str):
         self.__onstart_cmd += f"{cmd}\n"
@@ -219,7 +221,7 @@ class Endpoint:
         return vast_download_url_base.rstrip('/') + '/' + blob_id
     def __install_remote_worker_script(self):
         worker_script_download_url = self.__upload_deploy_script()
-        self.apt_get("wget")
+        self.apt_get(["wget"])
         self.__onstart_cmd += f"""
 mkdir -p /workspace
 wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | bash
