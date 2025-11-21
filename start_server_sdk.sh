@@ -4,7 +4,6 @@
 set -e -o pipefail
 
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
-
 ENV_PATH="$WORKSPACE_DIR/worker-env"
 DEBUG_LOG="$WORKSPACE_DIR/debug.log"
 PYWORKER_LOG="$WORKSPACE_DIR/pyworker.log"
@@ -46,14 +45,8 @@ fi
 setup_env() {
     echo "setting up venv"
 
-    # Ensure uv is installed
-    if ! command -v uv >/dev/null 2>&1; then
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        [[ -f ~/.local/bin/env ]] && source ~/.local/bin/env
-    fi
-
-    # (Re)create venv
-    uv venv --python-preference only-managed "$ENV_PATH" -p 3.10
+    # (Re)create venv using python3
+    python3.10 -m venv "$ENV_PATH"
 
     # Activate the newly created venv
     # shellcheck disable=SC1090
@@ -80,9 +73,6 @@ fi
 if [ "$NEED_ENV_SETUP" = true ]; then
     setup_env
 else
-    # uv installer may have dropped this file; source it if present
-    [[ -f ~/.local/bin/env ]] && source ~/.local/bin/env
-
     # Activate existing venv (use ENV_PATH, not WORKSPACE_DIR/worker-env)
     # shellcheck disable=SC1090
     source "$ENV_PATH/bin/activate"
@@ -93,7 +83,7 @@ fi
 
 if [ "${WORKER_SDK:-false}" = true ]; then
     echo "Using Vast.ai SDK"
-    uv pip install git+https://github.com/vast-ai/vast-sdk.git@vast-serve
+    pip install git+https://github.com/vast-ai/vast-sdk.git@vast-serve
 fi
 
 
@@ -141,7 +131,7 @@ WORKER_PATH="worker"
 
 echo "launching PyWorker server at $WORKER_PATH"
 
-uv pip install git+https://github.com/vast-ai/vast-sdk.git@remote
+pip install git+https://github.com/vast-ai/vast-sdk.git@remote
 
 python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
 
