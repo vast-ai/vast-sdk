@@ -56,20 +56,23 @@ class Endpoint:
 
     async def ready(self):
         if (mode := get_mode()) == "deploy":
-            from vastai import Serverless
             from vastai.serverless.remote.template import Template
 
-            async with Serverless() as client:
-                template = Template(
-                    client,
-                    "test-key",
-                    self.image_name,
-                    self.env_vars,
-                    self.disk_space,
-                    template_name=None,
-                    onstart_cmd=self.__onstart_cmd,
-                )
-                print("template:", template)
+            vast_api_key = os.environ.get("VAST_API_KEY")
+            if not vast_api_key:
+                raise ValueError("VAST_API_KEY environment variable is not set")
+
+            template = Template(
+                vast_api_key,
+                self.image_name,
+                self.env_vars,
+                self.disk_space,
+                template_name="template-test",
+                onstart_cmd=self.__onstart_cmd,
+            )
+            template_id = template.create_template()
+            print(f"Template ID: {template_id}")
+
         elif mode == "serve":
             pass
         elif mode == "client":

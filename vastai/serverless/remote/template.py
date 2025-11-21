@@ -1,5 +1,5 @@
-from vastai import Serverless
 from typing import Optional
+import requests
 from ..client.connection import _make_request
 import os
 
@@ -9,7 +9,6 @@ class Template:
 
     def __init__(
         self,
-        client: Serverless,
         api_key: str,
         image_name: str,
         env_vars: dict,
@@ -17,7 +16,6 @@ class Template:
         template_name: Optional[str] = None,
         onstart_cmd: str = "",
     ):
-        self.client = client
         self.api_key = api_key
         self.name = template_name if template_name else f"template-{os.urandom(15)}"
         self.image_name = image_name
@@ -25,24 +23,24 @@ class Template:
         self.disk_space = disk_space
         self.onstart_cmd = onstart_cmd
 
-    async def create_template(self):
+    def create_template(self):
         try:
-            response = await _make_request(
-                client=self.client,
-                url=self.WEBSERVER_URL,
-                route="/api/v0/template/",
-                api_key=self.api_key,
-                method="POST",
-                body={
-                    "name": self.name,
-                    "image": self.image_name,
-                    "env": self.env_vars,
-                    "onstart": self.onstart_cmd,
-                    "recommended_disk_space": self.disk_space,
-                },
-                retries=1,
+            request_body = {
+                "name": self.name,
+                "image": self.image_name,
+                "onstart": self.onstart_cmd,
+                "recommended_disk_space": self.disk_space,
+            }
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            if self.env_vars:
+                request_body["env"] = self.env_vars
+
+            response = requests.post(
+                url=f"{self.WEBSERVER_URL}/api/v0/template/",
+                json=request_body,
+                headers=headers,
             )
 
-            return response["template"]["id"]
+            return response.json()["template"]["id"]
         except Exception as ex:
             raise RuntimeError(f"Failed to create template: {ex}")
