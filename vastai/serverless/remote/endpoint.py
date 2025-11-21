@@ -10,6 +10,7 @@ from anyio import Path
 from vastai.serverless.remote.endpoint_group import EndpointGroup
 from vastai.serverless.remote.worker_group import WorkerGroup
 from vastai.serverless.remote.template import Template
+from vastai.serverless.client.client import client
 
 
 mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
@@ -213,6 +214,122 @@ class Endpoint:
 wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | VAST_REMOTE_DISPATCH_MODE=serve bash
 
 """
+
+    async def poll_for_idle_worker(self, timeout: int = 300, interval: int = 5) -> dict:
+        """
+        Poll the endpoint to check if any worker is in 'idle' status.
+        Shows an animated horse race while waiting for worker to go from 'loading' to 'idle'.
+
+        Args:
+            timeout: Maximum time to wait in seconds (default: 300)
+            interval: Polling interval in seconds (default: 5)
+
+        Returns:
+            dict with 'ready' status and message
+        """
+        from vastai import Serverless
+        import time
+
+        start_time = time.time()
+        track_length = 60
+        horse_position = 0
+        was_loading = False
+
+        def draw_race(position, status_text=""):
+            """Draw the horse race track with the horse at given position"""
+            # Clear line and return to start
+            print("\r" + " " * 100 + "\r", end="")
+
+            # Create the track
+            track = "=" * track_length
+            finish_line = "║"
+
+            # Horse ASCII (alternates for animation effect)
+            horse_frames = [
+                "🐎",
+                "🏇",
+            ]
+            horse = horse_frames[int(position / 2) % 2]
+
+            # Build the race display
+            spaces_before = " " * min(position, track_length - 1)
+            spaces_after = " " * max(0, track_length - position - 1)
+
+            if position >= track_length:
+                # Horse crossed finish line!
+                race_line = f"{track}{finish_line} {horse} 🏁"
+            else:
+                race_line = f"{spaces_before}{horse}{spaces_after}{finish_line}🏁"
+
+            print(f"\r{race_line}  {status_text}", end="", flush=True)
+
+        async with Serverless() as serverless_client:
+            endpoint = await serverless_client.get_endpoint(name=self.name)
+
+            while time.time() - start_time < timeout:
+                try:
+                    workers = await serverless_client.get_endpoint_workers(endpoint)
+
+                    # Check worker statuses
+                    loading_workers = [w for w in workers if w.status.lower() == "loading"]
+                    idle_workers = [w for w in workers if w.status.lower() == "idle"]
+
+                    # Track if we've seen a loading worker
+                    if loading_workers:
+                        was_loading = True
+
+                    # Update horse position based on progress
+                    elapsed = time.time() - start_time
+                    horse_position = int((elapsed / timeout) * track_length)
+
+                    status_text = f"Workers: {len(workers)} | Loading: {len(loading_workers)} | Idle: {len(idle_workers)}"
+                    draw_race(horse_position, status_text)
+
+                    # Check if we transitioned from loading to idle
+                    if was_loading and idle_workers:
+                        # Animate horse crossing finish line!
+                        for i in range(horse_position, track_length + 5):
+                            draw_race(i, status_text)
+                            await asyncio.sleep(0.1)
+
+                        print("\n")  # New line after animation
+
+                        victory_art = """
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║          🏆  WINNER! ENDPOINT READY! 🏆                     ║
+║                                                              ║
+║              ,--,_                                           ║
+║            ,'      `.   The worker has crossed the          ║
+║           /    🐎    \\  finish line!                        ║
+║          |           |                                       ║
+║          |    ___    | Status: LOADING → IDLE ✓             ║
+║           \\  |___|  /                                       ║
+║            `.     ,'   Endpoint: {:<31} ║
+║              `---'     Idle Workers: {:<27} ║
+║                        Total Workers: {:<26} ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+""".format(self.name, len(idle_workers), len(workers))
+
+                        return {
+                            "ready": True,
+                            "message": victory_art,
+                            "idle_workers": len(idle_workers),
+                            "total_workers": len(workers)
+                        }
+
+                except Exception as e:
+                    print(f"\nError checking workers: {e}")
+
+                await asyncio.sleep(interval)
+
+            print("\n")  # New line after timeout
+            return {
+                "ready": False,
+                "message": "⏱️  Timeout: No idle workers found within the specified time",
+                "timeout": timeout
+            }
 
     def ready(self):
         if (mode := get_mode()) == "deploy":
