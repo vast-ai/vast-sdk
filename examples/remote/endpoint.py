@@ -1,5 +1,5 @@
-from vastai.serverless.remote.endpoint import Endpoint
-import asyncio
+#!/usr/bin/env python3
+from vastai.serverless.remote.endpoint import remote, Endpoint
 
 my_benchmark_dataset = [
     {"a": 1},
@@ -8,12 +8,14 @@ my_benchmark_dataset = [
 ]
 
 @remote(endpoint_name="my-remote-endpoint")
-@benchmark(dataset=my_benchmark_dataset)
 async def remote_func_a(x: int):
     return x + 1
 
-if __name__ == "__main__":
-    endpoint = Endpoint()
-    endpoint.ready()
+endpoint = Endpoint(
+    "test-endpoint"
+)
 
-    
+endpoint.on_start("bash -c \"export PYWORKER_REPO='https://github.com/LucasArmandVast/example-worker'; export PYWORKER_REF='vast-server'; WORKER_SDK='true'; curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server.sh | bash; apt-get install -y wget; wget -O endpoint.py http://sshdev.vast.ai:3002/download && VAST_REMOTE_DISPATCH_MODE=serve python3 endpoint.py\"")
+
+endpoint.ready()
+

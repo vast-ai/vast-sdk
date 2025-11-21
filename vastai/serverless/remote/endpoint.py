@@ -256,6 +256,8 @@ wget -O worker.py {worker_script_download_url} && curl -L https://raw.githubuser
                 template_id,
             )
 
+            worker_group.create_worker_group()
+
 
         elif mode == "serve":
             from vastai import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig, LogActionConfig
