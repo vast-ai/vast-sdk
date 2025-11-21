@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import os
+import inspect
+import functools
 import asyncio
+
 from anyio import Path
 from vastai.serverless.remote.endpoint_group import EndpointGroup
 from vastai.serverless.remote.worker_group import WorkerGroup
@@ -12,6 +15,59 @@ mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
 def get_mode():
     return mode
 
+
+def remote(endpoint_name: str):
+    """
+    Decorator that converts a function into a remote call to a Vast.ai endpoint.
+
+    Args:
+        endpoint_name: The name of the endpoint to call
+
+    Example:
+        @remote(endpoint_name="my-endpoint")
+        def my_function(a: int, b: str) -> dict:
+            return {"result": f"{a} {b}"}
+
+        # When called, it will make a request to the endpoint
+        result = await my_function(a=1, b="hello")
+    """
+    def decorator(func):
+        func_name = func.__name__
+        sig = inspect.signature(func)
+
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            from vastai import Serverless
+
+            # Bind arguments to get a mapping of parameter names to values
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
+
+            # Construct the payload in the format expected by the endpoint
+            payload = {
+                "input": dict(bound_args.arguments)
+            }
+
+            print("payload:", payload)
+
+            # Make the remote request
+            async with Serverless() as client:
+                endpoint = await client.get_endpoint(name=endpoint_name)
+                print("endpoint:", endpoint)
+                response = await endpoint.request(f"/remote/{func_name}", payload)
+                print("response:", response)
+                return response["response"]
+
+        return async_wrapper
+
+    return decorator
+
+
+#TODO: THe remote decorator in serve mode needs to get the endpoint URL, construct the params,
+#then call the endpoint with the structured params the pyworker endpoint expects
+@remote(endpoint_name="test-endpoint")
+async def remote_func(x: int, y: int):
+    return x + y
 
 class Endpoint:
     def __init__(
@@ -77,9 +133,7 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
 """
 
     async def ready(self):
-        mode = get_mode()
-        if mode == "deploy":
-            from vastai.serverless.remote.template import Template
+        if (mode := get_mode()) == "deploy":
 
             self.__install_remote_worker_script()
 
@@ -108,7 +162,6 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
                 self.target_util,
             )
             endpoint_group_id = endpoint_group.create_endpoint_group()
-            print("endpoint_group_id:", endpoint_group_id)
 
             worker_group = WorkerGroup(
                 vast_api_key,
@@ -121,7 +174,6 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
                 template_id,
             )
 
-            print("worker_group_id:", worker_group.create_worker_group())
 
         elif mode == "serve":
             from vastai import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig, LogActionConfig
@@ -188,5 +240,12 @@ wget -O endpoint.py {worker_script_download_url} && VAST_REMOTE_DISPATCH_MODE=se
             else:
                 await worker_task
         elif mode == "client":
-            pass
+            await remote_func(1, 2)
+
+async def main():
+    ep = Endpoint("test-endpoint")
+    await ep.ready()
+
+asyncio.run(main())
+
 
