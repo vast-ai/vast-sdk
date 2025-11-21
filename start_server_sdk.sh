@@ -4,7 +4,6 @@
 set -e -o pipefail
 
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
-ENV_PATH="$WORKSPACE_DIR/worker-env"
 DEBUG_LOG="$WORKSPACE_DIR/debug.log"
 PYWORKER_LOG="$WORKSPACE_DIR/pyworker.log"
 
@@ -28,7 +27,6 @@ date
 echo_var REPORT_ADDR
 echo_var WORKER_PORT
 echo_var WORKSPACE_DIR
-echo_var ENV_PATH
 echo_var DEBUG_LOG
 echo_var PYWORKER_LOG
 echo_var WORKER_SDK
@@ -42,44 +40,7 @@ if ! grep -q "VAST" /etc/environment; then
         done > /etc/environment
 fi
 
-setup_env() {
-    echo "setting up venv"
-
-    # (Re)create venv using python3
-    python3.10 -m venv "$ENV_PATH"
-
-    # Activate the newly created venv
-    # shellcheck disable=SC1090
-    source "$ENV_PATH/bin/activate"
-
-    touch ~/.no_auto_tmux
-}
-
-# Decide if we actually have a usable venv
-NEED_ENV_SETUP=false
-
-# Missing directory, or clearly broken / incomplete venv
-if [ ! -d "$ENV_PATH" ] \
-   || [ ! -x "$ENV_PATH/bin/python" ] \
-   || [ ! -f "$ENV_PATH/bin/activate" ]; then
-    NEED_ENV_SETUP=true
-fi
-
-# If we don't have the server checkout yet, treat as needing setup as well
-if [ ! -d "$SERVER_DIR" ]; then
-    NEED_ENV_SETUP=true
-fi
-
-if [ "$NEED_ENV_SETUP" = true ]; then
-    setup_env
-else
-    # Activate existing venv (use ENV_PATH, not WORKSPACE_DIR/worker-env)
-    # shellcheck disable=SC1090
-    source "$ENV_PATH/bin/activate"
-
-    echo "environment activated"
-    echo "venv: $VIRTUAL_ENV"
-fi
+touch ~/.no_auto_tmux
 
 if [ "${WORKER_SDK:-false}" = true ]; then
     echo "Using Vast.ai SDK"
@@ -132,6 +93,9 @@ WORKER_PATH="worker"
 echo "launching PyWorker server at $WORKER_PATH"
 
 pip install git+https://github.com/vast-ai/vast-sdk.git@remote
+pip install torch
 
+#TODO: check if torch is installed here
 python3 -m "$WORKER_PATH" |& tee -a "$PYWORKER_LOG"
+
 
