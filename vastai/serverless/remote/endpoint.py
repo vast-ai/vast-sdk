@@ -185,6 +185,7 @@ class Endpoint:
         disk_space: int = 128,
         model_log_file: str = "/var/log/remote/debug.log",
         model_backend_load_logs: str = ["Remote Dispatch ready"],
+        model_backend_error_logs: str = ["Remote Dispatch error"],
         model_healthcheck_endpoint: str = "health"
     ):
         # --- Endpoint Configuration ---
@@ -217,6 +218,7 @@ class Endpoint:
         self.on_init_function = None
         self.background_task = None
         self.model_backend_load_logs = model_backend_load_logs
+        self.model_backend_error_logs = model_backend_error_logs
 
     def apt_get(self, packages: list[str]):
         packages_str = " ".join(packages)
@@ -341,7 +343,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                 handlers = remote_function_handlers,
                 log_action_config=LogActionConfig(
                     on_load=self.model_backend_load_logs,
-                    on_error=["Remote Dispatch error"]
+                    on_error=self.model_backend_error_logs,
                 )
             )
 
