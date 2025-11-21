@@ -245,7 +245,7 @@ class EndpointHandlerFactory:
                 """
                 try:
                     if self.remote_dispatch_function is not None:
-                        return await self.remote_dispatch_function(params)
+                        return await self.remote_dispatch_function(**params)
                 except Exception as ex:
                     raise Exception(f"Error calling remote dispatch function: {ex}")
                 
