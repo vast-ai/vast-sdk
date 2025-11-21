@@ -55,14 +55,17 @@ class WorkerGroup:
             max_attempts = 60
             time.sleep(5) #INFO: ensures autoscaler has the info to be parsed
             for _ in range(max_attempts):
-                response = requests.post(url=f"{self.AUTOSCALER_URL}/get_endpoint_workers/", json=request_body)
+                try:
+                    response = requests.post(url=f"{self.AUTOSCALER_URL}/get_endpoint_workers/", json=request_body)
+                    response.raise_for_status()
 
-                workers = response.json()
+                    workers = response.json()
 
-
-                for worker in workers:
-                    if worker["status"] == "idle":
-                        return True
+                    for worker in workers:
+                        if worker["status"] == "idle":
+                            return True
+                except Exception:
+                    pass
 
                 time.sleep(5)
 
