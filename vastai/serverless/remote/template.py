@@ -64,6 +64,7 @@ class Template:
             encoded_params = urllib.parse.urlencode(params)
             url = f"{self.WEBSERVER_URL}/api/v0/template/?{encoded_params}"
             response = requests.get(url=url, headers=headers)
+            response.raise_for_status()
 
             template_id_to_delete = None
             for template in response.json()["templates"]:
@@ -72,5 +73,6 @@ class Template:
                     break
 
             response = requests.delete(url=f"{self.WEBSERVER_URL}/api/v0/template/", headers=headers, json={"template_id": template_id_to_delete})
+            response.raise_for_status()
         except Exception as ex:
             raise RuntimeError(f"Failed to teardown template: {ex}")
