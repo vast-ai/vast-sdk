@@ -247,7 +247,7 @@ class EndpointHandlerFactory:
                     if self.remote_dispatch_function is not None:
                         return await self.remote_dispatch_function(params)
                 except Exception as ex:
-                    raise f"Error calling remote dispatch function: {ex}"
+                    raise Exception(f"Error calling remote dispatch function: {ex}")
                 
             async def generate_client_response(
                 self,
