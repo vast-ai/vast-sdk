@@ -7,6 +7,7 @@ import asyncio
 from anyio import Path
 from vastai.serverless.remote.endpoint_group import EndpointGroup
 from vastai.serverless.remote.worker_group import WorkerGroup
+from vastai.serverless.remote.template import Template
 
 
 mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
