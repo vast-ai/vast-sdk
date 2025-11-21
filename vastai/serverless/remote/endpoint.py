@@ -88,10 +88,6 @@ def remote(endpoint_name: str):
                 kwargs_ = {k : deserialize(v,func_mod,func_globals) for k,v in kwargs.items()}
                 return serialize(await func(*args_,**kwargs_),func_mod)
             funcs_for_endpoint[func_name] = inner
-
-            print("Registered remote function: ", funcs_for_endpoint)
-            print("Registered remote function: ", REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME)
-
             # In serve mode, the function should just run locally when called
             # (e.g. useful for tests or local invocation), so we return it unchanged.
             return func
