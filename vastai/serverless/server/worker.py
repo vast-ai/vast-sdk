@@ -239,7 +239,7 @@ class EndpointHandlerFactory:
                 """Just call the payload class's for_test() method"""
                 return PayloadClass.for_test()
             
-            async def call_remote_dispatch_function(params: dict):
+            async def call_remote_dispatch_function(self, params: dict):
                 """
                 define a remote dispatch function for this endpoint, return the result
                 """
