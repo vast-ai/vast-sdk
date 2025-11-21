@@ -144,6 +144,8 @@ def benchmark(
 
     def decorator(func):
         func_mod = func.__globals__['__name__']
+        nonlocal dataset
+        nonlocal generator
         if dataset is not None:
             dataset = [{k: serialize(v, func_mod) for k,v in datum.items()} for datum in dataset]
         if generator is not None:
