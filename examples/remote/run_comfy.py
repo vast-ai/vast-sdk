@@ -8,8 +8,7 @@ def download_base64(data_b64: str, output_path: str = "generated_image.png"):
 
 async def main():
     prompt = "View from a balcony in Tuscany"
-    result = await comfy_endpoint.generate_image(prompt)
-    image_b64 = result.get("result")
+    image_b64 = await comfy_endpoint.generate_image(prompt)
     download_base64(image_b64)
 
 if __name__ == "__main__":

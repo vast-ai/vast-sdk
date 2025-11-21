@@ -72,7 +72,8 @@ def remote(endpoint_name: str):
                     response = await endpoint.request(f"/remote/{func_name}", payload)
                     time_elapsed = time.time() - snapshot_time
                     print(f"Time elapsed: {time_elapsed} seconds")
-                    return deserialize(response["response"],func_mod)
+                    print(response)
+                    return deserialize(response["response"]["result"],func_mod)
 
             return async_wrapper
         elif get_mode() == "serve":
