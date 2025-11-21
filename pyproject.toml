@@ -49,6 +49,7 @@ pycryptodome = "~3.20"
 transformers = "~4.52"
 utils = "==1.0.*"
 hf_transfer = ">=0.1.9"
+aiofiles = ">=23.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
