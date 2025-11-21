@@ -184,6 +184,7 @@ class Endpoint:
         self.model_healthcheck_endpoint = "health"
         self.on_init_function = None
         self.background_task = None
+        self.model_backend_load_logs = ["Remote Dispatch ready"]
 
     def apt_get(self, package: str):
         self.__onstart_cmd += f"apt-get install -y {package}\n"
@@ -296,7 +297,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                 model_log_file=self.model_log_file,
                 handlers = remote_function_handlers,
                 log_action_config=LogActionConfig(
-                    on_load=["Remote Dispatch ready"],
+                    on_load=self.model_backend_load_logs,
                     on_error=["Remote Dispatch error"]
                 )
             )
