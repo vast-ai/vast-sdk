@@ -7,36 +7,49 @@ import requests
 nltk.download("words")
 WORD_LIST = nltk.corpus.words.words()
 
-def completions_benchmark_generator() -> dict:
-    prompt = " ".join(random.choices(WORD_LIST, k=int(250)))
-    model = os.environ.get("MODEL_NAME")
-    if not model:
-        raise ValueError("MODEL_NAME environment variable not set")
+sample_prompts = [
+    "Explain this concept as if I’m five years old.",
+    "Summarize this text in one paragraph.",
+    "Give me pros and cons of this idea.",
+    "Rewrite this in a more formal tone.",
+    "Generate three creative story ideas.",
+    "Explain the steps to solve this problem.",
+    "Suggest improvements to this paragraph.",
+    "Translate this text into Spanish.",
+    "Write a short poem about the ocean.",
+    "Create a bullet-point outline for this topic.",
+    "Give me 10 title ideas for a blog post.",
+    "Suggest debugging steps for this code.",
+    "Explain the meaning of this error message.",
+    "Simplify this technical explanation.",
+    "Brainstorm new product feature ideas.",
+    "Generate realistic test data in JSON format.",
+    "Turn this list into a well-structured table.",
+    "Provide a counter-argument to this claim.",
+    "Rewrite this text to be more concise.",
+    "Create a step-by-step learning plan."
+]
 
-    benchmark_data = {
-        "body": {
-            "model": model,
-            "prompt": prompt,
-            "temperature": 0.7,
-            "max_tokens": 500,
-        }
-    }
 
-    return benchmark_data
+benchmark_dataset = [
+    {
+        "prompt" : prompt
+    } for prompt in sample_prompts
+]
 
 @benchmark(
     endpoint_name="qwendpoint",
-    generator=completions_benchmark_generator
+    dataset=benchmark_dataset
 )
 @remote(endpoint_name="qwendpoint")
-async def llm_infer(body: dict):
+async def llm_completions(prompt: str, max_tokens: int = 1024):
     MODEL_SERVER_URL  = "http://127.0.0.1:18000/v1/completions"
 
     payload = {
-        "model":       body.get("model"),
-        "prompt":      body.get("prompt"),
-        "temperature": body.get("temperature", 0.7),
-        "max_tokens":  body.get("max_tokens", 500),
+        "model":       "Qwen/Qwen3-8B",
+        "prompt":      prompt,
+        "temperature": 0.7,
+        "max_tokens":  max_tokens
     }
 
     try:

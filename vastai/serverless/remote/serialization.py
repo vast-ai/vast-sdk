@@ -45,7 +45,7 @@ def serialize(obj,name:str):
         }
 
 def deserialize(json,name:str,globals):
-    if type(json) in [int,str,float]:
+    if type(json) in [int,str,float,type(None)]:
         return json
     elif json['type'] == 'bytes':
         return base64.b64decode(json['contents'])
