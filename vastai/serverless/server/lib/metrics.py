@@ -246,7 +246,7 @@ class Metrics:
             log.debug(
                 "\n".join(
                     [
-                        "\n#" * 20 + " Worker Status " + "#" * 20,
+                        "\n" + "#" * 20 + " Worker Status " + "#" * 20,
                         f"{json.dumps(log_data, indent=2)}",
                         "#" * 55,
                     ]
