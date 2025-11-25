@@ -13,18 +13,21 @@ log = logging.getLogger(__file__)
 
 async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwargs):
     try:
-        log.debug("getting certificate...")
         use_ssl = os.environ.get("USE_SSL", "false") == "true"
         if use_ssl is True:
-            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            ssl_context.load_cert_chain(
-                certfile="/etc/instance.crt",
-                keyfile="/etc/instance.key",
-            )
+            log.debug("Getting SSL Certificate from /etc/instance.crt")
+            try:
+                ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+                ssl_context.load_cert_chain(
+                    certfile="/etc/instance.crt",
+                    keyfile="/etc/instance.key",
+                )
+            except Exception as ex:
+                raise Exception(f"Failed to get SSL Certificate: {ex}")
         else:
             ssl_context = None
 
-        log.debug("starting server...")
+        log.debug("Starting Worker Server...")
         app = web.Application()
         app.add_routes(routes)
         runner = web.AppRunner(app)
@@ -38,7 +41,7 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
         await gather(site.start(), backend._start_tracking())
 
     except Exception as e:
-        err_msg = f"PyWorker failed to launch: {e}"
+        err_msg = f"Worker Server failed to launch: {e}"
         log.error(err_msg)
 
         async def beacon():

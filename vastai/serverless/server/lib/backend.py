@@ -93,7 +93,7 @@ class Backend:
 
     @cached_property
     def session(self):
-        log.debug(f"starting session with {self.model_server_url}")
+        log.debug(f"Starting TCP session with model server at {self.model_server_url}")
         connector = TCPConnector(
             force_close=True, # Required for long running jobs
             enable_cleanup_closed=True,
@@ -119,14 +119,14 @@ class Backend:
         command = ["curl", "-X", "GET", f"{report_addr}/pubkey/"]
         try:
             result = subprocess.check_output(command, universal_newlines=True)
-            log.debug("public key:")
+            log.debug("Serverless Public Key:")
             log.debug(result)
             key = RSA.import_key(result)
             if key is not None:
                 return key
         except (ValueError , subprocess.CalledProcessError) as e:
             log.debug(f"Error downloading key: {e}")
-        self.backend_errored("Failed to get autoscaler pubkey")
+        self.backend_errored("Failed to get Serverless public key")
        
 
     async def __handle_request(
@@ -162,30 +162,19 @@ class Backend:
 
         async def cancel_api_call_if_disconnected() -> None:
             await request.wait_for_disconnection()
-            log.debug(f"Request with reqnum: {request_metrics.reqnum} was canceled")
             self.metrics._request_canceled(request_metrics)
             return
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
                 response = await self.__call_api(handler=handler, payload=payload)
-                status_code = response.status
-                log.debug(
-                    " ".join(
-                        [
-                            f"request with reqnum:{request_metrics.reqnum}",
-                            f"returned status code: {status_code},",
-                        ]
-                    )
-                )
                 res = await handler.generate_client_response(request, response)
                 self.metrics._request_success(request_metrics)
                 return res
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                log.debug(f"[backend] Request error: {e}")
-                self.metrics._request_errored(request_metrics)
+                self.metrics._request_errored(request_metrics, str(e))
                 return web.Response(status=500)
 
         ###########
@@ -207,7 +196,6 @@ class Backend:
 
         try:
             if handler.allow_parallel_requests:
-                log.debug(f"Starting request for reqnum:{request_metrics.reqnum}")
                 work_task = create_task(make_request())
                 done, pending = await wait([work_task, disconnect_task], return_when=FIRST_COMPLETED)
 
@@ -244,7 +232,7 @@ class Backend:
                     return web.Response(status=499)
 
                 # We are the next-up request in the queue
-                log.debug(f"Starting work on request {request_metrics.reqnum}...")
+                log.debug(f"Starting work on request {request_metrics.reqnum}")
 
                 # Race the backend API call with the disconnect task
                 work_task = create_task(make_request())
@@ -283,7 +271,7 @@ class Backend:
     @cached_property  
     def healthcheck_session(self):
         """Dedicated session for healthchecks to avoid conflicts with API session"""
-        log.debug("creating dedicated healthcheck session")
+        log.debug("Opening healtcheck session")
         connector = TCPConnector(
             force_close=True,  # Keep this for isolation
             enable_cleanup_closed=True,
@@ -329,7 +317,7 @@ class Backend:
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
         api_payload = payload.generate_payload_json()
-        log.debug(f"posting to endpoint: '{handler.endpoint}', payload: {api_payload}")
+        log.debug(f"Posting to '{handler.endpoint}', payload: {api_payload}")
         return await self.session.post(url=handler.endpoint, json=api_payload)
 
     def __check_signature(self, auth_data: AuthData) -> bool:
@@ -354,12 +342,10 @@ class Backend:
             if key != "signature" and key != "__request_id"
         }
         if auth_data.reqnum < (self.reqnum - MSG_HISTORY_LEN):
-            log.debug(
-                f"reqnum failure, got {auth_data.reqnum}, current_reqnum: {self.reqnum}"
-            )
+            log.error(f"Signature error: reqnum failure, got {auth_data.reqnum}, current_reqnum: {self.reqnum}")
             return False
         elif message in self.msg_history:
-            log.debug(f"message: {message} already in message history")
+            log.error(f"Signature error: message {message} already in message history")
             return False
         elif verify_signature(json.dumps(message, indent=4, sort_keys=True), auth_data.signature):
             self.reqnum = max(auth_data.reqnum, self.reqnum)
@@ -367,27 +353,21 @@ class Backend:
             self.msg_history = self.msg_history[-MSG_HISTORY_LEN:]
             return True
         else:
-            log.debug(
-                f"signature verification failed, sig:{auth_data.signature}, message: {message}"
-            )
+            log.error(f"Signature error: signature verification failed, sig:{auth_data.signature}, message: {message}")
             return False
 
     async def __read_logs(self) -> Awaitable[NoReturn]:
 
         async def run_benchmark() -> float:
-            log.debug("starting benchmark")
+            log.debug("Model load detected")
             try:
                 with open(BENCHMARK_INDICATOR_FILE, "r") as f:
-                    log.debug("already ran benchmark")
-                    # trigger model load
-                    # payload = self.benchmark_handler.make_benchmark_payload()
-                    # _ = await self.__call_api(
-                    #     handler=self.benchmark_handler, payload=payload
-                    # )
-                    return float(f.readline())
+                    perf = float(f.readline())
+                    log.debug(f"Already ran benchmark for perf score of {perf}")
+                    return perf
             except FileNotFoundError:
                 pass
-
+            log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
             log.debug("Initial run to trigger model loading...")
             payload = self.benchmark_handler.make_benchmark_payload()
             await self.__call_api(handler=self.benchmark_handler, payload=payload)
@@ -416,7 +396,7 @@ class Backend:
                 successful_responses = sum([1 for br in benchmark_requests if br.is_successful])
                 if successful_responses == 0:
                     self.backend_errored("No successful responses from benchmark")
-                    log.debug(f"benchmark failed: {successful_responses}/{concurrent_requests} successful responses")
+                    log.error(f"Benchmark Failed: No successful responses")
 
                 throughput = total_workload / time_elapsed
                 sum_throughput += throughput
@@ -437,9 +417,7 @@ class Backend:
                 )
 
             average_throughput = sum_throughput / self.benchmark_handler.benchmark_runs
-            log.debug(
-                f"benchmark result: avg {average_throughput} workload per second, max {max_throughput}"
-            )
+            log.debug( f"Benchmark complete: average perf is {average_throughput}, measured perf is {max_throughput}")
             with open(BENCHMARK_INDICATOR_FILE, "w") as f:
                 f.write(str(max_throughput))
             return max_throughput

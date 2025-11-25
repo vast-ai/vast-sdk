@@ -33,7 +33,7 @@ class ApiPayload(ABC):
     @classmethod
     @abstractmethod
     def for_test(cls: Type[ApiPayload_T]) -> ApiPayload_T:
-        """defines how create a payload for load testing"""
+        """defines how to create a payload for load testing"""
         pass
 
     @abstractmethod
@@ -195,7 +195,7 @@ class SystemMetrics:
         self.last_disk_usage = disk_usage
 
     def reset(self, expected: float | None) -> None:
-        # autoscaler excepts model_loading_time to be populated only once, when the instance has
+        # autoscaler expects model_loading_time to be populated only once, when the instance has
         # finished benchmarking and is ready to receive requests. This applies to restarted instances
         # as well: they should send model_loading_time once when they are done loading
         if self.model_loading_time == expected:
@@ -286,8 +286,8 @@ class ModelMetrics:
 
 
 @dataclass
-class AutoScalerData:
-    """Data that is reported to autoscaler"""
+class WorkerStatusData:
+    """Data that is reported to autoscaler's on_status endpoint"""
 
     id: int
     mtoken: str

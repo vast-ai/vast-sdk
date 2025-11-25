@@ -8,7 +8,7 @@ from functools import cache
 import asyncio
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, ClientResponseError
 
-from .data_types import AutoScalerData, SystemMetrics, ModelMetrics, RequestMetrics
+from .data_types import WorkerStatusData, SystemMetrics, ModelMetrics, RequestMetrics
 from typing import Awaitable, NoReturn, List
 
 METRICS_UPDATE_INTERVAL = 1
@@ -58,7 +58,7 @@ class Metrics:
         """
         this function is called prior to forwarding a request to a model API.
         """
-        log.debug("request start")
+        log.debug(f"Starting request {request.reqnum}")
         request.status = "Started"
         self.model_metrics.workload_pending += request.workload
         self.model_metrics.workload_received += request.workload
@@ -70,6 +70,7 @@ class Metrics:
         """
         this function is called after handling of a request ends, regardless of the outcome
         """
+        log.debug(f"Ending request {request.reqnum}")
         self.model_metrics.workload_pending -= request.workload
         self.model_metrics.requests_working.pop(request.reqnum, None)
         self.model_metrics.requests_deleting.append(request)
@@ -79,15 +80,17 @@ class Metrics:
         """
         this function is called after a response from model API is received and forwarded.
         """
+        log.debug(f"Request {request.reqnum} succeeded")
         self.model_metrics.workload_served += request.workload
         request.status = "Success"
         request.success = True
         self.update_pending = True
 
-    def _request_errored(self, request: RequestMetrics) -> None:
+    def _request_errored(self, request: RequestMetrics, message: str) -> None:
         """
         this function is called if model API returns an error
         """
+        log.error(f"Request {request.reqnum} errored: {message}")
         self.model_metrics.workload_errored += request.workload
         request.status = "Error"
         request.success = False
@@ -97,6 +100,7 @@ class Metrics:
         """
         this function is called if client drops connection before model API has responded
         """
+        log.debug(f"Canceling request {request.reqnum}")
         self.model_metrics.workload_cancelled += request.workload
         request.success = True
         request.status = "Cancelled"
@@ -123,10 +127,8 @@ class Metrics:
             await sleep(METRICS_UPDATE_INTERVAL)
             elapsed = time.time() - self.last_metric_update
             if self.system_metrics.model_is_loaded is False and elapsed >= 10:
-                log.debug(f"sending loading model metrics after {int(elapsed)}s wait")
                 await self.__send_metrics_and_reset()
             elif self.update_pending or elapsed > 10:
-                log.debug(f"sending loaded model metrics after {int(elapsed)}s wait")
                 await self.__send_metrics_and_reset()
 
     def _model_loaded(self, max_throughput: float) -> None:
@@ -172,7 +174,7 @@ class Metrics:
                 except (ClientResponseError, Exception) as e:
                     log.debug(f"delete_requests failed with error: {e}")
                 await asyncio.sleep(2)
-                log.debug(f"retrying delete_request, attempt: {attempt}")
+                log.debug(f"Retrying delete_request, attempt: {attempt}")
             return False
 
         # Take a snapshot of what we plan to send this tick.
@@ -211,8 +213,8 @@ class Metrics:
 
         loadtime_snapshot = self.system_metrics.model_loading_time
 
-        def compute_autoscaler_data() -> AutoScalerData:
-            return AutoScalerData(
+        def get_worker_status_data() -> WorkerStatusData:
+            return WorkerStatusData(
                 id=self.id,
                 mtoken=self.mtoken,
                 version=self.version,
@@ -233,21 +235,20 @@ class Metrics:
             )
 
         async def send_data(report_addr: str) -> bool:
-            data = compute_autoscaler_data()
+            data = get_worker_status_data()
             log_data = asdict(data)
             def obfuscate(secret: str) -> str:
                 if secret is None:
                     return ""
-                return secret[:7] + "..." if len(secret) > 7 else ("*" * len(secret))
+                return secret[:7] + "..." if len(secret) > 12 else ("*" * len(secret))
             
             log_data["mtoken"] = obfuscate(log_data.get("mtoken"))
             log.debug(
                 "\n".join(
                     [
-                        "#" * 60,
-                        f"sending data to autoscaler",
+                        "#" * 20 + " Worker Status " + "#" * 20,
                         f"{json.dumps(log_data, indent=2)}",
-                        "#" * 60,
+                        "#" * 55,
                     ]
                 )
             )
@@ -260,12 +261,12 @@ class Metrics:
                         res.raise_for_status()
                     return True
                 except asyncio.TimeoutError:
-                    log.debug(f"autoscaler status update timed out")
+                    log.debug(f"Request to /worker_status/ timed out")
                 except (ClientResponseError, Exception)  as e:
-                    log.debug(f"autoscaler status update failed with error: {e}")
+                    log.debug(f"Request to /worker_status/ failed with error: {e}")
                 await asyncio.sleep(2)
-                log.debug(f"retrying autoscaler status update, attempt: {attempt}")
-            log.debug(f"failed to send update through {report_addr}")
+                log.debug(f"Retrying /worker_status/ request, attempt: {attempt}")
+            log.debug(f"Failed to send worker status through {report_addr}")
             return False
 
         ###########
