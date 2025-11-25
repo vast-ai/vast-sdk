@@ -271,7 +271,7 @@ class Backend:
     @cached_property  
     def healthcheck_session(self):
         """Dedicated session for healthchecks to avoid conflicts with API session"""
-        log.debug("Opening healtcheck session")
+        log.debug("Opening healthcheck session")
         connector = TCPConnector(
             force_close=True,  # Keep this for isolation
             enable_cleanup_closed=True,
