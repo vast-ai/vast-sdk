@@ -10,8 +10,8 @@ async def main():
         workflow = {
           "14": {
             "inputs": {
-              "tags": "slow, ominous, imperial, brass, drums, strings, 65bpm, orchestral, cinematic, march",
-              "lyrics": "[Men's Chant]\nWe. Are. The Empire! [repeats]",
+              "tags": "funk, pop, soul, rock, melodic, guitar, drums, bass, keyboard, percussion, 105 BPM, energetic, upbeat, groovy, vibrant, dynamic",
+              "lyrics": "[verse]\nNeon lights they flicker bright\nCity hums in dead of night\nRhythms pulse through concrete veins\nLost in echoes of refrains\n\n[verse]\nBassline groovin in my chest\nHeartbeats match the citys zest\nElectric whispers fill the air\nSynthesized dreams everywhere\n\n[chorus]\nTurn it up and let it flow\nFeel the fire let it grow\nIn this rhythm we belong\nHear the night sing out our song",
               "lyrics_strength": 0.99,
               "clip": ["40", 1]
             },
