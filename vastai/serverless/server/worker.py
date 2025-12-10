@@ -40,7 +40,6 @@ class BenchmarkConfig:
 class HandlerConfig:
     """Configuration for defining handlers"""
     route: str
-    healthcheck: Optional[str] = None
     allow_parallel_requests: bool = False
     max_queue_time: Optional[float] = 30.0,
     benchmark_config: Optional[BenchmarkConfig] = None
@@ -56,10 +55,8 @@ class WorkerConfig:
     model_server_url: str = None
     model_server_port: int = None
     model_log_file: str = None
-    benchmark_data: list[dict[str, Any]] = field(default_factory=list)
-    handlers: list[HandlerConfig] = field(default_factory=list)
     model_healthcheck_url: str = None
-    benchmark_route: Optional[str] = None
+    handlers: list[HandlerConfig] = field(default_factory=list)
     log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
 
 
@@ -77,7 +74,6 @@ class EndpointHandlerFactory:
         if not self.config.handlers:
             default_handler_config = HandlerConfig(
                 route="/",
-                healthcheck=self.config.model_healthcheck_url
             )
             handler = self._create_handler(default_handler_config)
             self._handlers["/"] = handler
@@ -98,7 +94,6 @@ class EndpointHandlerFactory:
         
         # Extract config values with defaults
         route_path = handler_config.route
-        healthcheck_path = handler_config.healthcheck
         benchmark_config = handler_config.benchmark_config
         user_payload_class = handler_config.payload_class
         user_request_parser = handler_config.request_parser
@@ -168,7 +163,6 @@ class EndpointHandlerFactory:
         @dataclass
         class GenericEndpointHandler(EndpointHandler[PayloadClass]):
             _route: str = field(default=route_path)
-            _healthcheck_endpoint: Optional[str] = field(default=healthcheck_path)
             has_benchmark: bool = field(
                 default=(
                     True if handler_config.benchmark_config
@@ -200,9 +194,10 @@ class EndpointHandlerFactory:
                 """The endpoint is the same as the route"""
                 return self._route
 
+            #Legacy property, unused.
             @property
             def healthcheck_endpoint(self) -> Optional[str]:
-                return self._healthcheck_endpoint
+                return ""
             
             @classmethod
             def payload_cls(cls) -> Type[PayloadClass]:
@@ -331,6 +326,7 @@ class Worker:
             model_log_file=config.model_log_file,
             benchmark_handler=benchmark_handler,
             log_actions=config.log_action_config.log_actions,
+            healthcheck_url=config.model_healthcheck_url
         )
         
         # Attach endpoint handlers to HTTP routes

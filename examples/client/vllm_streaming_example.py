@@ -20,14 +20,12 @@ async def main():
         """
 
         payload = {
-            "input" : {
-                "model": "Qwen/Qwen3-8B",
-                "prompt" : f"{system_prompt}\n{user_prompt}\n",
-                "max_tokens" : MAX_TOKENS,
-                "temperature" : 0.8,
-                "stop" : ["<stop>"],
-                "stream" : True,
-            }
+            "model": "Qwen/Qwen3-8B",
+            "prompt" : f"{system_prompt}\n{user_prompt}\n",
+            "max_tokens" : MAX_TOKENS,
+            "temperature" : 0.8,
+            "stop" : ["<stop>"],
+            "stream" : True,
         }
 
         response = await endpoint.request("/v1/completions", payload, cost=MAX_TOKENS, stream=True)

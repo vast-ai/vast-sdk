@@ -280,7 +280,7 @@ class Backend:
         return ClientSession(timeout=timeout, connector=connector)
 
     async def __healthcheck(self):
-        health_check_url = self.benchmark_handler.healthcheck_endpoint
+        health_check_url = self.healthcheck_url
         if health_check_url is None:
             log.debug("No healthcheck endpoint defined, skipping healthcheck")
             return

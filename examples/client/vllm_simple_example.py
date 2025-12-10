@@ -8,12 +8,10 @@ async def main():
         endpoint = await client.get_endpoint(name="my-vllm-endpoint")
 
         payload = {
-            "input" : {
-                "model": "Qwen/Qwen3-8B",
-                "prompt" : "Who are you?",
-                "max_tokens" : MAX_TOKENS,
-                "temperature" : 0.7
-            }
+            "model": "Qwen/Qwen3-8B",
+            "prompt" : "Who are you?",
+            "max_tokens" : MAX_TOKENS,
+            "temperature" : 0.7
         }
         
         response = await endpoint.request("/v1/completions", payload, cost=MAX_TOKENS)
