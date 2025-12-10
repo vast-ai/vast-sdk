@@ -39,21 +39,17 @@ benchmark_prompts = [
 ]
 
 
-def parse_request(json_msg):
-    return {"input" : json_msg}
 
 benchmark_dataset = [
     {
-        "input": {
-            "request_id": f"test-{random.randint(1000, 99999)}",
-            "modifier": "Text2Image",
-            "modifications": {
-                "prompt": prompt,
-                "width": 512,
-                "height": 512,
-                "steps": 20,
-                "seed": random.randint(0, sys.maxsize)
-            }
+        "request_id": f"test-{random.randint(1000, 99999)}",
+        "modifier": "Text2Image",
+        "modifications": {
+            "prompt": prompt,
+            "width": 512,
+            "height": 512,
+            "steps": 20,
+            "seed": random.randint(0, sys.maxsize)
         }
     } for prompt in benchmark_prompts
 ]
@@ -68,7 +64,6 @@ worker_config = WorkerConfig(
             route="/generate/sync",
             allow_parallel_requests=False,
             max_queue_time=10.0,
-            request_parser=parse_request,
             benchmark_config=BenchmarkConfig(
                 dataset=benchmark_dataset,
             )

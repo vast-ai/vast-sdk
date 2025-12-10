@@ -43,8 +43,6 @@ def benchmark_generator() -> dict:
 
     return benchmark_data
 
-def parse_request(json_msg):
-    return {"input" : json_msg}
 
 worker_config = WorkerConfig(
     model_server_url=MODEL_SERVER_URL,
@@ -56,7 +54,6 @@ worker_config = WorkerConfig(
             route="/generate",
             allow_parallel_requests=True,
             max_queue_time=60.0,
-            request_parser=parse_request,
             benchmark_config=BenchmarkConfig(
                 generator=benchmark_generator,
                 concurrency=50
@@ -67,7 +64,6 @@ worker_config = WorkerConfig(
             route="/generate_stream",
             allow_parallel_requests=True,
             max_queue_time=60.0,
-            request_parser=parse_request,
             workload_calculator= lambda x: x["parameters"]["max_new_tokens"]
         )
     ],

@@ -135,7 +135,7 @@ class EndpointHandlerFactory:
 
                 @classmethod
                 def from_dict(cls, input: Dict[str, Any]) -> "GenericApiPayload":
-                    return cls(input=input["input"])
+                    return cls(input=input)
 
                 def count_workload(self) -> float:
                     # Use custom workload calculator if provided
@@ -156,25 +156,10 @@ class EndpointHandlerFactory:
                         except Exception as e:
                             raise Exception(f"Error in user response handler: {e}")
                         
-                    errors = {}
-
-                    # Validate required parameters
-                    required_params = ["input"]
-                    for param in required_params:
-                        if param not in json_msg:
-                            errors[param] = "missing parameter"
-
-                    if errors:
-                        raise JsonDataException(errors)
-
                     try:
-                        # Create clean data dict and delegate to from_dict
-                        clean_data = {"input": json_msg["input"]}
-                        return cls.from_dict(clean_data)
-
+                        return cls.from_dict(json_msg)
                     except (json.JSONDecodeError, JsonDataException) as e:
-                        errors["parameters"] = str(e)
-                        raise JsonDataException(errors)
+                        raise JsonDataException(f"Error in user response handler: {e}")
 
             
             PayloadClass = GenericApiPayload
