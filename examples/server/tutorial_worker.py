@@ -21,7 +21,10 @@ worker_config = WorkerConfig(
         HandlerConfig(
             # The route on our endpoint that we are handling
             route="/my/route",
-
+            # Enable this if the model backend supports handling multiple requests at once
+            # If 'False', the worker will enforce one request at a time on the
+            # model backend with strict FIFO ordering.
+            allow_parallel_requests=False,
             # --- Benchmark config ---
             # One endpoint handler must implement a BenchmarkConfig
             # The BenchmarkConfig defines sample payloads we use for
@@ -53,7 +56,7 @@ worker_config = WorkerConfig(
     # --- Log Config ---
     # Here, we define various LogActions, which inform our worker
     # of model start, model error, or useful model information.
-    # It's important that your model output's logs to the file
+    # It's important that your model outputs logs to the file
     # specified in `model_log_file`, so the worker knows the state
     # of the model and can react accordingly.
     log_action_config=LogActionConfig(
@@ -66,7 +69,7 @@ worker_config = WorkerConfig(
         # The log lines from our model that indicate
         # the model has suffered an irrecoverable error
         # and our worker must be restarted
-        on_error= [
+        on_error=[
             "INFO exited: vllm",
             "RuntimeError: Engine",
             "Traceback (most recent call last):"
