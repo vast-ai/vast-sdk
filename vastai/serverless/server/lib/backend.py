@@ -10,7 +10,7 @@ from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional
 from functools import cached_property
 from distutils.util import strtobool
 from collections import deque
-
+from asyncio import sleep, CancelledError
 
 from anyio import open_file
 from aiohttp import web, ClientResponse, ClientSession, ClientConnectorError, ClientTimeout, TCPConnector
@@ -267,41 +267,49 @@ class Backend:
             if cleanup_tasks:
                 await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
-
-    @cached_property  
-    def healthcheck_session(self):
-        """Dedicated session for healthchecks to avoid conflicts with API session"""
-        log.debug("Opening healthcheck session")
-        connector = TCPConnector(
-            force_close=True,  # Keep this for isolation
-            enable_cleanup_closed=True,
-        )
-        timeout = ClientTimeout(total=10)  # Reasonable timeout for healthchecks
-        return ClientSession(timeout=timeout, connector=connector)
-
-    async def __healthcheck(self):
-        health_check_url = self.model_server_url + self.healthcheck_url
-        if health_check_url is None:
+    async def __healthcheck(self) -> None:
+        """
+        Periodically hit the healthcheck endpoint using the same session
+        configuration as normal API calls.
+        """
+        health_check_url = self.healthcheck_url
+        if not health_check_url:
             log.debug("No healthcheck endpoint defined, skipping healthcheck")
             return
 
+        # Per-request timeout for healthchecks
+        timeout = ClientTimeout(total=10)
+
         while True:
-            await sleep(10)
-            if self.__start_healthcheck is False:
-                continue
             try:
+                await sleep(10)
+
+                if not self.__start_healthcheck:
+                    continue
+
                 log.debug(f"Performing healthcheck on {health_check_url}")
-                async with self.healthcheck_session.get(health_check_url) as response:
-                    if response.status == 200:
+
+                async with self.session.get(
+                    health_check_url,
+                    timeout=timeout,
+                ) as response:
+                    status = response.status
+
+                    if status == 200:
                         log.debug("Healthcheck successful")
-                    elif response.status == 503:
-                        log.debug(f"Healthcheck failed with status: {response.status}")
-                        self.backend_errored(
-                            f"Healthcheck failed with status: {response.status}"
-                        )
+                    elif status == 503:
+                        msg = f"Healthcheck failed with status: {status}"
+                        log.debug(msg)
+                        self.backend_errored(msg)
                     else:
-                        log.debug(f"Healthcheck Endpoint not ready: {response.status}")
+                        log.debug(f"Healthcheck endpoint not ready: {status}")
+
+            except CancelledError:
+                log.debug("Healthcheck task cancelled; exiting loop")
+                break
+
             except Exception as e:
+
                 log.debug(f"Healthcheck failed with exception: {e}")
                 self.backend_errored(str(e))
 
