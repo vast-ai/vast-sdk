@@ -10,7 +10,7 @@ import argparse
 import os
 import time
 from typing import Dict, List, Tuple, Optional
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 import hashlib
 import math
 import threading
@@ -18,7 +18,6 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 import getpass
 import subprocess
-from time import sleep
 from subprocess import PIPE
 import urllib3
 import atexit
@@ -33,11 +32,9 @@ import warnings
 import importlib.metadata
 
 
-from copy import deepcopy
-
 PYPI_BASE_PATH = "https://pypi.org"
 # INFO - Change to False if you don't want to check for update each run.
-should_check_for_update = False
+should_check_for_update = True
 ARGS = None
 TABCOMPLETE = False
 try:
@@ -69,8 +66,8 @@ except NameError:
 
 
 #server_url_default = "https://vast.ai"
-server_url_default = os.getenv("VAST_URL") or "https://console.vast.ai"
-#server_url_default = "http://localhost:5002"
+server_url_default = "https://console.vast.ai"
+# server_url_default = "http://localhost:5002"
 #server_url_default = "host.docker.internal"
 #server_url_default = "http://localhost:5002"
 #server_url_default  = "https://vast.ai/api/v0"
@@ -112,10 +109,11 @@ def get_pip_version():
 
 
 def is_pip_package():
-    try:
-        return importlib.metadata.metadata("vastai") is not None
-    except Exception:
-        return False
+    script_path = sys.argv[0]
+    executable_name = os.path.basename(script_path)
+
+    return executable_name == "vastai"
+
 
 def get_update_command(stable_version: str) -> str:
     if is_pip_package():
@@ -231,7 +229,7 @@ APIKEY_FILE = os.path.join(DIRS['config'], "vast_api_key")
 APIKEY_FILE_HOME = os.path.expanduser("~/.vast_api_key") # Legacy
 
 if not os.path.exists(APIKEY_FILE) and os.path.exists(APIKEY_FILE_HOME):
-  #print(f'copying key from {APIKEY_FILE_HOME} -> {APIKEY_FILE}')
+  print(f'copying key from {APIKEY_FILE_HOME} -> {APIKEY_FILE}')
   shutil.copyfile(APIKEY_FILE_HOME, APIKEY_FILE)
 
 
@@ -242,25 +240,6 @@ headers = {}
 
 class Object(object):
     pass
-
-def validate_seconds(value):
-    """Validate that the input value is a valid number for seconds between yesterday and Jan 1, 2100."""
-    try:
-        val = int(value)
-        
-        # Calculate min_seconds as the start of yesterday in seconds
-        yesterday = datetime.now() - timedelta(days=1)
-        min_seconds = int(yesterday.timestamp())
-        
-        # Calculate max_seconds for Jan 1st, 2100 in seconds
-        max_date = datetime(2100, 1, 1, 0, 0, 0)
-        max_seconds = int(max_date.timestamp())
-        
-        if not (min_seconds <= val <= max_seconds):
-            raise argparse.ArgumentTypeError(f"{value} is not a valid second timestamp.")
-        return val
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{value} is not a valid integer.")
 
 def strip_strings(value):
     if isinstance(value, str):
@@ -282,10 +261,6 @@ def string_to_unix_epoch(date_string):
         date_object = datetime.strptime(date_string, "%m/%d/%Y")
         return time.mktime(date_object.timetuple())
 
-def unix_to_readable(ts):
-    # ts: integer or float, Unix timestamp
-    return datetime.fromtimestamp(ts).strftime('%H:%M:%S|%h-%d-%Y')
-
 def fix_date_fields(query: Dict[str, Dict], date_fields: List[str]):
     """Takes in a query and date fields to correct and returns query with appropriate epoch dates"""
     new_query: Dict[str, Dict] = {}
@@ -301,10 +276,10 @@ def fix_date_fields(query: Dict[str, Dict], date_fields: List[str]):
 
 
 class argument(object):
-    def __init__(self, *args, mutex_group=None, **kwargs):
+    def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
-        self.mutex_group = mutex_group  # Name of the mutually exclusive group this arg belongs to
+
 
 class hidden_aliases(object):
     # just a bit of a hack
@@ -323,7 +298,7 @@ class hidden_aliases(object):
     def append(self, x):
         self.l.append(x)
 
-def http_request(verb, args, req_url, headers: dict[str, str] | None = None, json = None):
+def http_request(verb, args, req_url, headers = None, json = None):
     t = 0.15
     for i in range(0, args.retry):
         req = requests.Request(method=verb, url=req_url, headers=headers, json=json)
@@ -337,7 +312,7 @@ def http_request(verb, args, req_url, headers: dict[str, str] | None = None, jso
             pp[-3] += "\n "
             parts = [*parts[:-1], *[x.rstrip() for x in "'".join(pp).split("\n")]]
             print("\n" + ' \\\n  '.join(parts).strip() + "\n")
-            sys.exit(0)
+            raise Exception()
         else:
             r = session.send(prep)
 
@@ -351,13 +326,13 @@ def http_request(verb, args, req_url, headers: dict[str, str] | None = None, jso
 def http_get(args, req_url, headers = None, json = None):
     return http_request('GET', args, req_url, headers, json)
 
-def http_put(args, req_url, headers = None, json = {}):
+def http_put(args, req_url, headers, json):
     return http_request('PUT', args, req_url, headers, json)
 
-def http_post(args, req_url, headers = None, json={}):
+def http_post(args, req_url, headers, json={}):
     return http_request('POST', args, req_url, headers, json)
 
-def http_del(args, req_url, headers = None, json={}):
+def http_del(args, req_url, headers, json={}):
     return http_request('DELETE', args, req_url, headers, json)
 
 
@@ -395,10 +370,7 @@ class apwrap(object):
         if not kw.get("parent_only"):
             for x in self.subparser_objs:
                 try:
-                    # Create a global options group for better visual separation
-                    if not hasattr(x, '_global_options_group'):
-                        x._global_options_group = x.add_argument_group('Global options (available for all commands)')
-                    x._global_options_group.add_argument(*a, **kw)
+                    x.add_argument(*a, **kw)
                 except argparse.ArgumentError:
                     # duplicate - or maybe other things, hopefully not
                     pass
@@ -450,8 +422,20 @@ class apwrap(object):
             setattr(func, "mysignature_help", help_)
 
             self.subparser_objs.append(sp)
-            
-            self._process_arguments_with_groups(sp, arguments)
+            for arg in arguments:
+                tsp = sp.add_argument(*arg.args, **arg.kwargs)
+                myCompleter= None
+                comparator = arg.args[0].lower()
+                if comparator.startswith('machine'):
+                  myCompleter = complete_instance_machine
+                elif comparator.startswith('id') or comparator.endswith('id'):
+                  myCompleter = complete_instance
+                elif comparator.startswith('ssh'):
+                  myCompleter = complete_sshkeys
+                  
+                if myCompleter:
+                  setattr(tsp, 'completer', myCompleter)
+
 
             sp.set_defaults(func=func)
             return func
@@ -475,53 +459,6 @@ class apwrap(object):
         for func in self.post_setup:
             func(args)
         return args
-
-    def _process_arguments_with_groups(self, parser_obj, arguments):
-        """Process arguments and handle mutually exclusive groups"""
-        mutex_groups_to_required = {}
-        arg_to_group = {}
-        
-        # Determine if any mutex groups are required
-        for arg in arguments:
-            key = arg.args[0]
-            if arg.mutex_group:
-                is_required = arg.kwargs.pop('required', False)
-                group_name = arg.mutex_group
-                arg_to_group[key] = group_name
-                if mutex_groups_to_required.get(group_name):
-                    continue  # if marked as required then it stays required
-                else:
-                    mutex_groups_to_required[group_name] = is_required
-        
-        name_to_group_parser = {}  # Create mutually exclusive group parsers
-        for group_name, is_required in mutex_groups_to_required.items():
-            mutex_group = parser_obj.add_mutually_exclusive_group(required=is_required)
-            name_to_group_parser[group_name] = mutex_group
-
-        for arg in arguments:  # Add args via the appropriate parser
-            key = arg.args[0]
-            if arg_to_group.get(key):
-                group_parser = name_to_group_parser[arg_to_group[key]]
-                tsp = group_parser.add_argument(*arg.args, **arg.kwargs)
-            else:
-                tsp = parser_obj.add_argument(*arg.args, **arg.kwargs)
-            self._add_completer(tsp, arg)
-            
-
-    def _add_completer(self, tsp, arg):
-        """Helper function to add completers based on argument names"""
-        myCompleter = None
-        comparator = arg.args[0].lower()
-        if comparator.startswith('machine'):
-            myCompleter = complete_instance_machine
-        elif comparator.startswith('id') or comparator.endswith('id'):
-            myCompleter = complete_instance
-        elif comparator.startswith('ssh'):
-            myCompleter = complete_sshkeys
-            
-        if myCompleter:
-            setattr(tsp, 'completer', myCompleter)
-
 
 class MyWideHelpFormatter(argparse.RawTextHelpFormatter):
     def __init__(self, prog):
@@ -568,8 +505,6 @@ def apiurl(args: argparse.Namespace, subpath: str, query_args: Dict = None) -> s
         query_args = {}
     if args.api_key is not None:
         query_args["api_key"] = args.api_key
-    if not re.match(r"^/api/v(\d)+/", subpath):
-        subpath = "/api/v0" + subpath
     
     query_json = None
 
@@ -587,15 +522,15 @@ def apiurl(args: argparse.Namespace, subpath: str, query_args: Dict = None) -> s
             "{x}={y}".format(x=x, y=quote_plus(y if isinstance(y, str) else json.dumps(y))) for x, y in
             query_args.items())
         
-        result = args.url + subpath + "?" + query_json
+        result = args.url + "/api/v0" + subpath + "?" + query_json
     else:
-        result = args.url + subpath
+        result = args.url + "/api/v0" + subpath
 
     if (args.explain):
         print("query args:")
         print(query_args)
         print("")
-        print(f"base: {args.url + subpath + '?'} + query: ")
+        print(f"base: {args.url + '/api/v0' + subpath + '?'} + query: ")
         print(result)
         print("")
     return result
@@ -638,7 +573,6 @@ displayable_fields = (
     ("cpu_ghz", "cpu_ghz", "{:0.1f}", None, True),
     ("cpu_cores_effective", "vCPUs", "{:0.1f}", None, True),
     ("cpu_ram", "RAM", "{:0.1f}", lambda x: x / 1000, False),
-    ("gpu_ram", "VRAM", "{:0.1f}", lambda x: x / 1000, False),
     ("disk_space", "Disk", "{:.0f}", None, True),
     ("dph_total", "$/hr", "{:0.4f}", None, True),
     ("dlperf", "DLP", "{:0.1f}", None, True),
@@ -688,10 +622,6 @@ displayable_fields_reserved = (
 vol_offers_fields = {
         "cpu_arch",
         "cuda_vers",
-        "cluster_id",
-        "nw_disk_min_bw",
-        "nw_disk_avg_bw",
-        "nw_disk_max_bw",
         "datacenter",
         "disk_bw",
         "disk_space",
@@ -700,7 +630,6 @@ vol_offers_fields = {
         "geolocation",
         "gpu_arch",
         "has_avx",
-        "host_id",
         "id",
         "inet_down",
         "inet_up",
@@ -735,23 +664,6 @@ vol_displayable_fields = (
     ("geolocation", "country", "{}", None, True),
 )
 
-nw_vol_displayable_fields = (
-    ("id", "ID", "{}", None, True),
-    ("disk_space", "Disk", "{:.0f}", None, True),
-    ("storage_cost", "$/Gb/Month", "{:.2f}", None, True),
-    ("inet_up", "Net_up", "{:0.1f}", None, True),
-    ("inet_down", "Net_down", "{:0.1f}", None, True),
-    ("reliability", "R", "{:0.1f}", lambda x: x * 100, True),
-    ("duration", "Max_Days", "{:0.1f}", lambda x: x / (24.0 * 60.0 * 60.0), True),
-    ("verification", "status", "{}", None, True),
-    ("host_id", "host_id", "{}", None, True),
-    ("cluster_id", "cluster_id", "{}", None, True),
-    ("geolocation", "country", "{}", None, True),
-    ("nw_disk_min_bw", "Min BW MiB/s", "{}", None, True),
-    ("nw_disk_max_bw", "Max BW MiB/s", "{}", None, True),
-    ("nw_disk_avg_bw", "Avg BW MiB/s", "{}", None, True),
-
-)
 # Need to add bw_nvlink, machine_id, direct_port_count to output.
 
 
@@ -780,38 +692,8 @@ instance_fields = (
     ("uptime_mins", "uptime(mins)", "{:0.2f}",  None, True),
 )
 
-cluster_fields = (
-    ("id", "ID", "{}", None, True),
-    ("subnet", "Subnet", "{}", None, True),
-    ("node_count", "Nodes", "{}", None, True),
-    ("manager_id", "Manager ID", "{}", None, True),
-    ("manager_ip", "Manager IP", "{}", None, True),
-    ("machine_ids", "Machine ID's", "{}", None, True)
-)
-
-network_disk_fields = (
-    ("network_disk_id", "Network Disk ID", "{}", None, True),
-    ("free_space", "Free Space (GB)", "{}", None, True),
-    ("total_space", "Total Space (GB)", "{}", None, True),
-)
-
-network_disk_machine_fields = (
-    ("machine_id", "Machine ID", "{}", None, True),
-    ("mount_point", "Mount Point", "{}", None, True),
-)
-
-overlay_fields = (
-    ("overlay_id", "Overlay ID", "{}", None, True),
-    ("name", "Name", "{}", None, True),
-    ("subnet", "Subnet", "{}", None, True),
-    ("cluster_id", "Cluster ID", "{}", None, True),
-    ("instance_count", "Instances", "{}", None, True),
-    ("instances", "Instance IDs", "{}", None, True),
-)
 volume_fields = (
     ("id", "ID", "{}", None, True),
-    ("cluster_id", "Cluster ID", "{}", None, True),
-    ("label", "Name", "{}", None, True),
     ("disk_space", "Disk", "{:.0f}", None, True),
     ("status", "status", "{}", None, True),
     ("disk_name", "Disk Name", "{}", None, True),
@@ -855,6 +737,7 @@ maintenance_fields = (
     ("end_time", "End (Date/Time)", "{}", lambda x: datetime.fromtimestamp(x).strftime('%Y-%m-%d/%H:%M'), True),
     ("duration_hours", "Duration (Hrs)", "{}", None, True),
     ("maintenance_category", "Category", "{}", None, True),
+    ("maintenance_reason", "Reason", "{}", None, True),
 )
 
 
@@ -870,19 +753,6 @@ audit_log_fields = (
     ("created_at", "created_at", "{}", None, True),
     ("api_route", "api_route", "{}", None, True),
     ("args", "args", "{}", None, True),
-)
-
-
-scheduled_jobs_fields = (
-    ("id", "Scheduled Job ID", "{}", None, True),
-    ("instance_id", "Instance ID", "{}", None, True),
-    ("api_endpoint", "API Endpoint", "{}", None, True),
-    ("start_time", "Start (Date/Time in UTC)", "{}", lambda x: datetime.fromtimestamp(x).strftime('%Y-%m-%d/%H:%M'), True),
-    ("end_time", "End (Date/Time in UTC)", "{}", lambda x: datetime.fromtimestamp(x).strftime('%Y-%m-%d/%H:%M'), True),
-    ("day_of_the_week", "Day of the Week", "{}", None, True),
-    ("hour_of_the_day", "Hour of the Day in UTC", "{}", None, True),
-    ("min_of_the_hour", "Minute of the Hour", "{}", None, True),
-    ("frequency", "Frequency", "{}", None, True),
 )
 
 invoice_fields = (
@@ -1003,8 +873,7 @@ offers_fields = {
     "verification",
     "verified",
     "vms_enabled",
-    "geolocation",
-    "cluster_id"
+    "geolocation"
 }
 
 offers_alias = {
@@ -1185,23 +1054,6 @@ def display_table(rows: list, fields: Tuple, replace_spaces: bool = True) -> Non
         print("  ".join(out))
 
 
-def print_or_page(args, text):
-    """ Print text to terminal, or pipe to pager_cmd if too long. """
-    line_threshold = shutil.get_terminal_size(fallback=(80, 24)).lines
-    lines = text.splitlines()
-    if not args.full and len(lines) > line_threshold:
-        pager_cmd = ['less', '-R'] if shutil.which('less') else None
-        if pager_cmd:
-            proc = subprocess.Popen(pager_cmd, stdin=subprocess.PIPE)
-            proc.communicate(input=text.encode())
-            return True
-        else:
-            print(text)
-            return False
-    else:
-        print(text)
-        return False
-
 class VRLException(Exception):
     pass
 
@@ -1223,6 +1075,10 @@ def parse_vast_url(url_str):
             (instance_id, path) = url_parts
         else:
             raise VRLException("Invalid VRL (Vast resource locator).")
+        try:
+            instance_id = int(instance_id)
+        except:
+            raise VRLException("Instance id must be an integer.")
     else:
         try:
             instance_id = int(path)
@@ -1276,14 +1132,16 @@ def get_ssh_key(argstr):
 @parser.command(
     argument("instance_id", help="id of instance to attach to", type=int),
     argument("ssh_key", help="ssh key to attach to instance", type=str),
-    usage="vastai attach ssh instance_id ssh_key",
+    usage="vastai attach instance_id ssh_key",
     help="Attach an ssh key to an instance. This will allow you to connect to the instance with the ssh key",
     epilog=deindent("""
         Attach an ssh key to an instance. This will allow you to connect to the instance with the ssh key.
 
         Examples:
-         vastai attach ssh 12371 ssh-rsa AAAAB3NzaC1yc2EAAA...
-         vastai attach ssh 12371 ssh-rsa $(cat ~/.ssh/id_rsa)
+         vast attach 12371 ssh-rsa AAAAB3NzaC1yc2EAAA...
+         vast attach 12371 ssh-rsa $(cat ~/.ssh/id_rsa)
+
+        The first example attaches the ssh key to instance 12371
     """),
 )
 def attach__ssh(args):
@@ -1379,56 +1237,11 @@ def cancel__sync(args: argparse.Namespace):
         print(r.text);
         print("failed with error {r.status_code}".format(**locals()));
 
-def default_start_date():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-def default_end_date():
-    return (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d")
-
-def convert_timestamp_to_date(unix_timestamp):
-    utc_datetime = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc)
-    return utc_datetime.strftime("%Y-%m-%d")
-
-def parse_day_cron_style(value):
-    """
-    Accepts an integer string 0-6 or '*' to indicate 'Every day'.
-    Returns 0-6 as int, or None if '*'.
-    """
-    val = str(value).strip()
-    if val == "*":
-        return None
-    try:
-        day = int(val)
-        if 0 <= day <= 6:
-            return day
-    except ValueError:
-        pass
-    raise argparse.ArgumentTypeError("Day must be 0-6 (0=Sunday) or '*' for every day.")
-
-def parse_hour_cron_style(value):
-    """
-    Accepts an integer string 0-23 or '*' to indicate 'Every hour'.
-    Returns 0-23 as int, or None if '*'.
-    """
-    val = str(value).strip()
-    if val == "*":
-        return None
-    try:
-        hour = int(val)
-        if 0 <= hour <= 23:
-            return hour
-    except ValueError:
-        pass
-    raise argparse.ArgumentTypeError("Hour must be 0-23 or '*' for every hour.")
 
 @parser.command(
     argument("id", help="id of instance type to change bid", type=int),
     argument("--price", help="per machine bid price in $/hour", type=float),
-    argument("--schedule", choices=["HOURLY", "DAILY", "WEEKLY"], help="try to schedule a command to run hourly, daily, or monthly. Valid values are HOURLY, DAILY, WEEKLY  For ex. --schedule DAILY"),
-    argument("--start_date", type=str, default=default_start_date(), help="Start date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is now. (optional)"),
-    argument("--end_date", type=str, default=default_end_date(), help="End date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is 7 days from now. (optional)"),
-    argument("--day", type=parse_day_cron_style, help="Day of week you want scheduled job to run on (0-6, where 0=Sunday) or \"*\". Default will be 0. For ex. --day 0", default=0),
-    argument("--hour", type=parse_hour_cron_style, help="Hour of day you want scheduled job to run on (0-23) or \"*\" (UTC). Default will be 0. For ex. --hour 16", default=0),
     usage="vastai change bid id [--price PRICE]",
     help="Change the bid price for a spot/interruptible instance",
     epilog=deindent("""
@@ -1448,15 +1261,6 @@ def change__bid(args: argparse.Namespace):
     if (args.explain):
         print("request json: ")
         print(json_blob)
-
-    if (args.schedule):
-        validate_frequency_values(args.day, args.hour, args.schedule)
-        cli_command = "change bid"
-        api_endpoint = "/api/v0/instances/bid_price/{id}/".format(id=args.id)
-        json_blob["instance_id"] = args.id
-        add_scheduled_job(args, json_blob, cli_command, api_endpoint, "PUT", instance_id=args.id)     
-        return
-    
     r = http_put(args, url, headers=headers, json=json_blob)
     r.raise_for_status()
     print("Per gpu bid price changed".format(r.json()))
@@ -1500,41 +1304,27 @@ def clone__volume(args: argparse.Namespace):
 
 
 @parser.command(
-    argument("src", help="Source location for copy operation (supports multiple formats)", type=str),
-    argument("dst", help="Target location for copy operation (supports multiple formats)", type=str),
+    argument("src", help="instance_id:/path to source of object to copy", type=str),
+    argument("dst", help="instance_id:/path to target of copy operation", type=str),
     argument("-i", "--identity", help="Location of ssh private key", type=str),
     usage="vastai copy SRC DST",
     help="Copy directories between instances and/or local",
     epilog=deindent("""
         Copies a directory from a source location to a target location. Each of source and destination
         directories can be either local or remote, subject to appropriate read and write
-        permissions required to carry out the action.
-
-        Supported location formats:
-        - [instance_id:]path               (legacy format, still supported)
-        - C.instance_id:path              (container copy format)
-        - cloud_service:path              (cloud service format)
-        - cloud_service.cloud_service_id:path  (cloud service with ID)
-        - local:path                      (explicit local path)
-        - V.volume_id:path                (volume copy, see restrictions)
-
+        permissions required to carry out the action. The format for both src and dst is [instance_id:]path.
+                    
         You should not copy to /root or / as a destination directory, as this can mess up the permissions on your instance ssh folder, breaking future copy operations (as they use ssh authentication)
         You can see more information about constraints here: https://vast.ai/docs/gpu-instances/data-movement#constraints
-        Volume copy is currently only supported for copying to other volumes or instances, not cloud services or local.
-
+                    
         Examples:
          vast copy 6003036:/workspace/ 6003038:/workspace/
-         vast copy C.11824:/data/test local:data/test
-         vast copy local:data/test C.11824:/data/test
-         vast copy drive:/folder/file.txt C.6003036:/workspace/
-         vast copy s3.101:/data/ C.6003036:/workspace/
-         vast copy V.1234:/file C.5678:/workspace/
+         vast copy 11824:/data/test data/test
+         vast copy data/test 11824:/data/test
 
         The first example copy syncs all files from the absolute directory '/workspace' on instance 6003036 to the directory '/workspace' on instance 6003038.
-        The second example copy syncs files from container 11824 to the local machine using structured syntax.
-        The third example copy syncs files from local to container 11824 using structured syntax.
-        The fourth example copy syncs files from Google Drive to an instance.
-        The fifth example copy syncs files from S3 bucket with id 101 to an instance.
+        The second example copy syncs the relative directory 'data/test' on the local machine from '/data/test' in instance 11824.
+        The third example copy syncs the directory '/data/test' in instance 11824 from the relative directory 'data/test' on the local machine.
     """),
 )
 def copy(args: argparse.Namespace):
@@ -1573,27 +1363,27 @@ def copy(args: argparse.Namespace):
     if (r.status_code == 200):
         rj = r.json()
         #print(json.dumps(rj, indent=1, sort_keys=True))
-        if (rj["success"]) and ((src_id is None or src_id == "local") or (dst_id is None or dst_id == "local")):
+        if (rj["success"]) and ((src_id is None) or (dst_id is None)):
             homedir = subprocess.getoutput("echo $HOME")
             #print(f"homedir: {homedir}")
             remote_port = None
-            identity = f"-i {args.identity}" if (args.identity is not None) else ""
-            if (src_id is None or src_id == "local"):
+            identity = args.identity if (args.identity is not None) else f"{homedir}/.ssh/id_rsa"
+            if (src_id is None):
                 #result = subprocess.run(f"mkdir -p {src_path}", shell=True)
                 remote_port = rj["dst_port"]
                 remote_addr = rj["dst_addr"]
-                cmd = f"rsync -arz -v --progress --rsh=ssh -e 'ssh {identity} -p {remote_port} -o StrictHostKeyChecking=no' {src_path} vastai_kaalia@{remote_addr}::{dst_id}/{dst_path}"
+                cmd = f"sudo rsync -arz -v --progress --rsh=ssh -e 'sudo ssh -i {identity} -p {remote_port} -o StrictHostKeyChecking=no' {src_path} vastai_kaalia@{remote_addr}::{dst_id}/{dst_path}"
                 print(cmd)
                 result = subprocess.run(cmd, shell=True)
                 #result = subprocess.run(["sudo", "rsync" "-arz", "-v", "--progress", "-rsh=ssh", "-e 'sudo ssh -i {homedir}/.ssh/id_rsa -p {remote_port} -o StrictHostKeyChecking=no'", src_path, "vastai_kaalia@{remote_addr}::{dst_id}"], shell=True)
-            elif (dst_id is None or dst_id == "local"):
+            elif (dst_id is None):
                 result = subprocess.run(f"mkdir -p {dst_path}", shell=True)
                 remote_port = rj["src_port"]
                 remote_addr = rj["src_addr"]
-                cmd = f"rsync -arz -v --progress --rsh=ssh -e 'ssh {identity} -p {remote_port} -o StrictHostKeyChecking=no' vastai_kaalia@{remote_addr}::{src_id}/{src_path} {dst_path}"
+                cmd = f"sudo rsync -arz -v --progress --rsh=ssh -e 'sudo ssh -i {identity} -p {remote_port} -o StrictHostKeyChecking=no' vastai_kaalia@{remote_addr}::{src_id}/{src_path} {dst_path}"
                 print(cmd)
                 result = subprocess.run(cmd, shell=True)
-                #result = subprocess.run(["sudo", "rsync" "-arz", "-v", "--progress", "-rsh=ssh", "-e 'ssh -i {homedir}/.ssh/id_rsa -p {remote_port} -o StrictHostKeyChecking=no'", "vastai_kaalia@{remote_addr}::{src_id}", dst_path], shell=True)
+                #result = subprocess.run(["sudo", "rsync" "-arz", "-v", "--progress", "-rsh=ssh", "-e 'sudo ssh -i {homedir}/.ssh/id_rsa -p {remote_port} -o StrictHostKeyChecking=no'", "vastai_kaalia@{remote_addr}::{src_id}", dst_path], shell=True)
         else:
             if (rj["success"]):
                 print("Remote to Remote copy initiated - check instance status bar for progress updates (~30 seconds delayed).")
@@ -1674,11 +1464,6 @@ def vm__copy(args: argparse.Namespace):
     argument("--ignore-existing", help="skip all files that exist on destination", action="store_true"),
     argument("--update", help="skip files that are newer on the destination", action="store_true"),
     argument("--delete-excluded", help="delete files on dest excluded from transfer", action="store_true"),
-    argument("--schedule", choices=["HOURLY", "DAILY", "WEEKLY"], help="try to schedule a command to run hourly, daily, or monthly. Valid values are HOURLY, DAILY, WEEKLY  For ex. --schedule DAILY"),
-    argument("--start_date", type=str, default=default_start_date(), help="Start date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is now. (optional)"),
-    argument("--end_date", type=str, help="End date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is contract's end. (optional)"),
-    argument("--day", type=parse_day_cron_style, help="Day of week you want scheduled job to run on (0-6, where 0=Sunday) or \"*\". Default will be 0. For ex. --day 0", default=0),
-    argument("--hour", type=parse_hour_cron_style, help="Hour of day you want scheduled job to run on (0-23) or \"*\" (UTC). Default will be 0. For ex. --hour 16", default=0),
     usage="vastai cloud copy --src SRC --dst DST --instance INSTANCE_ID -connection CONNECTION_ID --transfer TRANSFER_TYPE",
     help="Copy files/folders to and from cloud providers",
     epilog=deindent("""
@@ -1693,7 +1478,7 @@ def vm__copy(args: argparse.Namespace):
          1001  test_dir  drive 
          1003  data_dir  drive 
          
-         vastai cloud copy --src /folder --dst /workspace --instance 6003036 --connection 1001 --transfer "Instance To Cloud"
+         vastai cloud_copy --src /folder --dst /workspace --instance 6003036 --connection 1001 --transfer "Instance To Cloud"
 
         The example copies all contents of /folder into /workspace on instance 6003036 from gdrive connection 'test_dir'.
     """),
@@ -1742,202 +1527,15 @@ def cloud__copy(args: argparse.Namespace):
     if (args.explain):
         print("request json: ")
         print(req_json)
-
-    if (args.schedule):
-        validate_frequency_values(args.day, args.hour, args.schedule)
-        req_url = apiurl(args, "/instances/{id}/".format(id=args.instance) , {"owner": "me"} )
-        r = http_get(args, req_url)
-        r.raise_for_status()
-        row = r.json()["instances"]
-        
-        if args.transfer.lower() == "instance to cloud":
-            if row: 
-                # Get the cost per TB of internet upload
-                up_cost = row.get("internet_up_cost_per_tb", None)
-                if up_cost is not None:
-                    confirm = input(
-                        f"Internet upload cost is ${up_cost} per TB. "
-                        "Are you sure you want to schedule a cloud backup? (y/n): "
-                    ).strip().lower()
-                    if confirm != "y":
-                        print("Cloud backup scheduling aborted.")
-                        return
-                else:
-                    print("Warning: Could not retrieve internet upload cost. Proceeding without confirmation. You can use show scheduled-jobs and delete scheduled-job commands to delete scheduled cloud backup job.")
-                
-                cli_command = "cloud copy"
-                api_endpoint = "/api/v0/commands/rclone/"
-                contract_end_date = row.get("end_date", None)
-                add_scheduled_job(args, req_json, cli_command, api_endpoint, "POST", instance_id=args.instance, contract_end_date=contract_end_date)
-                return
-            else:
-                print("Instance not found. Please check the instance ID.")
-                return
-        
+    
     r = http_post(args, url, headers=headers,json=req_json)
     r.raise_for_status()
     if (r.status_code == 200):
         print("Cloud Copy Started - check instance status bar for progress updates (~30 seconds delayed).")
-        print("When the operation is finished you should see 'Cloud Copy Operation Finished' in the instance status bar.")  
+        print("When the operation is finished you should see 'Cloud Cody Operation Finished' in the instance status bar.")  
     else:
         print(r.text);
         print("failed with error {r.status_code}".format(**locals()));
-
-
-@parser.command(
-    argument("instance_id",      help="instance_id of the container instance to snapshot",      type=str),
-    argument("--container_registry", help="Container registry to push the snapshot to. Default will be docker.io", type=str, default="docker.io"),
-    argument("--repo",    help="repo to push the snapshot to",     type=str),
-    argument("--docker_login_user",help="Username for container registry with repo",     type=str),
-    argument("--docker_login_pass",help="Password or token for container registry with repo",     type=str),
-    argument("--pause",            help="Pause container's processes being executed by the CPU to take snapshot (true/false). Default will be true", type=str, default="true"),
-    usage="vastai take snapshot INSTANCE_ID "
-          "--repo REPO --docker_login_user USER --docker_login_pass PASS"
-          "[--container_registry REGISTRY] [--pause true|false]",
-    help="Schedule a snapshot of a running container and push it to your repo in a container registry",
-    epilog=deindent("""
-        Takes a snapshot of a running container instance and pushes snapshot to the specified repository in container registry.
-        
-        Use pause=true to pause the container during commit (safer but slower),
-        or pause=false to leave it running (faster but may produce a filesystem-
-// safer snapshot).
-    """),
-)
-def take__snapshot(args: argparse.Namespace):
-    """
-    Take a container snapshot and push.
-
-    @param instance_id: instance identifier.
-    @param repo: Docker repository for the snapshot.
-    @param container_registry: Container registry
-    @param docker_login_user: Docker registry username.
-    @param docker_login_pass: Docker registry password/token.
-    @param pause: "true" or "false" to pause the container during commit.
-    """
-    instance_id       = args.instance_id
-    repo              = args.repo
-    container_registry = args.container_registry
-    user              = args.docker_login_user
-    password          = args.docker_login_pass
-    pause_flag        = args.pause
-
-    print(f"Taking snapshot for instance {instance_id} and pushing to repo {repo} in container registry {container_registry}")
-    req_json = {
-        "id":               instance_id,
-        "container_registry": container_registry,
-        "personal_repo":    repo,
-        "docker_login_user":user,
-        "docker_login_pass":password,
-        "pause":            pause_flag
-    }
-
-    url = apiurl(args, f"/instances/take_snapshot/{instance_id}/")
-    if args.explain:
-        print("Request JSON:")
-        print(json.dumps(req_json, indent=2))
-
-    # POST to the snapshot endpoint
-    r = http_post(args, url, headers=headers, json=req_json)
-    r.raise_for_status()
-
-    if r.status_code == 200:
-        data = r.json()
-        if data.get("success"):
-            print(f"Snapshot request sent successfully. Please check your repo {repo} in container registry {container_registry} in 5-10 mins. It can take longer than 5-10 mins to push your snapshot image to your repo depending on the size of your image.")
-        else:
-            print(data.get("msg", "Unknown error with snapshot request"))
-    else:
-        print(r.text);
-        print("failed with error {r.status_code}".format(**locals()));
-
-def validate_frequency_values(day_of_the_week, hour_of_the_day, frequency):
-
-    # Helper to raise an error with a consistent message.
-    def raise_frequency_error():
-        msg = ""
-        if frequency == "HOURLY":
-            msg += "For HOURLY jobs, day and hour must both be \"*\"."
-        elif frequency == "DAILY":
-            msg += "For DAILY jobs, day must be \"*\" and hour must have a value between 0-23."
-        elif frequency == "WEEKLY":
-            msg += "For WEEKLY jobs, day must have a value between 0-6 and hour must have a value between 0-23."
-        sys.exit(msg)
-
-    if frequency == "HOURLY":
-        if not (day_of_the_week is None and hour_of_the_day is None):
-            raise_frequency_error()
-    if frequency == "DAILY":
-        if not (day_of_the_week is None and hour_of_the_day is not None):
-            raise_frequency_error()
-    if frequency == "WEEKLY":
-        if not (day_of_the_week is not None and hour_of_the_day is not None):
-            raise_frequency_error()
-
-
-def add_scheduled_job(args, req_json, cli_command, api_endpoint, request_method, instance_id, contract_end_date):
-    start_timestamp, end_timestamp = convert_dates_to_timestamps(args)
-    if args.end_date is None:
-        end_timestamp=contract_end_date
-        args.end_date = convert_timestamp_to_date(contract_end_date)
-
-    if start_timestamp >= end_timestamp:
-        raise ValueError("--start_date must be less than --end_date.")
-
-    day, hour, frequency = args.day, args.hour, args.schedule
-
-    schedule_job_url = apiurl(args, f"/commands/schedule_job/")
-
-    request_body = {
-                "start_time": start_timestamp, 
-                "end_time": end_timestamp, 
-                "api_endpoint": api_endpoint,
-                "request_method": request_method,
-                "request_body": req_json,
-                "day_of_the_week": day,
-                "hour_of_the_day": hour,
-                "frequency": frequency,
-                "instance_id": instance_id
-            }
-                # Send a POST request
-    response = requests.post(schedule_job_url, headers=headers, json=request_body)
-
-    if args.explain:
-        print("request json: ")
-        print(request_body)
-
-        # Handle the response based on the status code
-    if response.status_code == 200:
-        print(f"add_scheduled_job insert: success - Scheduling {frequency} job to {cli_command} from {args.start_date} UTC to {args.end_date} UTC")
-    elif response.status_code == 401:
-        print(f"add_scheduled_job insert: failed status_code: {response.status_code}. It could be because you aren't using a valid api_key.")
-    elif response.status_code == 422:
-        user_input = input("Existing scheduled job found. Do you want to update it (y|n)? ")
-        if user_input.strip().lower() == "y":
-            scheduled_job_id = response.json()["scheduled_job_id"]
-            schedule_job_url = apiurl(args, f"/commands/schedule_job/{scheduled_job_id}/")
-            response = update_scheduled_job(cli_command, schedule_job_url, frequency, args.start_date, args.end_date, request_body)
-        else:
-            print("Job update aborted by the user.")
-    else:
-            # print(r.text)
-        print(f"add_scheduled_job insert: failed error: {response.status_code}. Response body: {response.text}")        
-
-def update_scheduled_job(cli_command, schedule_job_url, frequency, start_date, end_date, request_body):
-    response = requests.put(schedule_job_url, headers=headers, json=request_body)
-
-        # Raise an exception for HTTP errors
-    response.raise_for_status()
-    if response.status_code == 200:
-        print(f"add_scheduled_job update: success - Scheduling {frequency} job to {cli_command} from {start_date} UTC to {end_date} UTC")
-        print(response.json())
-    elif response.status_code == 401:
-        print(f"add_scheduled_job update: failed status_code: {response.status_code}. It could be because you aren't using a valid api_key.")
-    else:
-            # print(r.text)
-        print(f"add_scheduled_job update: failed status_code: {response.status_code}.")
-        print(response.json())
-
-    return response
 
 
 @parser.command(
@@ -1965,36 +1563,6 @@ def create__api_key(args):
     except Exception as e:
         print("An unexpected error occurred:", e)
 
-
-@parser.command(
-    argument("subnet", help="local subnet for cluster, ex: '0.0.0.0/24'", type=str),
-    argument("manager_id", help="Machine ID of manager node in cluster. Must exist already.", type=int),
-    usage="vastai create cluster SUBNET MANAGER_ID",
-    help="Create Vast cluster",
-    epilog=deindent("""
-        Create Vast Cluster by defining a local subnet and manager id.""")
-)
-def create__cluster(args: argparse.Namespace):
-
-    json_blob = {
-        "subnet": args.subnet,
-        "manager_id": args.manager_id
-    }
-
-    #TODO: this should happen at the decorator level for all CLI commands to reduce boilerplate
-    if args.explain:
-        print("request json: ")
-        print(json_blob)
-
-    req_url = apiurl(args, "/cluster/")
-    r  = http_post(args, req_url, json=json_blob)
-    r.raise_for_status()
-
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
-
 @parser.command(
     argument("name", help="Environment variable name", type=str),
     argument("value", help="Environment variable value", type=str),
@@ -2015,183 +1583,43 @@ def create__env_var(args):
         print(f"Failed to create environment variable: {result.get('msg', 'Unknown error')}")
 
 @parser.command(
-    argument("ssh_key", help="add your existing ssh public key to your account (from the .pub file). If no public key is provided, a new key pair will be generated.", type=str, nargs='?'),
-    argument("-y", "--yes", help="automatically answer yes to prompts", action="store_true"),
-    usage="vastai create ssh-key [ssh_public_key] [-y]",
+    argument("ssh_key", help="add the public key of your ssh key to your account (form the .pub file)", type=str),
+    usage="vastai create ssh-key ssh_key",
     help="Create a new ssh-key",
     epilog=deindent("""
-        You may use this command to add an existing public key, or create a new ssh key pair and add that public key, to your Vast account. 
-        
-        If you provide an ssh_public_key.pub argument, that public key will be added to your Vast account. All ssh public keys should be in OpenSSH format.
-        
-                Example: $vastai create ssh-key 'ssh_public_key.pub'
-        
-        If you don't provide an ssh_public_key.pub argument, a new Ed25519 key pair will be generated.
-            
-                Example: $vastai create ssh-key
-                    
-        The generated keys are saved as ~/.ssh/id_ed25519 (private) and ~/.ssh/id_ed25519.pub (public). Any existing id_ed25519 keys are backed up as .backup_<timestamp>.
-        The public key will be added to your Vast account.
-        
-        All ssh public keys are stored in your Vast account and can be used to connect to instances they've been added to.
+        Use this command to create a new ssh key for your account. 
+        All ssh keys are stored in your account and can be used to connect to instances they've been added to
+        All ssh keys should be added in rsa format
     """)
 )
-
 def create__ssh_key(args):
-    ssh_key_content = args.ssh_key
-    
-    # If no SSH key provided, generate one
-    if not ssh_key_content:
-        ssh_key_content = generate_ssh_key(args.yes)
-    else:
-        print("Adding provided SSH public key to account...")
-    
-    # Send the SSH key to the API
     url = apiurl(args, "/ssh/")
-    r = http_post(args, url, headers=headers, json={"ssh_key": ssh_key_content})
+    r = http_post(args, url, headers=headers, json={"ssh_key": args.ssh_key})
     r.raise_for_status()
-    
-    # Print json response
-    print("ssh-key created {}\nNote: You may need to add the new public key to any pre-existing instances".format(r.json()))
-
-
-def generate_ssh_key(auto_yes=False):
-    """
-    Generate a new SSH key pair using ssh-keygen and return the public key content.
-    
-    Args:
-        auto_yes (bool): If True, automatically answer yes to prompts
-    
-    Returns:
-        str: The content of the generated public key
-        
-    Raises:
-        SystemExit: If ssh-keygen is not available or key generation fails
-    """
-    
-    print("No SSH key provided. Generating a new SSH key pair and adding public key to account...")
-    
-    # Define paths
-    ssh_dir = Path.home() / '.ssh'
-    private_key_path = ssh_dir / 'id_ed25519'
-    public_key_path = ssh_dir / 'id_ed25519.pub'
-    
-    # Create .ssh directory if it doesn't exist
-    try:
-        ssh_dir.mkdir(mode=0o700, exist_ok=True)
-    except OSError as e:
-        print(f"Error creating .ssh directory: {e}", file=sys.stderr)
-        sys.exit(1)
-    
-    # Check if any part of the key pair already exists and backup if needed
-    if private_key_path.exists() or public_key_path.exists():
-        print(f"An SSH key pair 'id_ed25519' already exists in {ssh_dir}")
-        if auto_yes:
-            print("Auto-answering yes to backup existing key pair.")
-            response = 'y'
-        else:
-            response = input("Would you like to generate a new key pair and backup your existing id_ed25519 key pair. [y/N]: ").lower()
-        if response not in ['y', 'yes']:
-            print("Aborted. No new key generated.")
-            sys.exit(0)
-        
-        # Generate timestamp for backup
-        timestamp = int(time.time())
-        backup_private_path = ssh_dir / f'id_ed25519.backup_{timestamp}'
-        backup_public_path = ssh_dir / f'id_ed25519.pub.backup_{timestamp}'
-        
-        try:
-            # Backup existing private key if it exists
-            if private_key_path.exists():
-                private_key_path.rename(backup_private_path)
-                print(f"Backed up existing private key to: {backup_private_path}")
-            
-            # Backup existing public key if it exists
-            if public_key_path.exists():
-                public_key_path.rename(backup_public_path)
-                print(f"Backed up existing public key to: {backup_public_path}")
-                
-        except OSError as e:
-            print(f"Error backing up existing SSH keys: {e}", file=sys.stderr)
-            sys.exit(1)
-        
-        print("Generating new SSH key pair and adding public key to account...")
-    
-    # Check if ssh-keygen is available
-    try:
-        subprocess.run(['ssh-keygen', '--help'], capture_output=True, check=False)
-    except FileNotFoundError:
-        print("Error: ssh-keygen not found. Please install OpenSSH client tools.", file=sys.stderr)
-        sys.exit(1)
-    
-    # Generate the SSH key pair
-    try:
-        cmd = [
-            'ssh-keygen',
-            '-t', 'ed25519',       # Ed25519 key type
-            '-f', str(private_key_path),  # Output file path
-            '-N', '',              # Empty passphrase
-            '-C', f'{os.getenv("USER") or os.getenv("USERNAME", "user")}-vast.ai'  # User
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            input='y\n',           # Automatically answer 'yes' to overwrite prompts
-            check=True
-        )
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Error generating SSH key: {e}", file=sys.stderr)
-        if e.stderr:
-            print(f"ssh-keygen error: {e.stderr}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Unexpected error during key generation: {e}", file=sys.stderr)
-        sys.exit(1)
-    
-    # Set proper permissions for the private key
-    try:
-        private_key_path.chmod(0o600)  # Read/write for owner only
-    except OSError as e:
-        print(f"Warning: Could not set permissions for private key: {e}", file=sys.stderr)
-    
-    # Read and return the public key content
-    try:
-        with open(public_key_path, 'r') as f:
-            public_key_content = f.read().strip()
-        
-        return public_key_content
-        
-    except IOError as e:
-        print(f"Error reading generated public key: {e}", file=sys.stderr)
-        sys.exit(1)
+    print("ssh-key created {}".format(r.json()))
 
 @parser.command(
     argument("--template_hash", help="template hash (required, but **Note**: if you use this field, you can skip search_params, as they are automatically inferred from the template)", type=str),
     argument("--template_id",   help="template id (optional)", type=int),
     argument("-n", "--no-default", action="store_true", help="Disable default search param query args"),
     argument("--launch_args",   help="launch args  string for create instance  ex: \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\"", type=str),
-    argument("--endpoint_name", help="deployment endpoint name (allows multiple workergroups to share same deployment endpoint)", type=str),
-    argument("--endpoint_id",   help="deployment endpoint id (allows multiple workergroups to share same deployment endpoint)", type=int),
-    argument("--test_workers",help="number of workers to create to get an performance estimate for while initializing workergroup (default 3)", type=int, default=3),
+    argument("--endpoint_name", help="deployment endpoint name (allows multiple autoscale groups to share same deployment endpoint)", type=str),
+    argument("--endpoint_id",   help="deployment endpoint id (allows multiple autoscale groups to share same deployment endpoint)", type=int),
+    argument("--test_workers",help="number of workers to create to get an performance estimate for while initializing autogroup (default 3)", type=int, default=3),
     argument("--gpu_ram",     help="estimated GPU RAM req  (independent of search string)", type=float),
     argument("--search_params", help="search param string for search offers    ex: \"gpu_ram>=23 num_gpus=2 gpu_name=RTX_4090 inet_down>200 direct_port_count>2 disk_space>=64\"", type=str),
-    argument("--min_load", help="[NOTE: this field isn't currently used at the workergroup level] minimum floor load in perf units/s  (token/s for LLms)", type=float),
-    argument("--target_util", help="[NOTE: this field isn't currently used at the workergroup level] target capacity utilization (fraction, max 1.0, default 0.9)", type=float),
-    argument("--cold_mult",   help="[NOTE: this field isn't currently used at the workergroup level]cold/stopped instance capacity target as multiple of hot capacity target (default 2.0)", type=float),
-    argument("--cold_workers",   help="min number of workers to keep 'cold' for this workergroup", type=int),
-    argument("--auto_instance", help=argparse.SUPPRESS, type=str, default="prod"),
-    usage="vastai workergroup create [OPTIONS]",
+    argument("--min_load", help="[NOTE: this field isn't currently used at the autojob level] minimum floor load in perf units/s  (token/s for LLms)", type=float),
+    argument("--target_util", help="[NOTE: this field isn't currently used at the autojob level] target capacity utilization (fraction, max 1.0, default 0.9)", type=float),
+    argument("--cold_mult",   help="[NOTE: this field isn't currently used at the autojob level]cold/stopped instance capacity target as multiple of hot capacity target (default 2.0)", type=float),
+    usage="vastai autogroup create [OPTIONS]",
     help="Create a new autoscale group",
     epilog=deindent("""
         Create a new autoscaling group to manage a pool of worker instances.
                     
-        Example: vastai create workergroup --template_hash HASH  --endpoint_name "LLama" --test_workers 5
+        Example: vastai create autogroup --template_hash HASH  --endpoint_name "LLama" --test_workers 5
         """),
 )
-def create__workergroup(args):
+def create__autogroup(args):
     url = apiurl(args, "/autojobs/" )
 
     # if args.launch_args_dict:
@@ -2204,8 +1632,8 @@ def create__workergroup(args):
         #query = {"verified": {"eq": True}, "external": {"eq": False}, "rentable": {"eq": True}, "rented": {"eq": False}}
     search_params = (args.search_params if args.search_params is not None else "" + query).strip()
 
-    json_blob = {"client_id": "me", "min_load": args.min_load, "target_util": args.target_util, "cold_mult": args.cold_mult, "cold_workers" : args.cold_workers, "test_workers" : args.test_workers, "template_hash": args.template_hash, "template_id": args.template_id, "search_params": search_params, "launch_args": args.launch_args, "gpu_ram": args.gpu_ram, "endpoint_name": args.endpoint_name, "endpoint_id": args.endpoint_id, "autoscaler_instance": args.auto_instance}
-
+    json_blob = {"client_id": "me", "min_load": args.min_load, "target_util": args.target_util, "cold_mult": args.cold_mult, "test_workers" : args.test_workers, "template_hash": args.template_hash, "template_id": args.template_id, "search_params": search_params, "launch_args": args.launch_args, "gpu_ram": args.gpu_ram, "endpoint_name": args.endpoint_name, "endpoint_id": args.endpoint_id}
+    
     if (args.explain):
         print("request json: ")
         print(json_blob)
@@ -2213,7 +1641,7 @@ def create__workergroup(args):
     r.raise_for_status()
     if 'application/json' in r.headers.get('Content-Type', ''):
         try:
-            print("workergroup create {}".format(r.json()))
+            print("autogroup create {}".format(r.json()))
         except requests.exceptions.JSONDecodeError:
             print("The response is not valid JSON.")
             print(r)
@@ -2225,14 +1653,11 @@ def create__workergroup(args):
 
 @parser.command(
     argument("--min_load", help="minimum floor load in perf units/s  (token/s for LLms)", type=float, default=0.0),
-    argument("--min_cold_load", help="minimum floor load in perf units/s (token/s for LLms), but allow handling with cold workers", type=float, default=0.0),
     argument("--target_util", help="target capacity utilization (fraction, max 1.0, default 0.9)", type=float, default=0.9),
     argument("--cold_mult",   help="cold/stopped instance capacity target as multiple of hot capacity target (default 2.5)", type=float, default=2.5),
     argument("--cold_workers", help="min number of workers to keep 'cold' when you have no load (default 5)", type=int, default=5),
     argument("--max_workers", help="max number of workers your endpoint group can have (default 20)", type=int, default=20),
     argument("--endpoint_name", help="deployment endpoint name (allows multiple autoscale groups to share same deployment endpoint)", type=str),
-    argument("--auto_instance", help=argparse.SUPPRESS, type=str, default="prod"),
-
     usage="vastai create endpoint [OPTIONS]",
     help="Create a new endpoint group",
     epilog=deindent("""
@@ -2244,8 +1669,8 @@ def create__workergroup(args):
 def create__endpoint(args):
     url = apiurl(args, "/endptjobs/" )
 
-    json_blob = {"client_id": "me", "min_load": args.min_load, "min_cold_load":args.min_cold_load, "target_util": args.target_util, "cold_mult": args.cold_mult, "cold_workers" : args.cold_workers, "max_workers" : args.max_workers, "endpoint_name": args.endpoint_name, "autoscaler_instance": args.auto_instance}
-
+    json_blob = {"client_id": "me", "min_load": args.min_load, "target_util": args.target_util, "cold_mult": args.cold_mult, "cold_workers" : args.cold_workers, "max_workers" : args.max_workers, "endpoint_name": args.endpoint_name}
+    
     if (args.explain):
         print("request json: ")
         print(json_blob)
@@ -2269,7 +1694,7 @@ def get_runtype(args):
     if (args.args == '') or (args.args == ['']) or (args.args == []):
         runtype = 'args'
         args.args = None
-    if not args.jupyter and (args.jupyter_dir or args.jupyter_lab):
+    if args.jupyter_dir or args.jupyter_lab:
         args.jupyter = True
     if args.jupyter and runtype == 'args':
         print("Error: Can't use --jupyter and --args together. Try --onstart or --onstart-cmd instead of --args.", file=sys.stderr)
@@ -2277,49 +1702,12 @@ def get_runtype(args):
 
     if args.jupyter:
         runtype = 'jupyter_direc ssh_direc ssh_proxy' if args.direct else 'jupyter_proxy ssh_proxy'
-    elif args.ssh:
+
+    if args.ssh:
         runtype = 'ssh_direc ssh_proxy' if args.direct else 'ssh_proxy'
 
     return runtype
 
-def validate_volume_params(args):
-    if args.volume_size and not args.create_volume:
-        raise argparse.ArgumentTypeError("Error: --volume-size can only be used with --create-volume. Please specify a volume ask ID to create a new volume of that size.")
-    if (args.create_volume or args.link_volume) and not args.mount_path:
-        raise argparse.ArgumentTypeError("Error: --mount-path is required when creating or linking a volume.")
-
-    # This regex matches absolute or relative Linux file paths (no null bytes)
-    valid_linux_path_regex = re.compile(r'^(/)?([^/\0]+(/)?)+$')
-    if not valid_linux_path_regex.match(args.mount_path):
-        raise argparse.ArgumentTypeError(f"Error: --mount-path '{args.mount_path}' is not a valid Linux file path.")
-    
-    volume_info = {
-        "mount_path": args.mount_path,
-        "create_new": True if args.create_volume else False,
-        "volume_id": args.create_volume if args.create_volume else args.link_volume
-    }
-    if args.volume_label:
-        volume_info["name"] = args.volume_label
-    if args.volume_size:
-        volume_info["size"] = args.volume_size
-    elif args.create_volume:  # If creating a new volume and size is not passed in, default size is 15GB
-        volume_info["size"] = 15
-
-    return volume_info
-
-def validate_portal_config(json_blob):
-    # jupyter runtypes already self-correct
-    if 'jupyter' in json_blob['runtype']:
-        return
-    
-    # remove jupyter configs from portal_config if not a jupyter runtype
-    portal_config = json_blob['env']['PORTAL_CONFIG'].split("|")
-    filtered_config = [config_str for config_str in portal_config if 'jupyter' not in config_str.lower()]
-    
-    if not filtered_config:
-        raise ValueError("Error: env variable PORTAL_CONFIG must contain at least one non-jupyter related config string if runtype is not jupyter")
-    else:
-        json_blob['env']['PORTAL_CONFIG'] = "|".join(filtered_config)
 
 @parser.command(
     argument("id", help="id of instance type to launch (returned from search offers)", type=int),
@@ -2346,12 +1734,6 @@ def validate_portal_config(json_blob):
     argument("--force", help="Skip sanity checks when creating from an existing instance", action="store_true"),
     argument("--cancel-unavail", help="Return error if scheduling fails (rather than creating a stopped instance)", action="store_true"),
     argument("--bid_price", help="(OPTIONAL) create an INTERRUPTIBLE instance with per machine bid price in $/hour", type=float),
-    argument("--create-volume", metavar="VOLUME_ASK_ID", help="Create a new local volume using an ID returned from the \"search volumes\" command and link it to the new instance", type=int),
-    argument("--link-volume", metavar="EXISTING_VOLUME_ID", help="ID of an existing rented volume to link to the instance during creation. (returned from \"show volumes\" cmd)", type=int),
-    argument("--volume-size", help="Size of the volume to create in GB. Only usable with --create-volume (default 15GB)", type=int),
-    argument("--mount-path", help="The path to the volume from within the new instance container. e.g. /root/volume", type=str),
-    argument("--volume-label", help="(optional) A name to give the new volume. Only usable with --create-volume", type=str),
-    
     usage="vastai create instance ID [OPTIONS] [--args ...]",
     help="Create a new instance",
     epilog=deindent("""
@@ -2420,9 +1802,6 @@ def create__instance(args: argparse.Namespace):
         "user": args.user
     }
 
-    if args.create_volume or args.link_volume:
-        volume_info = validate_volume_params(args)
-        json_blob["volume_info"] = volume_info
 
     if args.template_hash is None:
         runtype = get_runtype(args)
@@ -2432,9 +1811,6 @@ def create__instance(args: argparse.Namespace):
 
     if (args.args != None):
         json_blob["args"] = args.args
-
-    if "PORTAL_CONFIG" in json_blob["env"]:
-        validate_portal_config(json_blob)
 
     #print(f"put asks/{args.id}/  runtype:{runtype}")
     url = apiurl(args, "/asks/{id}/".format(id=args.id))
@@ -2505,27 +1881,12 @@ def create__subaccount(args):
     usage="vastai create-team --team_name TEAM_NAME",
     help="Create a new team",
     epilog=deindent("""
-         Creates a new team under your account. 
-
-        Unlike legacy teams, this command does NOT convert your personal account into a team.
-        Each team is created as a separate account, and you can be a member of multiple teams.
-
-        When you create a team:
-          - You become the team owner.
-          - The team starts as an independent account with its own billing, credits, and resources.
-          - Default roles (owner, manager, member) are automatically created.
-          - You can invite others, assign roles, and manage resources within the team.
-
-        Optional:
-          You can transfer a portion of your existing personal credits to the team by using 
-          the `--transfer_credit` flag. Example:
-              vastai create-team --team_name myteam --transfer_credit 25
-
-        Notes:
-          - You cannot create a team from within another team account.
-
-        For more details, see:
-        https://vast.ai/docs/teams-quickstart
+        As of right now creating a team account will convert your current account into a team account. 
+        Once you convert your user account into a team account, this change is permanent and cannot be reversed. 
+        The created team account will inherit all aspects of your existing user account, including billing information, cloud services, and any other account settings.
+        The user who initiates the team creation becomes the team owner. 
+        Carefully evaluate the decision to convert your user account into a team account, as this change is permanent.
+        For more information see: https://vast.ai/docs/team/introduction
     """)
 )
 
@@ -2650,8 +2011,7 @@ def create__template(args):
 @parser.command(
     argument("id", help="id of volume offer", type=int),
     argument("-s", "--size",
-             help="size in GB of volume. Default %(default)s GB.", default=15, type=float),
-    argument("-n", "--name", help="Optional name of volume.", type=str),
+             help="size in GB of volume. Default 15 GB.", type=float),
     usage="vastai create volume ID [options]",
     help="Create a new volume",
     epilog=deindent("""
@@ -2661,12 +2021,14 @@ def create__template(args):
 )
 def create__volume(args: argparse.Namespace):
     
+    size = args.size
+    
+    if not size:
+        size = 15.0
     json_blob ={
-        "size": int(args.size),
-        "id": int(args.id)
+        "size": size,
+        "id": args.id
     }
-    if args.name:
-        json_blob["name"] = args.name
 
     url = apiurl(args, "/volumes/")
 
@@ -2680,65 +2042,6 @@ def create__volume(args: argparse.Namespace):
     else:
         print("Created. {}".format(r.json()))
 
-
-@parser.command(
-    argument("id", help="id of network volume offer", type=int),
-    argument("-s", "--size",
-             help="size in GB of network volume. Default %(default)s GB.", default=15, type=float),
-    argument("-n", "--name", help="Optional name of network volume.", type=str),
-    usage="vastai create network volume ID [options]",
-    help="Create a new network volume",
-    epilog=deindent("""
-        Creates a network volume from an offer ID (which is returned from "search network volumes"). Each offer ID can be used to create multiple volumes,
-        provided the size of all volumes does not exceed the size of the offer.
-    """)
-)
-def create__network_volume(args: argparse.Namespace):
-    
-    json_blob ={
-        "size": int(args.size),
-        "id": int(args.id)
-    }
-    if args.name:
-        json_blob["name"] = args.name
-
-    url = apiurl(args, "/network_volumes/")
-
-    if (args.explain):
-        print("request json: ")
-        print(json_blob)
-    r = http_put(args, url,  headers=headers,json=json_blob)
-    r.raise_for_status()
-    if args.raw:
-        return r
-    else:
-        print("Created. {}".format(r.json()))
-
-@parser.command(
-    argument("cluster_id", help="ID of cluster to create overlay on top of", type=int),
-    argument("name", help="overlay network name"),
-    usage="vastai create overlay CLUSTER_ID OVERLAY_NAME",
-    help="Creates overlay network on top of a physical cluster",
-    epilog=deindent("""
-    Creates an overlay network to allow local networking between instances on a physical cluster""")
-)
-def create__overlay(args: argparse.Namespace):
-    json_blob = {
-        "cluster_id": args.cluster_id,
-        "name": args.name
-    }
-
-    if args.explain:
-        print("request json:", json_blob)
-
-    req_url = apiurl(args, "/overlay/")
-    r = http_post(args, req_url, json=json_blob)
-    r.raise_for_status()
-
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
 
 @parser.command(
     argument("id", help="id of apikey to remove", type=int),
@@ -2763,53 +2066,15 @@ def delete__ssh_key(args):
     print(r.json())
 
 @parser.command(
-    argument("id", help="id of scheduled job to remove", type=int),
-    usage="vastai delete scheduled-job ID",
-    help="Delete a scheduled job",
-)
-def delete__scheduled_job(args):
-    url = apiurl(args, "/commands/schedule_job/{id}/".format(id=args.id))
-    r = http_del(args, url, headers=headers)
-    r.raise_for_status()
-    print(r.json())
-
-
-
-@parser.command(
-    argument("cluster_id", help="ID of cluster to delete", type=int),
-    usage="vastai delete cluster CLUSTER_ID",
-    help="Delete Cluster",
-    epilog=deindent("""
-        Delete Vast Cluster""")
-)
-def delete__cluster(args: argparse.Namespace):
-    json_blob = {
-        "cluster_id": args.cluster_id
-    }
-
-    if args.explain:
-        print("request json:", json_blob)
-
-    req_url = apiurl(args, "/cluster/")
-    r = http_del(args, req_url, json=json_blob)
-    r.raise_for_status()
-
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
-
-
-@parser.command(
     argument("id", help="id of group to delete", type=int),
-    usage="vastai delete workergroup ID ",
-    help="Delete a workergroup group",
+    usage="vastai delete autogroup ID ",
+    help="Delete an autogroup group",
     epilog=deindent("""
-        Note that deleting a workergroup doesn't automatically destroy all the instances that are associated with your workergroup.
-        Example: vastai delete workergroup 4242
+        Note that deleteing an autogroup group doesn't automatically destroy all the instances that are associated with your autogroup group.
+        Example: vastai delete autogroup 4242
     """),
 )
-def delete__workergroup(args):
+def delete__autogroup(args):
     id  = args.id
     url = apiurl(args, f"/autojobs/{id}/" )
     json_blob = {"client_id": "me", "autojob_id": args.id}
@@ -2820,7 +2085,7 @@ def delete__workergroup(args):
     r.raise_for_status()
     if 'application/json' in r.headers.get('Content-Type', ''):
         try:
-            print("workergroup delete {}".format(r.json()))
+            print("autogroup delete {}".format(r.json()))
         except requests.exceptions.JSONDecodeError:
             print("The response is not valid JSON.")
             print(r)
@@ -2834,6 +2099,7 @@ def delete__workergroup(args):
     usage="vastai delete endpoint ID ",
     help="Delete an endpoint group",
     epilog=deindent("""
+        Note that deleting an endpoint group doesn't automatically destroy all the instances that are associated with your endpoint group, nor all the autogroups.
         Example: vastai delete endpoint 4242
     """),
 )
@@ -2874,35 +2140,6 @@ def delete__env_var(args):
         print(result.get("msg", "Environment variable deleted successfully."))
     else:
         print(f"Failed to delete environment variable: {result.get('msg', 'Unknown error')}")
-
-@parser.command(
-    argument("overlay_identifier", help="ID (int) or name (str) of overlay to delete", nargs="?"),
-    usage="vastai delete overlay OVERLAY_IDENTIFIER",
-    help="Deletes overlay and removes all of its associated instances"
-)
-def delete__overlay(args: argparse.Namespace):
-    identifier = args.overlay_identifier
-    try:
-        overlay_id = int(identifier)
-        json_blob = {
-            "overlay_id": overlay_id
-        }
-    except (ValueError, TypeError):
-        json_blob = {
-            "overlay_name": identifier
-        }
-
-    if args.explain:
-        print("request json:", json_blob)
-
-    req_url = apiurl(args, "/overlay/")
-    r = http_del(args, req_url, json=json_blob)
-    r.raise_for_status()
-
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
 
 @parser.command(
     argument("--template-id", help="Template ID of Template to Delete", type=int),
@@ -3036,11 +2273,6 @@ def detach__ssh(args):
 @parser.command(
     argument("id", help="id of instance to execute on", type=int),
     argument("COMMAND", help="bash command surrounded by single quotes",  type=str),
-    argument("--schedule", choices=["HOURLY", "DAILY", "WEEKLY"], help="try to schedule a command to run hourly, daily, or monthly. Valid values are HOURLY, DAILY, WEEKLY  For ex. --schedule DAILY"),
-    argument("--start_date", type=str, default=default_start_date(), help="Start date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is now. (optional)"),
-    argument("--end_date", type=str, default=default_end_date(), help="End date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is 7 days from now. (optional)"),
-    argument("--day", type=parse_day_cron_style, help="Day of week you want scheduled job to run on (0-6, where 0=Sunday) or \"*\". Default will be 0. For ex. --day 0", default=0),
-    argument("--hour", type=parse_hour_cron_style, help="Hour of day you want scheduled job to run on (0-23) or \"*\" (UTC). Default will be 0. For ex. --hour 16", default=0),
     usage="vastai execute id COMMAND",
     help="Execute a (constrained) remote command on a machine",
     epilog=deindent("""
@@ -3071,14 +2303,6 @@ def execute(args):
     r = http_put(args, url,  headers=headers,json=json_blob )
     r.raise_for_status()
 
-    if (args.schedule):
-        validate_frequency_values(args.day, args.hour, args.schedule)
-        cli_command = "execute"
-        api_endpoint = "/api/v0/instances/command/{id}/".format(id=args.id)
-        json_blob["instance_id"] = args.id
-        add_scheduled_job(args, json_blob, cli_command, api_endpoint, "PUT", instance_id=args.id)
-        return
-
     if (r.status_code == 200):
         rj = r.json()
         if (rj["success"]):
@@ -3097,11 +2321,9 @@ def execute(args):
         print("failed with error {r.status_code}".format(**locals()));
 
 
-
 @parser.command(
-    argument("id", help="id of endpoint group to fetch logs from", type=int),
+    argument("id", help="id of instance to execute on", type=int),
     argument("--level", help="log detail level (0 to 3)", type=int, default=1),
-    argument("--tail", help="", type=int, default=None),
     usage="vastai get endpt-logs ID [--api-key API_KEY]",
     help="Fetch logs for a specific serverless endpoint group",
     epilog=deindent("""
@@ -3110,17 +2332,18 @@ def execute(args):
 )
 def get__endpt_logs(args):
     #url = apiurl(args, "/endptjobs/" )
-    if args.url == server_url_default:
-        args.url = None
-    url = (args.url or "https://run.vast.ai") + "/get_endpoint_logs/"
+    url = "https://run.vast.ai/get_endpoint_logs/"
     json_blob = {"id": args.id, "api_key": args.api_key}
-    if args.tail: json_blob["tail"] = args.tail
     if (args.explain):
         print(f"{url} with request json: ")
         print(json_blob)
 
+    #response = requests.post(f"{server_addr}/route/", headers={"Content-Type": "application/json"}, data=json.dumps(route_payload), timeout=4)
+    #response.raise_for_status()  # Raises HTTPError for bad responses
+
     r = http_post(args, url, headers=headers,json=json_blob)
     r.raise_for_status()
+    #print("autogroup list ".format(r.json()))
     levels = {0 : "info0", 1: "info1", 2: "trace", 3: "debug"}
 
     if (r.status_code == 200):
@@ -3135,52 +2358,11 @@ def get__endpt_logs(args):
             return rj or r.text
         else:
             dbg_lvl = levels[args.level]
-            if rj and dbg_lvl: print(rj[dbg_lvl])
+            print(rj[dbg_lvl])
             #print(json.dumps(rj, indent=1, sort_keys=True))
     else:
         print(r.text)
 
-@parser.command(
-    argument("id", help="id of endpoint group to fetch logs from", type=int),
-    argument("--level", help="log detail level (0 to 3)", type=int, default=1),
-    argument("--tail", help="", type=int, default=None),
-    usage="vastai get wrkgrp-logs ID [--api-key API_KEY]",
-    help="Fetch logs for a specific serverless worker group group",
-    epilog=deindent("""
-        Example: vastai get endpt-logs 382
-    """),
-)
-def get__wrkgrp_logs(args):
-    #url = apiurl(args, "/endptjobs/" )
-    if args.url == server_url_default:
-        args.url = None
-    url = (args.url or "https://run.vast.ai") + "/get_autogroup_logs/"
-    json_blob = {"id": args.id, "api_key": args.api_key}
-    if args.tail: json_blob["tail"] = args.tail
-    if (args.explain):
-        print(f"{url} with request json: ")
-        print(json_blob)
-
-    r = http_post(args, url, headers=headers,json=json_blob)
-    r.raise_for_status()
-    levels = {0 : "info0", 1: "info1", 2: "trace", 3: "debug"}
-
-    if (r.status_code == 200):
-        rj = None
-        try:
-            rj = r.json()
-        except Exception as e:
-            print(str(e))
-            print(r.text)
-        if args.raw:
-            # sort_keys
-            return rj or r.text
-        else:
-            dbg_lvl = levels[args.level]
-            if rj and dbg_lvl: print(rj[dbg_lvl])
-            #print(json.dumps(rj, indent=1, sort_keys=True))
-    else:
-        print(r.text)
 
 @parser.command(
     argument("--email", help="email of user to be invited", type=str),
@@ -3197,62 +2379,6 @@ def invite__member(args):
     else:
         print(r.text);
         print(f"failed with error {r.status_code}")
-
-
-@parser.command(
-    argument("cluster_id", help="ID of cluster to add machine to", type=int),
-    argument("machine_ids", help="machine id(s) to join cluster", type=int, nargs="+"),
-    usage="vastai join cluster CLUSTER_ID MACHINE_IDS",
-    help="Join Machine to Cluster",
-    epilog=deindent("""
-        Join's Machine to Vast Cluster
-    """)
-)
-def join__cluster(args: argparse.Namespace):
-    json_blob = {
-        "cluster_id": args.cluster_id,
-        "machine_ids": args.machine_ids
-    }
-
-    if args.explain:
-        print("request json:", json_blob)
-
-    req_url = apiurl(args, "/cluster/")
-    r = http_put(args, req_url, json=json_blob)
-    r.raise_for_status()
-
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
-
-
-@parser.command(
-    argument("name", help="Overlay network name to join instance to.", type=str),
-    argument("instance_id", help="Instance ID to add to overlay.", type=int),
-    usage="vastai join overlay OVERLAY_NAME INSTANCE_ID",
-    help="Adds instance to an overlay network",
-    epilog=deindent("""
-    Adds an instance to a compatible overlay network.""")
-)
-def join__overlay(args: argparse.Namespace):
-    json_blob = {
-        "name": args.name,
-        "instance_id": args.instance_id
-    }
-
-    if args.explain:
-        print("request json:", json_blob)
-
-    req_url = apiurl(args, "/overlay/")
-    r = http_put(args, req_url, json=json_blob)
-    r.raise_for_status()
-
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
-
 
 
 @parser.command(
@@ -3319,7 +2445,7 @@ def _get_gpu_names() -> List[str]:
 REGIONS = {
     "North_America": "[US, CA]",
     "South_America": "[BR, AR, CL]",
-    "Europe": "[SE, UA, GB, PL, PT, SI, DE, IT, CH, LT, GR, FI, IS, AT, FR, RO, MD, HU, NO, MK, BG, ES, HR, NL, CZ, EE",
+    "Europe": "[SE, UA, GB, PL, PT, SI, DE, IT, CH, LT, GR, FI, IS, AT, FR, RO, MD, HU, NO, MK, BG, ES, HR, NL, CZ, EE]",
     "Asia": "[CN, JP, KR, ID, IN, HK, MY, IL, TH, QA, TR, RU, VN, TW, OM, SG, AE, KZ]",
     "Oceania": "[AU, NZ]",
     "Africa": "[EG, ZA]",
@@ -3584,11 +2710,6 @@ def prepay__instance(args):
 
 @parser.command(
     argument("id", help="id of instance to reboot", type=int),
-    argument("--schedule", choices=["HOURLY", "DAILY", "WEEKLY"], help="try to schedule a command to run hourly, daily, or monthly. Valid values are HOURLY, DAILY, WEEKLY  For ex. --schedule DAILY"),
-    argument("--start_date", type=str, default=default_start_date(), help="Start date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is now. (optional)"),
-    argument("--end_date", type=str, default=default_end_date(), help="End date/time in format 'YYYY-MM-DD HH:MM:SS PM' (UTC). Default is 7 days from now. (optional)"),
-    argument("--day", type=parse_day_cron_style, help="Day of week you want scheduled job to run on (0-6, where 0=Sunday) or \"*\". Default will be 0. For ex. --day 0", default=0),
-    argument("--hour", type=parse_hour_cron_style, help="Hour of day you want scheduled job to run on (0-23) or \"*\" (UTC). Default will be 0. For ex. --hour 16", default=0),
     usage="vastai reboot instance ID [OPTIONS]",
     help="Reboot (stop/start) an instance",
     epilog=deindent("""
@@ -3604,14 +2725,6 @@ def reboot__instance(args):
     r = http_put(args, url,  headers=headers,json={})
     r.raise_for_status()
 
-    if (args.schedule):
-        validate_frequency_values(args.day, args.hour, args.schedule)
-        cli_command = "reboot instance"
-        api_endpoint = "/api/v0/instances/reboot/{id}/".format(id=args.id)
-        json_blob = {"instance_id": args.id}
-        add_scheduled_job(args, json_blob, cli_command, api_endpoint, "PUT", instance_id=args.id)
-        return
-
     if (r.status_code == 200):
         rj = r.json();
         if (rj["success"]):
@@ -3624,7 +2737,7 @@ def reboot__instance(args):
 
 
 @parser.command(
-    argument("id", help="id of instance to recycle", type=int),
+    argument("id", help="id of instance to reboot", type=int),
     usage="vastai recycle instance ID [OPTIONS]",
     help="Recycle (destroy/create) an instance",
     epilog=deindent("""
@@ -4025,7 +3138,7 @@ invoices_fields = {
 @parser.command(
     argument("query", help="Search query in simple query syntax (see below)", nargs="*", default=None),
     usage="vastai search invoices [--help] [--api-key API_KEY] [--raw] <query>",
-    help="Search for invoices using custom query",
+    help="Search for benchmark results using custom query",
     epilog=deindent("""
         Query syntax:
 
@@ -4267,7 +3380,7 @@ def search__offers(args):
         stime = time.time()
 
         if (args.explain):
-            print("request1 json: ")
+            print("request json: ")
             print(json_blob)
 
         r = http_put(args, url, headers=headers, json=json_blob)
@@ -4276,7 +3389,7 @@ def search__offers(args):
 
     else:
         if (args.explain):
-            print("request2 json: ")
+            print("request json: ")
             print(json_blob)
         #url = apiurl(args, "/bundles", {"q": query})
         #r = requests.get(url, headers=headers)
@@ -4398,7 +3511,7 @@ def search__templates(args):
         print("Error: ", e)
         return 1  
     url = apiurl(args, "/template/", {"select_cols" : ['*'], "select_filters" : query})
-    r = http_get(args, url, headers=headers)
+    r = requests.get(url, headers=headers)
     if r.status_code != 200:
         print(r.text)
         r.raise_for_status()
@@ -4525,101 +3638,6 @@ def search__volumes(args: argparse.Namespace):
 
 
 
-@parser.command(
-    argument("-n", "--no-default", action="store_true", help="Disable default query"),
-    argument("--limit", type=int, help=""),
-    argument("--storage", type=float, default=1.0, help="Amount of storage to use for pricing, in GiB. default=1.0GiB"),
-    argument("-o", "--order", type=str, help="Comma-separated list of fields to sort on. postfix field with - to sort desc. ex: -o 'disk_space,inet_up-'.  default='score-'", default='score-'),
-    argument("query", help="Query to search for. default: 'external=false verified=true disk_space>=1', pass -n to ignore default", nargs="*", default=None),
-    usage="vastai search network volumes [--help] [--api-key API_KEY] [--raw] <query>",
-    help="Search for network volume offers using custom query",
-    epilog=deindent("""
-        Query syntax:
-
-            query = comparison comparison...
-            comparison = field op value
-            field = <name of a field>
-            op = one of: <, <=, ==, !=, >=, >, in, notin
-            value = <bool, int, float, string> | 'any' | [value0, value1, ...]
-            bool: True, False
-
-        note: to pass '>' and '<' on the command line, make sure to use quotes
-        note: to encode a string query value (ie for gpu_name), replace any spaces ' ' with underscore '_'
-
-        Examples:
-
-            # search for volumes with greater than 50GB of available storage and greater than 500 Mb/s upload and download speed
-            vastai search volumes "disk_space>50 inet_up>500 inet_down>500"
-            
-        Available fields:
-
-              Name                  Type       Description
-            duration:               float     max rental duration in days
-            geolocation:            string    Two letter country code. Works with operators =, !=, in, notin (e.g. geolocation not in ['XV','XZ'])
-            id:                     int       volume offer unique ID
-            inet_down:              float     internet download speed in Mb/s
-            inet_up:                float     internet upload speed in Mb/s
-            reliability:            float     machine reliability score (see FAQ for explanation)
-            storage_cost:           float     storage cost in $/GB/month
-            verified:               bool      is the machine verified
-    """),
-)
-def search__network_volumes(args: argparse.Namespace):
-    try:
-
-        if args.no_default:
-            query = {}
-        else:
-            query = {"verified": {"eq": True}, "external": {"eq": False}, "disk_space": {"gte": 1}}
-
-        if args.query is not None:
-            query = parse_query(args.query, query, vol_offers_fields, {}, offers_mult)
-
-        order = []
-        for name in args.order.split(","):
-            name = name.strip()
-            if not name: continue
-            direction = "asc"
-            field = name
-            if name.strip("-") != name:
-                direction = "desc"
-                field = name.strip("-")
-            if name.strip("+") != name:
-                direction = "asc"
-                field = name.strip("+")
-            if field in offers_alias:
-                field = offers_alias[field];
-            order.append([field, direction])
-
-        query["order"] = order
-        if (args.limit):
-            query["limit"] = int(args.limit)
-        query["allocated_storage"] = args.storage
-    except ValueError as e:
-        print("Error: ", e)
-        return 1
-
-    json_blob = query
-
-    if (args.explain):
-        print("request json: ")
-        print(json_blob)
-    url = apiurl(args, "/network_volumes/search/")
-    r = http_post(args, url, headers=headers, json=json_blob)
-
-    r.raise_for_status()
-   
-    if (r.headers.get('Content-Type') != 'application/json'):
-        print(f"invalid return Content-Type: {r.headers.get('Content-Type')}")
-        return   
-
-    rows = r.json()["offers"]
-    
-    if args.raw:
-        return rows
-    else:
-        display_table(rows, nw_vol_displayable_fields)
-
 
 @parser.command(
     argument("new_api_key", help="Api key to set as currently logged in user"),
@@ -4729,22 +3747,17 @@ def _ssh_url(args, protocol):
         port   = json_object["port"]
 
     if ipaddr is None or ipaddr.endswith('.vast.ai'):
-        req_url = apiurl(args, "/instances", {"owner": "me"})
-        r = http_get(args, req_url)
+        req_url = apiurl(args, "/instances", {"owner": "me"});
+        r = http_get(args, req_url);
         r.raise_for_status()
         rows = r.json()["instances"]
-
         if args.id:
-            matches = [r for r in rows if r['id'] == args.id]
-            if not matches:
-                print(f"error: no instance found with id {args.id}")
-                return 1
-            instance = matches[0]
+            instance, = [r for r in rows if r['id'] == args.id]
         elif len(rows) > 1:
             print("Found multiple running instances")
             return 1
         else:
-            instance = rows[0]
+            instance, = rows
 
         ports     = instance.get("ports",{})
         port_22d  = ports.get("22/tcp",None)
@@ -4817,59 +3830,6 @@ def show__audit_logs(args):
     else:
         display_table(rows, audit_log_fields)
 
-def normalize_schedule_fields(job):
-    """
-    Mutates the job dict to replace None values with readable scheduling labels.
-    """
-    if job.get("day_of_the_week") is None:
-        job["day_of_the_week"] = "Everyday"
-    else:
-        days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-        job["day_of_the_week"] = days[int(job["day_of_the_week"])]
-    
-    if job.get("hour_of_the_day") is None:
-        job["hour_of_the_day"] = "Every hour"
-    else:
-        hour = int(job["hour_of_the_day"])
-        suffix = "AM" if hour < 12 else "PM"
-        hour_12 = hour % 12
-        hour_12 = 12 if hour_12 == 0 else hour_12
-        job["hour_of_the_day"] = f"{hour_12}_{suffix}"
-
-    if job.get("min_of_the_hour") is None:
-        job["min_of_the_hour"] = "Every minute"
-    else:
-        job["min_of_the_hour"] = f"{int(job['min_of_the_hour']):02d}"
-    
-    return job
-
-def normalize_jobs(jobs):
-    """
-    Applies normalization to a list of job dicts.
-    """
-    return [normalize_schedule_fields(job) for job in jobs]
-
-
-@parser.command(
-    usage="vastai show scheduled-jobs [--api-key API_KEY] [--raw]",
-    help="Display the list of scheduled jobs"
-)
-def show__scheduled_jobs(args):
-    """
-    Shows the list of scheduled jobs for the account.
-
-    :param argparse.Namespace args: should supply all the command-line options
-    :rtype:
-    """
-    req_url = apiurl(args, "/commands/schedule_job/")
-    r = http_get(args, req_url)
-    r.raise_for_status()
-    rows = r.json()
-    if args.raw:
-        return rows
-    else:
-        rows = normalize_jobs(rows)
-        display_table(rows, scheduled_jobs_fields)
 
 @parser.command(
     usage="vastai show ssh-keys",
@@ -4885,13 +3845,13 @@ def show__ssh_keys(args):
         print(r.json())
 
 @parser.command(
-    usage="vastai show workergroups [--api-key API_KEY]",
-    help="Display user's current workergroups",
+    usage="vastai show autogroups [--api-key API_KEY]",
+    help="Display user's current autogroup groups",
     epilog=deindent("""
-        Example: vastai show workergroups 
+        Example: vastai show autogroups 
     """),
 )
-def show__workergroups(args):
+def show__autogroups(args):
     url = apiurl(args, "/autojobs/" )
     json_blob = {"client_id": "me", "api_key": args.api_key}
     if (args.explain):
@@ -4899,7 +3859,7 @@ def show__workergroups(args):
         print(json_blob)
     r = http_get(args, url, headers=headers,json=json_blob)
     r.raise_for_status()
-    #print("workergroup list ".format(r.json()))
+    #print("autogroup list ".format(r.json()))
 
     if (r.status_code == 200):
         rj = r.json();
@@ -4928,7 +3888,7 @@ def show__endpoints(args):
         print(json_blob)
     r = http_get(args, url, headers=headers,json=json_blob)
     r.raise_for_status()
-    #print("workergroup list ".format(r.json()))
+    #print("autogroup list ".format(r.json()))
 
     if (r.status_code == 200):
         rj = r.json();
@@ -5101,8 +4061,8 @@ def show__env_vars(args):
     argument("-c", "--only_charges", action="store_true", help="Show only charge items"),
     argument("-p", "--only_credits", action="store_true", help="Show only credit items"),
     argument("--instance_label", help="Filter charges on a particular instance label (useful for autoscaler groups)"),
-    usage="(DEPRECATED) vastai show invoices [OPTIONS]",
-    help="(DEPRECATED) Get billing history reports",
+    usage="vastai show invoices [OPTIONS]",
+    help="Get billing history reports",
 )
 def show__invoices(args):
     """
@@ -5172,263 +4132,6 @@ def show__invoices(args):
         display_table(rows, invoice_fields)
         print(f"Total: ${sum(rows, 'amount')}")
         print("Current: ", current_charges)
-
-# Helper to convert date string or int to timestamp
-def to_timestamp_(val):
-    if isinstance(val, int):
-        return val
-    if isinstance(val, str):
-        if val.isdigit():
-            return int(val)
-        return int(datetime.strptime(val, '%Y-%m-%d').timestamp())
-    raise ValueError("Invalid date format")
-
-@parser.command(
-    argument('-i', '--invoices', mutex_group='grp', action='store_true', required=True, help='Show invoices instead of charges'),
-    argument('-c', '--charges', mutex_group='grp', action='store_true', required=True, help='Show charges instead of invoices'),
-    argument('-a', '--include-serverless', action='store_true', help='Include serverless charges'),
-    argument('-s', '--start-date', help='Start date (YYYY-MM-DD or timestamp)'),
-    argument('-e', '--end-date', help='End date (YYYY-MM-DD or timestamp)'),
-    argument('-l', '--limit', type=int, default=20, help='Number of results per page (default: 20, max: 100)'),
-    argument('-t', '--next-token', help='Pagination token for next page'),
-    argument('-f', '--format', choices=['table', 'tree'], default='table', help='Output format for charges (default: table)'),
-    argument('-v', '--verbose', action='store_true', help='Include full Instance Charge details and Invoice Metadata'),
-    argument('--latest-first', action='store_true', help='Sort by latest first'),
-    usage="vastai show invoices-v1 [OPTIONS]",
-)
-def show__invoices_v1(args):
-    from rich.prompt import Confirm
-
-    output_lines = []
-
-    # Handle default start and end date values
-    if not args.start_date and not args.end_date:
-        args.end_date = int(time.time())  # Set end date to current time if both are missing
-    if not args.start_date:
-        args.start_date = args.end_date - 7 * 24*60*60  # Default to 7 days before given end date
-    elif not args.end_date:
-        args.end_date = args.start_date + 7 * 24*60*60  # Default to 7 days after given start date
-    
-    try:
-        # Parse dates - handle both YYYY-MM-DD format and timestamps
-        start_timestamp = to_timestamp_(args.start_date)
-        end_timestamp = to_timestamp_(args.end_date)
-    except Exception as e:
-        print(f"Error parsing dates: {e}")
-        print("Use format YYYY-MM-DD or UNIX timestamp")
-        return
-
-    if not args.no_color:
-        print("(use --no-color to disable colored output)\n")
-    
-    start_date = convert_timestamp_to_date(start_timestamp)
-    end_date = convert_timestamp_to_date(end_timestamp)
-    data_type = "Instance Charges" if args.charges else "Invoices"
-    output_lines.append(f"Fetching {data_type} from {start_date} to {end_date}...")
-
-    # Build request parameters
-    col = 'day' if args.charges else 'when'
-    params = {
-        'select_filters': {col: {'gte': start_timestamp, 'lte': end_timestamp}},
-        'latest_first': args.latest_first,
-        'limit': min(args.limit, 100)  # Enforce max limit of 100
-    }
-    if args.charges:
-        params['include_serverless'] = args.include_serverless
-        params['format'] = args.format
-    if args.next_token:
-        params['after_token'] = args.next_token
-
-    endpoint = '/api/v0/charges/' if args.charges else '/api/v1/invoices/'
-    url = apiurl(args, endpoint, query_args=params)
-
-    found_results, found_count = [], 0
-    looping = True
-    while looping:
-        response = http_get(args, url)
-        response.raise_for_status()
-        response = response.json()
-
-        found_results += response.get('results', [])
-        found_count += response.get('count', 0)
-        total = response.get('total', 0)
-        next_token = response.get('next_token')
-        
-        if args.raw:
-            output_lines.append("Raw response:\n" + json.dumps(response, indent=2))
-            if next_token:
-                print(f"Next page token: {next_token}\n")
-        elif not found_results:
-            output_lines.append("No results found")
-        else:  # Display results
-            formatted_results = format_invoices_charges_results(args, deepcopy(found_results))
-            if args.invoices:
-                rich_obj = create_rich_table_for_invoices(formatted_results)
-            elif args.format == 'tree':
-                rich_obj = create_charges_tree(formatted_results)
-            else:
-                rich_obj = create_rich_table_for_charges(args, formatted_results)
-
-            output_lines.append(rich_object_to_string(rich_obj, no_color=args.no_color))
-            output_lines.append(f"Showing {found_count} of {total} results")
-            if next_token:
-                output_lines.append(f"Next page token: {next_token}\n")
-        
-        paging = print_or_page(args, '\n'.join(output_lines))
-
-        if next_token and not paging:
-            ans = Confirm.ask("Fetch next page?", show_default=False, default=False)
-            if ans:
-                params['after_token'] = next_token
-                url = apiurl(args, endpoint, query_args=params)
-                output_lines.clear()
-                args.full = True
-            else:
-                looping = False
-        else:
-            looping = False
-
-def format_invoices_charges_results(args, results):
-    indices_to_remove = []
-    for i,item in enumerate(results):
-        item['start'] = convert_timestamp_to_date(item['start']) if item['start'] else None
-        item['end'] = convert_timestamp_to_date(item['end']) if item['end'] else None
-        if item['amount'] == 0:
-            indices_to_remove.append(i)  # Removing items that don't contribute to the total
-        elif args.invoices:
-            if item['type'] not in {'transfer', 'payout'}:
-                item['amount'] *= -1  # present amounts intuitively as related to balance
-            item['amount_str'] = f"${item['amount']:.2f}" if item['amount'] > 0 else f"-${abs(item['amount']):.2f}"
-        else:
-            item['amount'] = f"${item['amount']:.3f}"
-
-        if args.charges:
-            if item['type'] in {'instance','volume'} and not args.verbose:
-                item['items'] = []  # Remove instance charge details if verbose is not set
-            if item['source'] and '-' in item['source']:
-                item['type'], item['source'] = item['source'].capitalize().split('-')
-        
-        item['items'] = format_invoices_charges_results(args, item['items'])
-    
-    for i in reversed(indices_to_remove):  # Remove in reverse order to avoid index shifting
-        del results[i]
-    
-    return results
-
-
-def rich_object_to_string(rich_obj, no_color=True):
-    """ Render a Rich object (Table or Tree) to a string. """
-    from rich.console import Console
-    buffer = StringIO()  # Use an in-memory stream to suppress visible output
-    console = Console(record=True, file=buffer)
-    console.print(rich_obj)
-    return console.export_text(clear=True, styles=not no_color)
-
-def create_charges_tree(results, parent=None, title="Charges Breakdown"):
-    """ Build and return a Rich Tree from nested charge results. """
-    from rich.text import Text
-    from rich.tree import Tree
-    from rich.panel import Panel
-    if parent is None:  # Create root node if this is the first call
-        root = Tree(Text(title, style="bold red"))
-        create_charges_tree(results, root)
-        return Panel(root, style="white on #000000", expand=False)
-    
-    top_level = (parent.label.plain == title)
-    for item in results:
-        label = Text.assemble(
-            (item["type"], "bold cyan"),
-            (f" {item['source']}" if item.get('source') else "", "gold1"), " → ",
-            (f"{item['amount']}", 'bold green1' if top_level else 'green1'),
-            (f" — {item['description']}", "bright_white" if top_level else "dim white"),
-            (f"  ({item['start']} → {item['end']})", "bold bright_white" if top_level else "white")
-        )
-        node = parent.add(label, guide_style="blue3")
-        if item.get("items"):
-            create_charges_tree(item["items"], node)
-    return parent
-
-def create_rich_table_for_charges(args, results):
-    """ Build and return a Rich Table from charge results. """
-    from rich.table import Table
-    from rich.text import Text
-    from rich import box
-    from rich.padding import Padding
-    table = Table(style="white", header_style="bold bright_yellow", box=box.DOUBLE_EDGE, row_styles=["on grey11", "none"])
-    table.add_column(Text("Type", justify="center"), style="bold steel_blue1", justify="center")
-    table.add_column(Text("ID", justify="center"), style="gold1", justify="center")
-    table.add_column(Text("Amount", justify="center"), style="sea_green2", justify="right")
-    table.add_column(Text("Start", justify="center"), style="bright_white", justify="center")
-    table.add_column(Text("End", justify="center"), style="bright_white", justify="center")
-    if args.include_serverless:
-        table.add_column(Text("Endpoint", justify="center"), style="bright_red", justify="center")
-        table.add_column(Text("Workergroup", justify="center"), style="orchid", justify="center")
-    for item in results:
-        row = [item['type'].capitalize(), item['source'], item['amount'], item['start'], item['end']]
-        if args.include_serverless:
-            row.append(str(item['metadata'].get('endpoint_id', '')))
-            row.append(str(item['metadata'].get('workergroup_id', '')))
-        table.add_row(*row)
-    return Padding(table, (1, 2), style="on #000000", expand=False)  # Print with a black background
-
-def create_rich_table_for_invoices(results):
-    """ Build and return a Rich Table from invoice results. """
-    from rich.table import Table
-    from rich.text import Text
-    from rich import box
-    invoice_type_to_color = {
-        "credit": "green1",
-        "transfer": "gold1",
-        "payout": "orchid",
-        "reserved": "sky_blue1",
-        "refund": "bright_red",
-    }
-    table = Table(style="white", header_style="bold bright_yellow", box=box.DOUBLE_EDGE, row_styles=["on grey11", "none"])
-    table.add_column(Text("ID", justify="center"), style="bright_white", justify="center")
-    table.add_column(Text("Created", justify="center"), style="yellow3", justify="center")
-    table.add_column(Text("Paid", justify="center"), style="yellow3", justify="center")
-    table.add_column(Text("Type", justify="center"), justify="center")
-    table.add_column(Text("Result", justify="center"), justify="right")
-    table.add_column(Text("Source", justify="center"), style="bright_cyan", justify="center")
-    table.add_column(Text("Description", justify="center"), style="bright_white", justify="left")
-    for item in results:
-        table.add_row(
-            str(item['metadata']['invoice_id']),
-            item['start'],
-            item['end'] if item['end'] else 'N/A',
-            Text(item['type'].capitalize(), style=invoice_type_to_color.get(item['type'], "white")),
-            Text(item['amount_str'], style="sea_green2" if item['amount'] > 0 else "bright_red"),
-            item['source'].capitalize() if item['type'] != 'transfer' else item['source'],
-            item['description'],
-        )
-    return Padding(table, (1, 2), style="on #000000", expand=False)  # Print with a black background
-
-def create_rich_table_from_rows(rows, headers=None, title='', sort_key=None):
-    """ (Generic) Creates a Rich table from a list of dict rows. """
-    from rich import box
-    from rich.table import Table
-    if not isinstance(rows, list):
-        raise ValueError("Invalid Data Type: rows must be a list")
-    # Handle list of dictionaries
-    if isinstance(rows[0], dict):
-        headers = headers or list(rows[0].keys())
-        rows = [[row_dict.get(h, "") for h in headers] for row_dict in rows]
-    elif headers is None:
-        raise ValueError("Headers must be provided if rows are not dictionaries")
-    # Sort rows if requested
-    if sort_key:
-        rows = sorted(rows, key=sort_key)
-    # Create the Rich table
-    table = Table(title=title, style="white", header_style="bold bright_yellow", box=box.DOUBLE_EDGE)
-    # Add columns
-    for header in headers:
-        # You can customize alignment and style here per column
-        table.add_column(header, justify="left", style="bright_white", no_wrap=True)
-    # Add rows
-    for row in rows:
-        # Convert everything to string to avoid type issues
-        table.add_row(*[str(cell) for cell in row])
-    return table
 
 
 @parser.command(
@@ -5517,71 +4220,32 @@ def show__ipaddrs(args):
         display_table(rows, ipaddr_fields)
 
 
-@parser.command(
-    usage="vastai show clusters",
-    help="Show clusters associated with your account.",
-    epilog=deindent("""
-        Show clusters associated with your account.
-    """)
-)
-def show__clusters(args: argparse.Namespace):
-    req_url = apiurl(args, "/clusters/")
-    r = http_get(args, req_url)
-    r.raise_for_status()
-    response_data = r.json()
-
-    if args.raw:
-        return response_data
-
-    rows = []
-    for cluster_id, cluster_data in response_data['clusters'].items():
-        machine_ids = [ node["machine_id"] for node in cluster_data["nodes"]]
-
-        manager_node = next(node for node in cluster_data['nodes'] if node['is_cluster_manager'])
-
-        row_data = {
-            'id': cluster_id,
-            'subnet': cluster_data['subnet'],
-            'node_count': len(cluster_data['nodes']),
-            'machine_ids': str(machine_ids),
-            'manager_id': str(manager_node['machine_id']),
-            'manager_ip': manager_node['local_ip'],
-        }
-
-        rows.append(row_data)
-
-    display_table(rows, cluster_fields, replace_spaces=False)
-
 
 @parser.command(
-    usage="vastai show overlays",
-    help="Show overlays associated with your account.",
+    argument("-q", "--quiet", action="store_true", help="display information about user"),
+    usage="vastai show user [OPTIONS]",
+    help="Get current user data",
     epilog=deindent("""
-        Show overlays associated with your account.
+        Shows stats for logged-in user. These include user balance, email, and ssh key. Does not show API key.
     """)
 )
-def show__overlays(args: argparse.Namespace):
-    req_url = apiurl(args, "/overlay/")
-    r = http_get(args, req_url)
+def show__user(args):
+    """
+    Shows stats for logged-in user. Does not show API key.
+
+    :param argparse.Namespace args: should supply all the command-line options
+    :rtype:
+    """
+    req_url = apiurl(args, "/users/current", {"owner": "me"});
+    r = http_get(args, req_url);
     r.raise_for_status()
-    response_data = r.json()
+    user_blob = r.json()
+    user_blob.pop("api_key")
+
     if args.raw:
-        return response_data
-    rows = []
-    for overlay in response_data:
-        row_data = {
-            'overlay_id': overlay['overlay_id'],
-            'name': overlay['name'],
-            'subnet': overlay['internal_subnet'] if overlay['internal_subnet'] else 'N/A',
-            'cluster_id': overlay['cluster_id'],
-            'instance_count': len(overlay['instances']),
-            'instances': str(overlay['instances']),
-        }
-        rows.append(row_data)
-    display_table(rows, overlay_fields, replace_spaces=False)
-
-
-
+        return user_blob
+    else:
+        display_table([user_blob], user_fields)
 
 @parser.command(
     argument("-q", "--quiet", action="store_true", help="display subaccounts from current user"),
@@ -5643,48 +4307,16 @@ def show__team_roles(args):
     else:
         print(r.json())
 
-@parser.command(
-    argument("-q", "--quiet", action="store_true", help="display information about user"),
-    usage="vastai show user [OPTIONS]",
-    help="Get current user data",
-    epilog=deindent("""
-        Shows stats for logged-in user. These include user balance, email, and ssh key. Does not show API key.
-    """)
-)
-def show__user(args):
-    """
-    Shows stats for logged-in user. Does not show API key.
-
-    :param argparse.Namespace args: should supply all the command-line options
-    :rtype:
-    """
-    req_url = apiurl(args, "/users/current", {"owner": "me"});
-    r = http_get(args, req_url);
-    r.raise_for_status()
-    user_blob = r.json()
-    user_blob.pop("api_key")
-
-    if args.raw:
-        return user_blob
-    else:
-        display_table([user_blob], user_fields)
 
 @parser.command(
-    argument("-t", "--type", help="volume type to display. Default to all. Possible values are \"local\", \"all\", \"network\"", type=str, default="all"),
-    usage="vastai show volumes [OPTIONS]",
+    usage="vastai show volumes",
     help="Show stats on owned volumes.",
     epilog=deindent("""
         Show stats on owned volumes
     """)
 )
 def show__volumes(args: argparse.Namespace):
-    types = {
-        "local": "local_volume",
-        "network": "network_volume",
-        "all": "all_volume"
-    }
-    type = types.get(args.type, "all")
-    req_url = apiurl(args, "/volumes", {"owner": "me", "type" : type});
+    req_url = apiurl(args, "/volumes", {"owner": "me"});
     r = http_get(args, req_url)
     r.raise_for_status()
     rows = r.json()["volumes"]
@@ -5697,44 +4329,6 @@ def show__volumes(args: argparse.Namespace):
         return processed
     else:
         display_table(processed, volume_fields, replace_spaces=False)
-
-
-@parser.command(
-    argument("cluster_id", help="ID of cluster you want to remove machine from.", type=int),
-    argument("machine_id", help="ID of machine to remove from cluster.", type=int),
-    argument("new_manager_id", help="ID of machine to promote to manager. Must already be in cluster", type=int, nargs="?"),
-    usage="vastai remove-machine-from-cluster CLUSTER_ID MACHINE_ID NEW_MANAGER_ID",
-    help="Removes machine from cluster",
-    epilog=deindent("""Removes machine from cluster and also reassigns manager ID, 
-    if we're removing the manager node""")
-)
-def remove_machine_from_cluster(args: argparse.Namespace):
-    json_blob = {
-        "cluster_id": args.cluster_id,
-        "machine_id": args.machine_id,
-    }
-
-    if args.new_manager_id:
-        json_blob["new_manager_id"] = args.new_manager_id
-    if args.explain:
-        print("request json:", json_blob)
-
-    req_url = apiurl(args, "/cluster/remove_machine/")
-    r = http_del(args, req_url, json=json_blob)
-    r.raise_for_status()
-
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
-
-
-
-
-
-
-
-
 
 
 @parser.command(
@@ -5782,32 +4376,29 @@ def transfer__credit(args: argparse.Namespace):
     argument("--min_load", help="minimum floor load in perf units/s  (token/s for LLms)", type=float),
     argument("--target_util",      help="target capacity utilization (fraction, max 1.0, default 0.9)", type=float),
     argument("--cold_mult",   help="cold/stopped instance capacity target as multiple of hot capacity target (default 2.5)", type=float),
-    argument("--cold_workers",   help="min number of workers to keep 'cold' for this workergroup", type=int),
-    argument("--test_workers",help="number of workers to create to get an performance estimate for while initializing workergroup (default 3)", type=int),
+    argument("--test_workers",help="number of workers to create to get an performance estimate for while initializing autogroup (default 3)", type=int),
     argument("--gpu_ram",   help="estimated GPU RAM req  (independent of search string)", type=float),
     argument("--template_hash",   help="template hash (**Note**: if you use this field, you can skip search_params, as they are automatically inferred from the template)", type=str),
     argument("--template_id",   help="template id", type=int),
     argument("--search_params",   help="search param string for search offers    ex: \"gpu_ram>=23 num_gpus=2 gpu_name=RTX_4090 inet_down>200 direct_port_count>2 disk_space>=64\"", type=str),
     argument("-n", "--no-default", action="store_true", help="Disable default search param query args"),
     argument("--launch_args",   help="launch args  string for create instance  ex: \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/public.vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\"", type=str),
-    argument("--endpoint_name",   help="deployment endpoint name (allows multiple workergroups to share same deployment endpoint)", type=str),
-    argument("--endpoint_id",   help="deployment endpoint id (allows multiple workergroups to share same deployment endpoint)", type=int),
-    usage="vastai update workergroup WORKERGROUP_ID --endpoint_id ENDPOINT_ID [options]",
+    argument("--endpoint_name",   help="deployment endpoint name (allows multiple autoscale groups to share same deployment endpoint)", type=str),
+    argument("--endpoint_id",   help="deployment endpoint id (allows multiple autoscale groups to share same deployment endpoint)", type=int),
+    usage="vastai update autogroup ID [OPTIONS]",
     help="Update an existing autoscale group",
     epilog=deindent("""
-        Example: vastai update workergroup 4242 --min_load 100 --target_util 0.9 --cold_mult 2.0 --search_params \"gpu_ram>=23 num_gpus=2 gpu_name=RTX_4090 inet_down>200 direct_port_count>2 disk_space>=64\" --launch_args \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/public.vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\" --gpu_ram 32.0 --endpoint_name "LLama" --endpoint_id 2
+        Example: vastai update autogroup 4242 --min_load 100 --target_util 0.9 --cold_mult 2.0 --search_params \"gpu_ram>=23 num_gpus=2 gpu_name=RTX_4090 inet_down>200 direct_port_count>2 disk_space>=64\" --launch_args \"--onstart onstart_wget.sh  --env '-e ONSTART_PATH=https://s3.amazonaws.com/public.vast.ai/onstart_OOBA.sh' --image atinoda/text-generation-webui:default-nightly --disk 64\" --gpu_ram 32.0 --endpoint_name "LLama" --endpoint_id 2
     """),
 )
-def update__workergroup(args):
+def update__autogroup(args):
     id  = args.id
     url = apiurl(args, f"/autojobs/{id}/" )
     if args.no_default:
         query = ""
     else:
         query = " verified=True rentable=True rented=False"
-    if args.search_params is not None:
-        query = args.search_params + query
-    json_blob = {"client_id": "me", "autojob_id": args.id, "min_load": args.min_load, "target_util": args.target_util, "cold_mult": args.cold_mult, "cold_workers": args.cold_workers, "test_workers" : args.test_workers, "template_hash": args.template_hash, "template_id": args.template_id, "search_params": query, "launch_args": args.launch_args, "gpu_ram": args.gpu_ram, "endpoint_name": args.endpoint_name, "endpoint_id": args.endpoint_id}
+    json_blob = {"client_id": "me", "autojob_id": args.id, "min_load": args.min_load, "target_util": args.target_util, "cold_mult": args.cold_mult, "test_workers" : args.test_workers, "template_hash": args.template_hash, "template_id": args.template_id, "search_params": args.search_params + query, "launch_args": args.launch_args, "gpu_ram": args.gpu_ram, "endpoint_name": args.endpoint_name, "endpoint_id": args.endpoint_id}
     if (args.explain):
         print("request json: ")
         print(json_blob)
@@ -5815,7 +4406,7 @@ def update__workergroup(args):
     r.raise_for_status()
     if 'application/json' in r.headers.get('Content-Type', ''):
         try:
-            print("workergroup update {}".format(r.json()))
+            print("autogroup update {}".format(r.json()))
         except requests.exceptions.JSONDecodeError:
             print("The response is not valid JSON.")
             print(r)
@@ -5827,14 +4418,11 @@ def update__workergroup(args):
 @parser.command(
     argument("id", help="id of endpoint group to update", type=int),
     argument("--min_load", help="minimum floor load in perf units/s  (token/s for LLms)", type=float),
-    argument("--min_cold_load", help="minimum floor load in perf units/s  (token/s for LLms), but allow handling with cold workers", type=float),
-    argument("--endpoint_state", help="active, suspended, or stopped", type=str),
-    argument("--auto_instance", help=argparse.SUPPRESS, type=str, default="prod"),
     argument("--target_util",      help="target capacity utilization (fraction, max 1.0, default 0.9)", type=float),
     argument("--cold_mult",   help="cold/stopped instance capacity target as multiple of hot capacity target (default 2.5)", type=float),
     argument("--cold_workers", help="min number of workers to keep 'cold' when you have no load (default 5)", type=int),
     argument("--max_workers", help="max number of workers your endpoint group can have (default 20)", type=int),
-    argument("--endpoint_name",   help="deployment endpoint name (allows multiple workergroups to share same deployment endpoint)", type=str),
+    argument("--endpoint_name",   help="deployment endpoint name (allows multiple autoscale groups to share same deployment endpoint)", type=str),
     usage="vastai update endpoint ID [OPTIONS]",
     help="Update an existing endpoint group",
     epilog=deindent("""
@@ -5844,7 +4432,7 @@ def update__workergroup(args):
 def update__endpoint(args):
     id  = args.id
     url = apiurl(args, f"/endptjobs/{id}/" )
-    json_blob = {"client_id": "me", "endptjob_id": args.id, "min_load": args.min_load, "min_cold_load":args.min_cold_load,"target_util": args.target_util, "cold_mult": args.cold_mult, "cold_workers": args.cold_workers, "max_workers" : args.max_workers, "endpoint_name": args.endpoint_name, "endpoint_state": args.endpoint_state, "autoscaler_instance":args.auto_instance}
+    json_blob = {"client_id": "me", "endptjob_id": args.id, "min_load": args.min_load, "target_util": args.target_util, "cold_mult": args.cold_mult, "cold_workers": args.cold_workers, "max_workers" : args.max_workers, "endpoint_name": args.endpoint_name}
     if (args.explain):
         print("request json: ")
         print(json_blob)
@@ -6026,23 +4614,18 @@ def update__template(args):
         #print(r.text)
         print(r.status_code)
 
+
+
 @parser.command(
     argument("id", help="id of the ssh key to update", type=int),
-    argument("ssh_key", help="new public key value", type=str),
-    usage="vastai update ssh-key ID SSH_KEY",
-    help="Update an existing SSH key",
+    argument("ssh_key", help="value of the ssh_key", type=str),
+    usage="vastai update ssh-key id ssh_key",
+    help="Update an existing ssh key",
 )
 def update__ssh_key(args):
-    """Updates an existing SSH key for the authenticated user."""
     ssh_key = get_ssh_key(args.ssh_key)
-    url = apiurl(args, f"/ssh/{args.id}/")
-
-    payload = {
-        "id": args.id,
-        "ssh_key": ssh_key,
-    }
-
-    r = http_put(args, url, json=payload)
+    url = apiurl(args, "/ssh/{id}/".format(id=args.id))
+    r = http_put(args, url,  headers=headers, json={"ssh_key": ssh_key})
     r.raise_for_status()
     print(r.json())
 
@@ -6090,6 +4673,7 @@ def filter_invoice_items(args: argparse.Namespace, rows: List) -> Dict:
         #import vast_pdf
         import dateutil
         from dateutil import parser
+
     except ImportError:
         print("""\nWARNING: The 'vast_pdf' library is not present. This library is used to print invoices in PDF format. If
         you do not need this feature you can ignore this message. To get the library you should download the vast-python
@@ -6231,41 +4815,6 @@ def filter_invoice_items(args: argparse.Namespace, rows: List) -> Dict:
 #
 #
 
-@parser.command(
-    argument("machines", help="ids of machines to add disk to, that is networked to be on the same LAN as machine", type=int, nargs='+'),
-    argument("mount_point", help="mount path of disk to add", type=str),
-    argument("-d", "--disk_id", help="id of network disk to attach to machines in the cluster", type=int, nargs='?'),
-    usage="vastai add network-disk MACHINES MOUNT_PATH [options]",
-    help="[Host] Add Network Disk to Physical Cluster.",
-    epilog=deindent("""
-        This variant can be used to add a network disk to a physical cluster.
-        When you add a network disk for the first time, you just need to specify the machine(s) and mount_path.
-        When you add a network disk for the second time, you need to specify the disk_id.
-        Example:
-        vastai add network-disk 1 /mnt/disk1
-        vastai add network-disk 1 /mnt/disk1 -d 12345
-    """)
-)
-def add__network_disk(args):
-    json_blob = {
-        "machines": [int(id) for id in args.machines],
-        "mount_point": args.mount_point,
-    }
-    if args.disk_id is not None:
-        json_blob["disk_id"] = args.disk_id
-    url = apiurl(args, "/network_disk/")
-    if args.explain:
-        print("request json: ")
-        print(json_blob)
-    r = http_post(args, url, headers=headers, json=json_blob)
-    r.raise_for_status()
- 
-    if args.raw:
-        return r
-
-    print("Attached network disk to machines. Disk id: " + str(r.json()["disk_id"]))
-
-
 
 @parser.command(
     argument("id", help="id of machine to cancel maintenance(s) for", type=int),
@@ -6338,33 +4887,6 @@ def cleanup__machine(args):
 
 
 @parser.command(
-    argument("IDs", help="ids of machines", type=int, nargs='+'),
-    usage="vastai defragment machines IDs ",
-    help="[Host] Defragment machines",
-    epilog=deindent("""
-        Defragment some of your machines. This will rearrange GPU assignments to try and make more multi-gpu offers available.
-    """),
-)
-def defrag__machines(args):
-    url = apiurl(args, "/machines/defrag_offers/" )
-    json_blob = {"machine_ids": args.IDs}
-    if (args.explain):
-        print("request json: ")
-        print(json_blob)
-    r = requests.put(url, headers=headers,json=json_blob)
-    r.raise_for_status()
-    if 'application/json' in r.headers.get('Content-Type', ''):
-        try:
-            print(f"defragment result: {r.json()}")
-        except requests.exceptions.JSONDecodeError:
-            print("The response is not valid JSON.")
-            print(r)
-            print(r.text)  # Print the raw response to help with debugging.
-    else:
-        print("The response is not JSON. Content-Type:", r.headers.get('Content-Type'))
-        print(r.text)
-
-@parser.command(
    argument("id", help="id of machine to delete", type=int),
     usage="vastai delete machine <id>",
     help="[Host] Delete machine if the machine is not being used by clients. host jobs on their own machines are disregarded and machine is force deleted.",
@@ -6389,20 +4911,9 @@ def delete__machine(args):
 def list_machine(args, id):
     req_url = apiurl(args, "/machines/create_asks/")
 
-    json_blob = {
-        'machine': id,
-        'price_gpu': args.price_gpu,
-        'price_disk': args.price_disk,
-        'price_inetu': args.price_inetu,
-        'price_inetd': args.price_inetd,
-        'price_min_bid': args.price_min_bid,
-        'min_chunk': args.min_chunk,
-        'end_date': string_to_unix_epoch(args.end_date),
-        'credit_discount_max': args.discount_rate,
-        'duration': args.duration,
-        'vol_size': args.vol_size,
-        'vol_price': args.vol_price
-    }
+    json_blob = {'machine': id, 'price_gpu': args.price_gpu,
+                        'price_disk': args.price_disk, 'price_inetu': args.price_inetu, 'price_inetd': args.price_inetd, 'price_min_bid': args.price_min_bid, 
+                        'min_chunk': args.min_chunk, 'end_date': string_to_unix_epoch(args.end_date), 'credit_discount_max': args.discount_rate, 'duration': args.duration}
     if (args.explain):
         print("request json: ")
         print(json_blob)
@@ -6441,7 +4952,7 @@ def list_machine(args, id):
     argument("id", help="id of machine to list", type=int),
     argument("-g", "--price_gpu", help="per gpu rental price in $/hour  (price for active instances)", type=float),
     argument("-s", "--price_disk",
-             help="storage price in $/GB/month (price for inactive instances), default: $0.10/GB/month", type=float),
+             help="storage price in $/GB/month (price for inactive instances), default: $0.15/GB/month", type=float),
     argument("-u", "--price_inetu", help="price for internet upload bandwidth in $/GB", type=float),
     argument("-d", "--price_inetd", help="price for internet download bandwidth in $/GB", type=float),
     argument("-b", "--price_min_bid", help="per gpu minimum bid price floor in $/hour", type=float),
@@ -6449,8 +4960,6 @@ def list_machine(args, id):
     argument("-m", "--min_chunk", help="minimum amount of gpus", type=int),
     argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format)", type=str),
     argument("-l", "--duration", help="Updates end_date daily to be duration from current date. Cannot be combined with end_date. Format is: `n days`, `n weeks`, `n months`, `n years`, or total intended duration in seconds."),
-    argument("-v", "--vol_size", help="Size for volume contract offer. Defaults to half of available disk. Set 0 to not create a volume contract offer.", type=int),
-    argument("-z", "--vol_price", help="Price for disk on volume contract offer. Defaults to price_disk. Invalid if vol_size is 0.", type=float),
     usage="vastai list machine ID [options]",
     help="[Host] list a machine for rent",
     epilog=deindent("""
@@ -6473,7 +4982,7 @@ def list__machine(args):
     argument("ids", help="ids of instance to list", type=int, nargs='+'),
     argument("-g", "--price_gpu", help="per gpu on-demand rental price in $/hour (base price for active instances)", type=float),
     argument("-s", "--price_disk",
-             help="storage price in $/GB/month (price for inactive instances), default: $0.10/GB/month", type=float),
+             help="storage price in $/GB/month (price for inactive instances), default: $0.15/GB/month", type=float),
     argument("-u", "--price_inetu", help="price for internet upload bandwidth in $/GB", type=float),
     argument("-d", "--price_inetd", help="price for internet download bandwidth in $/GB", type=float),
     argument("-b", "--price_min_bid", help="per gpu minimum bid price floor in $/hour", type=float),
@@ -6481,8 +4990,6 @@ def list__machine(args):
     argument("-m", "--min_chunk", help="minimum amount of gpus", type=int),
     argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format)", type=str),
     argument("-l", "--duration", help="Updates end_date daily to be duration from current date. Cannot be combined with end_date. Format is: `n days`, `n weeks`, `n months`, `n years`, or total intended duration in seconds."),
-    argument("-v", "--vol_size", help="Size for volume contract offer. Defaults to half of available disk. Set 0 to not create a volume contract offer.", type=int),
-    argument("-z", "--vol_price", help="Price for disk on volume contract offer. Defaults to price_disk. Invalid if vol_size is 0.", type=float),
     usage="vastai list machines IDs [options]",
     help="[Host] list machines for rent",
     epilog=deindent("""
@@ -6498,48 +5005,12 @@ def list__machines(args):
     return res
 
 
-
-
-
-@parser.command(
-    argument("disk_id", help="id of network disk to list", type=int),
-    argument("-p", "--price_disk", help="storage price in $/GB/month, default: $%(default).2f/GB/month", default=.15, type=float),
-    argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format), default 1 month", type=str, default=None),
-    argument("-s", "--size", help="size of disk space allocated to offer in GB, default %(default)s GB", default=15, type=int),
-    usage="vastai list network volume DISK_ID [options]",
-    help="[Host] list disk space for rent as a network volume"
-)
-def list__network_volume(args):
-    json_blob = {
-        "disk_id": args.disk_id,
-        "price_disk": args.price_disk,
-        "size": args.size
-    }
-
-    if args.end_date:
-        json_blob["end_date"] = string_to_unix_epoch(args.end_date)
-
-    url = apiurl(args, "/network_volumes/")
-
-    if args.explain:
-        print("request json: ")
-        print(json_blob)
-
-    r = http_post(args, url, headers=headers, json=json_blob)
-    r.raise_for_status()
-    if args.raw:
-        return r
-
-    print(r.json()["msg"])
-
-
-
 @parser.command(
     argument("id", help="id of machine to list", type=int),
     argument("-p", "--price_disk",
-             help="storage price in $/GB/month, default: $%(default).2f/GB/month", default=.10, type=float),
-    argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format), default 3 months", type=str),
-    argument("-s", "--size", help="size of disk space allocated to offer in GB, default %(default)s GB", default=15),
+             help="storage price in $/GB/month, default: $0.15/GB/month", default=.15, type=float),
+    argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format), default 1 month", type=str),
+    argument("-s", "--size", help="size of disk space allocated to offer in GB, default 15 GB", default=15),
     usage="vastai list volume ID [options]",
     help="[Host] list disk space for rent as a volume on a machine",
     epilog=deindent("""
@@ -6547,10 +5018,16 @@ def list__network_volume(args):
     """)
 )
 def list__volume(args):        
+    size = args.size
+    if not size:
+        size = 15.0
+    price_disk = args.price_disk
+    if not price_disk:
+        price_disk = .15
+
     json_blob ={
-        "size": int(args.size),
-        "machine": int(args.id),
-        "price_disk": float(args.price_disk)
+        "size": int(size),
+        "machine": int(args.id)
     }
     if args.end_date:
         json_blob["end_date"] = string_to_unix_epoch(args.end_date)
@@ -6571,10 +5048,10 @@ def list__volume(args):
 
 @parser.command(
     argument("ids", help="id of machines list", type=int, nargs='+'),
-    argument("-p", "--price_disk",
-             help="storage price in $/GB/month, default: $%(default).2f/GB/month", default=.10, type=float),
-    argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format), default 3 months", type=str),
-    argument("-s", "--size", help="size of disk space allocated to offer in GB, default %(default)s GB", default=15),
+    argument("-s", "--price_disk",
+             help="storage price in $/GB/month, default: $0.10/GB/month", type=float),
+    argument("-e", "--end_date", help="contract offer expiration - the available until date (optional, in unix float timestamp or MM/DD/YYYY format)", type=str),
+    argument("-n", "--size", help="size of disk space allocated to offer in GB, default 5 GB"),
     usage="vastai list volume IDs [options]",
     help="[Host] list disk space for rent as a volume on machines",
     epilog=deindent("""
@@ -6582,10 +5059,16 @@ def list__volume(args):
     """)
 )
 def list__volumes(args):
+    size = args.size
+    if not size:
+        size = 15.0
+    price_disk = args.price_disk
+    if not price_disk:
+        price_disk = .15
+
     json_blob ={
-        "size": int(args.size),
-        "machine": [int(id) for id in args.ids],
-        "price_disk": float(args.price_disk)
+        "size": int(size),
+        "machine": [int(id) for id in args.ids]
     }
     if args.end_date:
         json_blob["end_date"] = string_to_unix_epoch(args.end_date)
@@ -6602,8 +5085,6 @@ def list__volumes(args):
         return r
     else:
         print("Created. {}".format(r.json()))
-
-
 
 
 
@@ -6632,268 +5113,6 @@ def remove__defjob(args):
     else:
         print(r.text);
         print("failed with error {r.status_code}".format(**locals()));
-
-
-
-@parser.command(
-    argument("machine_id", help="Machine ID", type=str),
-    argument("--debugging", action="store_true", help="Enable debugging output"),
-    argument("--explain", action="store_true", help="Output verbose explanation of mapping of CLI calls to HTTPS API endpoints"),
-    argument("--raw", action="store_true", help="Output machine-readable JSON"), 
-    argument("--url", help="Server REST API URL", default="https://console.vast.ai"),
-    argument("--retry", help="Retry limit", type=int, default=3),
-    argument("--ignore-requirements", action="store_true", help="Ignore the minimum system requirements and run the self test regardless"),
-    usage="vastai self-test machine <machine_id> [--debugging] [--explain] [--api_key API_KEY] [--url URL] [--retry RETRY] [--raw] [--ignore-requirements]",
-    help="[Host] Perform a self-test on the specified machine",
-    epilog=deindent("""
-        This command tests if a machine meets specific requirements and 
-        runs a series of tests to ensure it's functioning correctly.
-
-        Examples:
-         vast self-test machine 12345
-         vast self-test machine 12345 --debugging
-         vast self-test machine 12345 --explain
-         vast self-test machine 12345 --api_key <YOUR_API_KEY>
-    """),
-)
-
-def self_test__machine(args):
-    """
-    Performs a self-test on the specified machine to verify its compliance with
-    required specifications and functionality.
-    """
-    instance_id = None  # Store instance ID for cleanup if needed
-    result = {"success": False, "reason": ""}
-    
-    # Ensure debugging attribute exists in args
-    if not hasattr(args, 'debugging'):
-        args.debugging = False
-    
-    try:
-        # Load API key
-        if not args.api_key:
-            api_key_file = os.path.expanduser("~/.vast_api_key")
-            if os.path.exists(api_key_file):
-                with open(api_key_file, "r") as reader:
-                    args.api_key = reader.read().strip()
-            else:
-                progress_print(args, "No API key found. Please set it using 'vast set api-key YOUR_API_KEY_HERE'")
-                result["reason"] = "API key not found."
-        
-        api_key = args.api_key
-        if not api_key:
-            raise Exception("API key is missing.")
-
-        # Prepare destroy_args
-        destroy_args = argparse.Namespace(
-            api_key=api_key,
-            url=args.url,
-            retry=args.retry,
-            explain=False,
-            raw=args.raw,
-            debugging=args.debugging,
-        )
-
-        # Check requirements
-        meets_requirements, unmet_reasons = check_requirements(args.machine_id, api_key, args)
-        if not meets_requirements and not args.ignore_requirements:
-            # immediately fail
-            progress_print(args, f"Machine ID {args.machine_id} does not meet the following requirements:")
-            for reason in unmet_reasons:
-                progress_print(args, f"- {reason}")
-            result["reason"] = "; ".join(unmet_reasons)
-            return result
-        if not meets_requirements and args.ignore_requirements:
-            progress_print(args, f"Machine ID {args.machine_id} does not meet the following requirements:")
-            for reason in unmet_reasons:
-                progress_print(args, f"- {reason}")
-                # If user did pass --ignore-requirements, warn and continue
-                progress_print(args, "Continuing despite unmet requirements because --ignore-requirements is set.")
-
-        def cuda_map_to_image(cuda_version):
-            """
-            Maps a CUDA version to a Docker image tag, falling back to the next lower version until failure.
-            """
-            docker_repo = "vastai/test"
-            # Convert float input to string
-            if isinstance(cuda_version, float):
-                cuda_version = str(cuda_version)
-            
-            # Predefined mapping. Tracks PyTorch releases
-            docker_tag_map = {
-                "11.8": "cu118",
-                "12.1": "cu121",
-                "12.4": "cu124",
-                "12.6": "cu126",
-                "12.8": "cu128"
-            }
-            
-            if cuda_version in docker_tag_map:
-                return f"{docker_repo}:self-test-{docker_tag_map[cuda_version]}"
-            
-            # Try to find the next version down
-            cuda_float = float(cuda_version)
-            
-            # Try to decrement the version by 0.1 until we find a match or run out of options
-            next_version = round(cuda_float - 0.1, 1)
-            while next_version >= min(float(v) for v in docker_tag_map.keys()):
-                next_version_str = str(next_version)
-                if next_version_str in docker_tag_map:
-                    return f"{docker_repo}:self-test-{docker_tag_map[next_version_str]}"
-                next_version = round(next_version - 0.1, 1)
-            
-            raise KeyError(f"No CUDA version found for {cuda_version} or any lower version")
-    
-
-        def search_offers_and_get_top(machine_id):
-            search_args = argparse.Namespace(
-                query=[f"machine_id={machine_id}", "verified=any", "rentable=true", "rented=any"],
-                type="on-demand",
-                quiet=False,
-                no_default=False,
-                new=False,
-                limit=None,
-                disable_bundling=False,
-                storage=5.0,
-                order="score-",
-                raw=True,
-                explain=args.explain,
-                api_key=api_key,
-                url=args.url,
-                curl=args.curl,
-                retry=args.retry,
-                debugging=args.debugging,
-            )
-            offers = search__offers(search_args)
-            if not offers:
-                progress_print(args, f"Machine ID {machine_id} not found or not rentable.")
-                return None
-            sorted_offers = sorted(offers, key=lambda x: x.get("dlperf", 0), reverse=True)
-            return sorted_offers[0] if sorted_offers else None
-
-        top_offer = search_offers_and_get_top(args.machine_id)
-        if not top_offer:
-            progress_print(args, f"No valid offers found for Machine ID {args.machine_id}")
-            result["reason"] = "No valid offers found."
-        else:
-            ask_contract_id = top_offer["id"]
-            cuda_version = top_offer["cuda_max_good"]
-            docker_image = cuda_map_to_image(cuda_version)
-
-            # Prepare arguments for instance creation
-            create_args = argparse.Namespace(
-                id=ask_contract_id,
-                user=None,
-                price=None,  # Set bid_price to None
-                disk=40,  # Match the disk size from the working command
-                image=docker_image,
-                login=None,
-                label=None,
-                onstart=None,
-                onstart_cmd="/verification/remote.sh",
-                entrypoint=None,
-                ssh=False,  # Set ssh to False
-                jupyter=True,  # Set jupyter to True
-                direct=True,
-                jupyter_dir=None,
-                jupyter_lab=False,
-                lang_utf8=False,
-                python_utf8=False,
-                extra=None,
-                env="-e TZ=PDT -e XNAME=XX4 -p 5000:5000 -p 1234:1234",
-                args=None,
-                force=False,
-                cancel_unavail=False,
-                template_hash=None,
-                raw=True,
-                explain=args.explain,
-                api_key=api_key,
-                url=args.url,
-                retry=args.retry,
-                debugging=args.debugging,
-                bid_price=None,  # Ensure bid_price is None
-                create_volume=None,
-                link_volume=None,
-            )
-
-            # Create instance
-            try:
-                progress_print(args, f"Starting test with {docker_image}")
-                response = create__instance(create_args)
-                if isinstance(response, requests.Response):  # Check if it's an HTTP response
-                    if response.status_code == 200:
-                        try:
-                            instance_info = response.json()  # Parse JSON
-                            if args.debugging:
-                                debug_print(args, "Captured instance_info from create__instance:", instance_info)
-                        except json.JSONDecodeError as e:
-                            progress_print(args, f"Error parsing JSON response: {e}")
-                            debug_print(args, f"Raw response content: {response.text}")
-                            raise Exception("Failed to parse JSON from instance creation response.")
-                    else:
-                        progress_print(args, f"HTTP error during instance creation: {response.status_code}")
-                        debug_print(args, f"Response text: {response.text}")
-                        raise Exception(f"Instance creation failed with status {response.status_code}")
-                else:
-                    raise Exception("Unexpected response type from create__instance.")
-            except Exception as e:
-                progress_print(args, f"Error creating instance: {e}")
-                result["reason"] = "Failed to create instance. Check the docker configuration. Use the self-test machine function in vast cli "
-                return result  # Cleanup handled in finally block
-
-            # Extract instance ID and proceed
-            instance_id = instance_info.get("new_contract")
-            if not instance_id:
-                progress_print(args, "Instance creation response did not contain 'new_contract'.")
-                result["reason"] = "Instance creation failed."
-            else:
-                # Wait for the instance to start
-                instance_info, wait_reason = wait_for_instance(instance_id, api_key, args, destroy_args)
-                if not instance_info:
-                    result["reason"] = wait_reason
-                else:
-                    # Proceed with the rest of your code
-                    # Run machine tester
-                    ip_address = instance_info.get("public_ipaddr")
-                    if not ip_address:
-                        result["reason"] = "Failed to retrieve public IP address."
-                    else:
-                        port_mappings = instance_info.get("ports", {}).get("5000/tcp", [])
-                        port = port_mappings[0].get("HostPort") if port_mappings else None
-                        if not port:
-                            result["reason"] = "Failed to retrieve mapped port."
-                        else:
-                            delay = "15"
-                            success, reason = run_machinetester(
-                                ip_address, port, str(instance_id), args.machine_id, delay, args, api_key=api_key
-                            )
-                            result["success"] = success
-                            result["reason"] = reason
-
-    except Exception as e:
-        result["success"] = False
-        result["reason"] = str(e)
-
-    finally:
-        try:
-            if instance_id and instance_exist(instance_id, api_key, destroy_args):
-                destroy_instance_silent(instance_id, destroy_args)
-        except Exception as e:
-            if args.debugging:
-                debug_print(args, f"Error during cleanup: {e}")
-
-    # Output results
-    if args.raw:
-        print(json.dumps(result))
-        sys.exit(0)
-    else:
-        if result["success"]:
-            print("Test completed successfully.")
-            sys.exit(0)
-        else:
-            print(f"Test failed: {result['reason']}")
-            sys.exit(1)
-
 
 
 
@@ -6977,7 +5196,7 @@ def parse_env(envs):
     prev = None
     for e in env:
         if (prev is None):
-          if (e in {"-e", "-p", "-h", "-v", "-n"}):
+          if (e in {"-e", "-p", "-h", "-v"}):
               prev = e
           else:
             pass
@@ -6999,9 +5218,6 @@ def parse_env(envs):
           elif (prev == "-v"):
             if (set(e).issubset(set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:./_"))):
                 result["-v " + e] = "1" 
-          elif (prev == "-n"):
-            if (set(e).issubset(set("abcdefghijklmnopqrstuvwxyz0123456789-"))):
-                result["-n " + e] = "1"
           else:
               result[prev] = e
           prev = None
@@ -7051,15 +5267,16 @@ def set__min_bid(args):
     argument("id", help="id of machine to schedule maintenance for", type=int),
     argument("--sdate",      help="maintenance start date in unix epoch time (UTC seconds)", type=float),
     argument("--duration",   help="maintenance duration in hours", type=float),
+    argument("--maintenance_reason",   help="(optional) reason for the maintenance. Minimum 70 chars and Maximum 300 chars", type=str, default="not provided"),
     argument("--maintenance_category",   help="(optional) can be one of [power, internet, disk, gpu, software, other]", type=str, default="not provided"),
-    usage="vastai schedule maintenance id [--sdate START_DATE --duration DURATION --maintenance_category MAINTENANCE_CATEGORY]",
+    usage="vastai schedule maintenance id [--sdate START_DATE --duration DURATION --maintenance_reason MAINTENANCE_REASON --maintenance_category MAINTENANCE_CATEGORY]",
     help="[Host] Schedule upcoming maint window",
     epilog=deindent("""
         The proper way to perform maintenance on your machine is to wait until all active contracts have expired or the machine is vacant.
         For unplanned or unscheduled maintenance, use this schedule maint command. That will notify the client that you have to take the machine down and that they should save their work. 
         You can specify a date, duration, reason and category for the maintenance.         
 
-        Example: vastai schedule maint 8207 --sdate 1677562671 --duration 0.5 --maintenance_category "power"
+        Example: vastai schedule maint 8207 --sdate 1677562671 --duration 0.5 --maintenance_reason "maintenance reason as a string that briefly helps clients understand why the maintenance was necessary" --maintenance_category "power"
     """),
     )
 def schedule__maint(args):
@@ -7168,39 +5385,6 @@ def show__maints(args):
 
 
 @parser.command(
-    usage="vastai show network-disks",
-    help="[Host] Show network disks associated with your account.",
-    epilog=deindent("""
-        Show network disks associated with your account.
-    """)
-)
-def show__network_disks(args: argparse.Namespace):
-    req_url = apiurl(args, "/network_disk/")
-    r = http_get(args, req_url)
-    r.raise_for_status()
-    response_data = r.json()
-
-    if args.raw:
-        return response_data
-
-    for cluster_data in response_data['data']:
-        print(f"Cluster ID: {cluster_data['cluster_id']}")
-        display_table(cluster_data['network_disks'], network_disk_fields, replace_spaces=False)
-
-        machine_rows = []
-        for machine_id in cluster_data['machine_ids']:
-            machine_rows.append(
-                {
-                    "machine_id": machine_id,
-                    "mount_point": cluster_data['mounts'].get(str(machine_id), "N/A"),
-                }
-            )
-        print()
-        display_table(machine_rows, network_disk_machine_fields, replace_spaces=False)
-        print("\n")
-
-
-@parser.command(
     argument("id", help="id of machine to unlist", type=int),
     usage="vastai unlist machine <id>",
     help="[Host] Unlist a listed machine",
@@ -7224,53 +5408,6 @@ def unlist__machine(args):
     else:
         print(r.text);
         print("failed with error {r.status_code}".format(**locals()));
-
-@parser.command(
-    argument("id", help="id of network volume offer to unlist", type=int),
-    usage="vastai unlist network volume OFFER_ID",
-    help="[Host] Unlists network volume offer",
-)
-def unlist__network_volume(args):
-    json_blob = {
-        "id": args.id
-    }
-
-    url = apiurl(args, "/network_volumes/unlist/")
-
-    if args.explain:
-        print("request json: ")
-        print(json_blob)
-
-    r = http_post(args, url, headers=headers, json=json_blob)
-    r.raise_for_status()
-    if args.raw:
-        return r
- 
-    print(r.json()["msg"])
-
-@parser.command(
-    argument("id", help="volume ID you want to unlist", type=int),
-    usage="vastai unlist volume ID",
-    help="[Host] unlist volume offer"
-)
-def unlist__volume(args):
-    id = args.id
-
-    json_blob = {
-        "id": id
-    }
-
-    url = apiurl(args, "/volumes/unlist")
-
-    if args.explain:
-        print("request json:", json_blob)
-
-    r = http_post(args, url, headers, json_blob)
-    r.raise_for_status()
-    if args.raw:
-        return r
-    else:
-        print(r.json()["msg"])
 
 
 def suppress_stdout():
@@ -7683,12 +5820,12 @@ def check_requirements(machine_id, api_key, args):
             unmet_reasons.append("PCIe bandwidth <= 2.85")
 
         # 5. Download speed
-        if safe_float(top_offer.get('inet_down')) < 500:
-            unmet_reasons.append("Download speed < 500 Mb/s")
+        if safe_float(top_offer.get('inet_down')) <= 10:
+            unmet_reasons.append("Download speed <= 10 Mb/s")
 
         # 6. Upload speed
-        if safe_float(top_offer.get('inet_up')) < 500:
-            unmet_reasons.append("Upload speed < 500 Mb/s")
+        if safe_float(top_offer.get('inet_up')) <= 10:
+            unmet_reasons.append("Upload speed <= 10 Mb/s")
 
         # 7. GPU RAM
         if safe_float(top_offer.get('gpu_ram')) <= 7:
@@ -7820,6 +5957,262 @@ def wait_for_instance(instance_id, api_key, args, destroy_args, timeout=900, int
     progress_print(args, reason)
     return False, reason
 
+@parser.command(
+    argument("machine_id", help="Machine ID", type=str),
+    argument("--debugging", action="store_true", help="Enable debugging output"),
+    argument("--explain", action="store_true", help="Output verbose explanation of mapping of CLI calls to HTTPS API endpoints"),
+    argument("--raw", action="store_true", help="Output machine-readable JSON"), 
+    argument("--url", help="Server REST API URL", default="https://console.vast.ai"),
+    argument("--retry", help="Retry limit", type=int, default=3),
+    argument("--ignore-requirements", action="store_true", help="Ignore the minimum system requirements and run the self test regardless"),
+    usage="vastai self-test machine <machine_id> [--debugging] [--explain] [--api_key API_KEY] [--url URL] [--retry RETRY] [--raw] [--ignore-requirements]",
+    help="[Host] Perform a self-test on the specified machine",
+    epilog=deindent("""
+        This command tests if a machine meets specific requirements and 
+        runs a series of tests to ensure it's functioning correctly.
+
+        Examples:
+         vast self-test machine 12345
+         vast self-test machine 12345 --debugging
+         vast self-test machine 12345 --explain
+         vast self-test machine 12345 --api_key <YOUR_API_KEY>
+    """),
+)
+
+def self_test__machine(args):
+    """
+    Performs a self-test on the specified machine to verify its compliance with
+    required specifications and functionality.
+    """
+    instance_id = None  # Store instance ID for cleanup if needed
+    result = {"success": False, "reason": ""}
+    
+    # Ensure debugging attribute exists in args
+    if not hasattr(args, 'debugging'):
+        args.debugging = False
+    
+    try:
+        # Load API key
+        if not args.api_key:
+            api_key_file = os.path.expanduser("~/.vast_api_key")
+            if os.path.exists(api_key_file):
+                with open(api_key_file, "r") as reader:
+                    args.api_key = reader.read().strip()
+            else:
+                progress_print(args, "No API key found. Please set it using 'vast set api-key YOUR_API_KEY_HERE'")
+                result["reason"] = "API key not found."
+        
+        api_key = args.api_key
+        if not api_key:
+            raise Exception("API key is missing.")
+
+        # Prepare destroy_args
+        destroy_args = argparse.Namespace(
+            api_key=api_key,
+            url=args.url,
+            retry=args.retry,
+            explain=False,
+            raw=args.raw,
+            debugging=args.debugging,
+        )
+
+        # Check requirements
+        meets_requirements, unmet_reasons = check_requirements(args.machine_id, api_key, args)
+        if not meets_requirements and not args.ignore_requirements:
+            # immediately fail
+            progress_print(args, f"Machine ID {args.machine_id} does not meet the following requirements:")
+            for reason in unmet_reasons:
+                progress_print(args, f"- {reason}")
+            result["reason"] = "; ".join(unmet_reasons)
+            return result
+        if not meets_requirements and args.ignore_requirements:
+            progress_print(args, f"Machine ID {args.machine_id} does not meet the following requirements:")
+            for reason in unmet_reasons:
+                progress_print(args, f"- {reason}")
+                # If user did pass --ignore-requirements, warn and continue
+                progress_print(args, "Continuing despite unmet requirements because --ignore-requirements is set.")
+
+        def cuda_map_to_image(cuda_version):
+            """
+            Maps a CUDA version to a Docker image tag, falling back to the next lower version until failure.
+            """
+            docker_repo = "vastai/test"
+            # Convert float input to string
+            if isinstance(cuda_version, float):
+                cuda_version = str(cuda_version)
+            
+            # Predefined mapping. Tracks PyTorch releases
+            docker_tag_map = {
+                "11.8": "cu118",
+                "12.1": "cu121",
+                "12.4": "cu124",
+                "12.6": "cu126",
+                "12.8": "cu128"
+            }
+            
+            if cuda_version in docker_tag_map:
+                return f"{docker_repo}:self-test-{docker_tag_map[cuda_version]}"
+            
+            # Try to find the next version down
+            cuda_float = float(cuda_version)
+            
+            # Try to decrement the version by 0.1 until we find a match or run out of options
+            next_version = round(cuda_float - 0.1, 1)
+            while next_version >= min(float(v) for v in docker_tag_map.keys()):
+                next_version_str = str(next_version)
+                if next_version_str in docker_tag_map:
+                    return f"{docker_repo}:self-test-{docker_tag_map[next_version_str]}"
+                next_version = round(next_version - 0.1, 1)
+            
+            raise KeyError(f"No CUDA version found for {cuda_version} or any lower version")
+    
+
+        def search_offers_and_get_top(machine_id):
+            search_args = argparse.Namespace(
+                query=[f"machine_id={machine_id}", "verified=any", "rentable=true", "rented=any"],
+                type="on-demand",
+                quiet=False,
+                no_default=False,
+                new=False,
+                limit=None,
+                disable_bundling=False,
+                storage=5.0,
+                order="score-",
+                raw=True,
+                explain=args.explain,
+                api_key=api_key,
+                url=args.url,
+                curl=args.curl,
+                retry=args.retry,
+                debugging=args.debugging,
+            )
+            offers = search__offers(search_args)
+            if not offers:
+                progress_print(args, f"Machine ID {machine_id} not found or not rentable.")
+                return None
+            sorted_offers = sorted(offers, key=lambda x: x.get("dlperf", 0), reverse=True)
+            return sorted_offers[0] if sorted_offers else None
+
+        top_offer = search_offers_and_get_top(args.machine_id)
+        if not top_offer:
+            progress_print(args, f"No valid offers found for Machine ID {args.machine_id}")
+            result["reason"] = "No valid offers found."
+        else:
+            ask_contract_id = top_offer["id"]
+            cuda_version = top_offer["cuda_max_good"]
+            docker_image = cuda_map_to_image(cuda_version)
+
+            # Prepare arguments for instance creation
+            create_args = argparse.Namespace(
+                id=ask_contract_id,
+                user=None,
+                price=None,  # Set bid_price to None
+                disk=40,  # Match the disk size from the working command
+                image=docker_image,
+                login=None,
+                label=None,
+                onstart=None,
+                onstart_cmd="/verification/remote.sh",
+                entrypoint=None,
+                ssh=False,  # Set ssh to False
+                jupyter=True,  # Set jupyter to True
+                direct=True,
+                jupyter_dir=None,
+                jupyter_lab=False,
+                lang_utf8=False,
+                python_utf8=False,
+                extra=None,
+                env="-e TZ=PDT -e XNAME=XX4 -p 5000:5000 -p 1234:1234",
+                args=None,
+                force=False,
+                cancel_unavail=False,
+                template_hash=None,
+                raw=True,
+                explain=args.explain,
+                api_key=api_key,
+                url=args.url,
+                retry=args.retry,
+                debugging=args.debugging,
+                bid_price=None,  # Ensure bid_price is None
+            )
+
+            # Create instance
+            try:
+                progress_print(args, f"Starting test with {docker_image}")
+                response = create__instance(create_args)
+                if isinstance(response, requests.Response):  # Check if it's an HTTP response
+                    if response.status_code == 200:
+                        try:
+                            instance_info = response.json()  # Parse JSON
+                            if args.debugging:
+                                debug_print(args, "Captured instance_info from create__instance:", instance_info)
+                        except json.JSONDecodeError as e:
+                            progress_print(args, f"Error parsing JSON response: {e}")
+                            debug_print(args, f"Raw response content: {response.text}")
+                            raise Exception("Failed to parse JSON from instance creation response.")
+                    else:
+                        progress_print(args, f"HTTP error during instance creation: {response.status_code}")
+                        debug_print(args, f"Response text: {response.text}")
+                        raise Exception(f"Instance creation failed with status {response.status_code}")
+                else:
+                    raise Exception("Unexpected response type from create__instance.")
+            except Exception as e:
+                progress_print(args, f"Error creating instance: {e}")
+                result["reason"] = "Failed to create instance. Check the docker configuration. Use the self-test machine function in vast cli "
+                return result  # Cleanup handled in finally block
+
+            # Extract instance ID and proceed
+            instance_id = instance_info.get("new_contract")
+            if not instance_id:
+                progress_print(args, "Instance creation response did not contain 'new_contract'.")
+                result["reason"] = "Instance creation failed."
+            else:
+                # Wait for the instance to start
+                instance_info, wait_reason = wait_for_instance(instance_id, api_key, args, destroy_args)
+                if not instance_info:
+                    result["reason"] = wait_reason
+                else:
+                    # Proceed with the rest of your code
+                    # Run machine tester
+                    ip_address = instance_info.get("public_ipaddr")
+                    if not ip_address:
+                        result["reason"] = "Failed to retrieve public IP address."
+                    else:
+                        port_mappings = instance_info.get("ports", {}).get("5000/tcp", [])
+                        port = port_mappings[0].get("HostPort") if port_mappings else None
+                        if not port:
+                            result["reason"] = "Failed to retrieve mapped port."
+                        else:
+                            delay = "15"
+                            success, reason = run_machinetester(
+                                ip_address, port, str(instance_id), args.machine_id, delay, args, api_key=api_key
+                            )
+                            result["success"] = success
+                            result["reason"] = reason
+
+    except Exception as e:
+        result["success"] = False
+        result["reason"] = str(e)
+
+    finally:
+        try:
+            if instance_id and instance_exist(instance_id, api_key, destroy_args):
+                destroy_instance_silent(instance_id, destroy_args)
+        except Exception as e:
+            if args.debugging:
+                debug_print(args, f"Error during cleanup: {e}")
+
+    # Output results
+    if args.raw:
+        print(json.dumps(result))
+        sys.exit(0)
+    else:
+        if result["success"]:
+            print("Test completed successfully.")
+            sys.exit(0)
+        else:
+            print(f"Test failed: {result['reason']}")
+            sys.exit(1)
 
 
 login_deprecated_message = """
@@ -7860,13 +6253,11 @@ def main():
     global ARGS
     parser.add_argument("--url", help="server REST api url", default=server_url_default)
     parser.add_argument("--retry", help="retry limit", default=3)
-    parser.add_argument("--explain", action="store_true", help="output verbose explanation of mapping of CLI calls to HTTPS API endpoints")
     parser.add_argument("--raw", action="store_true", help="output machine-readable json")
-    parser.add_argument("--full", action="store_true", help="print full results instead of paging with `less`")
+    parser.add_argument("--explain", action="store_true", help="output verbose explanation of mapping of CLI calls to HTTPS API endpoints")
     parser.add_argument("--curl", action="store_true", help="show a curl equivalency to the call")
     parser.add_argument("--api-key", help="api key. defaults to using the one stored in {}".format(APIKEY_FILE), type=str, required=False, default=os.getenv("VAST_API_KEY", api_key_guard))
     parser.add_argument("--version", help="show version", action="version", version=VERSION)
-    parser.add_argument("--no-color", action="store_true", help="disable colored output")
 
     ARGS = args = parser.parse_args()
     #print(args.api_key)
@@ -7896,7 +6287,7 @@ def main():
 
     try:
         res = args.func(args)
-        if args.raw and res is not None:
+        if args.raw:
             # There's two types of responses right now
             try:
                 print(json.dumps(res, indent=1, sort_keys=True))
