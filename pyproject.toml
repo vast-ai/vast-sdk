@@ -30,21 +30,20 @@ jsonschema = ">=3.2"
 xdg = ">=1.0.0"
 borb = "~2.1.25"
 requests = "==2.32.3"
-python-dateutil = "==2.6.1"
-pytz = "*"
-urllib3 = "*"
-pyparsing = "*"
-fastapi = ">=0.110"
-uvicorn = { version = ">=0.24", extras = ["standard"] }
+python-dateutil = ">=2.8.2"
+pytz = ">=2023.3"
+urllib3 = ">=2.0,<3.0"
+pyparsing = ">=3.1,<4.0"
+fastapi = ">=0.110,<1.0"
+uvicorn = { version = ">=0.24,<0.32", extras = ["standard"] }
 aiohttp = { version = "==3.10.1", extras = ["speedups"] }
-asyncio = "*"
+aiodns = ">=3.2.0"        # matches modern aiohttp speedups 
+pycares = ">=4.7.0"       # provides ares_query_a_result etc. 
 anyio = "~4.4"
-lib = "~4.0"
 nltk = "~3.9"
 psutil = "~6.0"
 pycryptodome = "~3.20"
 transformers = "~4.52"
-utils = "==1.0.*"
 hf_transfer = ">=0.1.9"
 
 [tool.poetry.group.dev.dependencies]

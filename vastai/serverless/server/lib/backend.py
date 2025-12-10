@@ -309,7 +309,6 @@ class Backend:
                 break
 
             except Exception as e:
-
                 log.debug(f"Healthcheck failed with exception: {e}")
                 self.backend_errored(str(e))
 
