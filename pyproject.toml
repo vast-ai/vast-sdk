@@ -34,7 +34,9 @@ python-dateutil = "*"
 pyparsing = "*"
 pytz = "*"
 urllib3 = "*"
-aiohttp = "*"
+aiohttp = "==3.10.1" 
+aiodns = ">=3.6.0" 
+pycares = "=4.11.0" # pinned because v5.0.0 was incompatible with aiodns
 asyncio = "*"
 
 
