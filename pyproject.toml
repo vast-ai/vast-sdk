@@ -37,8 +37,8 @@ pyparsing = ">=3.1,<4.0"
 fastapi = ">=0.110,<1.0"
 uvicorn = { version = ">=0.24,<0.32", extras = ["standard"] }
 aiohttp = "==3.10.1" 
-aiodns = ">=3.2.0"        # matches modern aiohttp speedups 
-pycares = ">=4.7.0"       # provides ares_query_a_result etc. 
+aiodns = ">=3.6.0" 
+pycares = "=4.11.0"
 anyio = "~4.4"
 nltk = "~3.9"
 psutil = "~6.0"
