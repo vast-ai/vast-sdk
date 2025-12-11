@@ -194,10 +194,9 @@ class EndpointHandlerFactory:
                 """The endpoint is the same as the route"""
                 return self._route
 
-            #Legacy property, unused.
             @property
             def healthcheck_endpoint(self) -> Optional[str]:
-                return ""
+                return None
             
             @classmethod
             def payload_cls(cls) -> Type[PayloadClass]:
