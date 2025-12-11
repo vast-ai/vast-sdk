@@ -102,6 +102,7 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     benchmark_runs: int = 8
     allow_parallel_requests: bool = False
     max_queue_time: float = 30.0
+    is_remote_dispatch: bool = False
 
     @property
     @abstractmethod

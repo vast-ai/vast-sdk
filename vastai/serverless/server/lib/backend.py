@@ -320,12 +320,44 @@ class Backend:
     def backend_errored(self, msg: str) -> None:
         self.metrics._model_errored(msg)
 
+    async def __call_backend(
+        self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
+    ) -> ClientResponse:
+        if handler.is_remote_dispatch:
+            return await self.__call_remote_dispatch(handler=handler, payload=payload)
+        else:
+            return await self.__call_api(handler=handler, payload=payload)
+
     async def __call_api(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
         api_payload = payload.generate_payload_json()
-        log.debug(f"Posting to '{handler.endpoint}', payload: {api_payload}")
+        log.debug(f"posting to endpoint: '{handler.endpoint}', payload: {api_payload}")
         return await self.session.post(url=handler.endpoint, json=api_payload)
+
+    async def __call_remote_dispatch(
+        self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
+    ) -> ClientResponse:
+        remote_func_params = payload.generate_payload_json()
+        log.debug(
+            f"Calling remote dispatch function on {handler.endpoint} "
+            f"with params {remote_func_params}"
+        )
+
+        result = await handler.call_remote_dispatch_function(params=remote_func_params)
+
+        # Wrap the result in a fake ClientResponse-like object
+        class RemoteDispatchClientResponse:
+            def __init__(self, data: Any, status: int = 200):
+                self._body = json.dumps({"result": data}).encode("utf-8")
+                self.status = status
+                self.content_type = "application/json"
+                self.headers = {"Content-Type": self.content_type}
+
+            async def read(self) -> bytes:
+                return self._body
+
+        return RemoteDispatchClientResponse(result) 
 
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
