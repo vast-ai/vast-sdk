@@ -48,6 +48,7 @@ class HandlerConfig:
     request_parser: Optional[RequestPayloadParser] = None
     response_generator: Optional[ClientResponseGenerator] = None
     workload_calculator: Optional[WorkloadCalculator] = None
+    remote_function: Optional[Callable] = None
 
 
 @dataclass
@@ -189,6 +190,13 @@ class EndpointHandlerFactory:
                     else 10
                 )
             )
+            remote_function: Callable[..., Awaitable[Any]] = field(
+                default=(
+                    handler_config.remote_function
+                    if handler_config.remote_function is not None
+                    else None
+                )
+            )
             @property
             def endpoint(self) -> str:
                 """The endpoint is the same as the route"""
@@ -206,6 +214,18 @@ class EndpointHandlerFactory:
                 """Just call the payload class's for_test() method"""
                 return PayloadClass.for_test()
             
+            async def call_remote_dispatch_function(self, params: dict):
+                """
+                define a remote dispatch function for this endpoint, return the result
+                """
+                if self.remote_function is None:
+                    raise RuntimeError(f"remote_function is not configured for route {self._route}")
+
+                try:
+                    return await self.remote_function(**params)
+                except Exception as ex:
+                    raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
+                
             async def generate_client_response(
                 self,
                 client_request: web.Request,

@@ -167,7 +167,7 @@ class Backend:
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
-                response = await self.__call_api(handler=handler, payload=payload)
+                response = await self.__call_backend(handler=handler, payload=payload)
                 res = await handler.generate_client_response(request, response)
                 self.metrics._request_success(request_metrics)
                 return res
@@ -409,7 +409,7 @@ class Backend:
             log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
             log.debug("Initial run to trigger model loading...")
             payload = self.benchmark_handler.make_benchmark_payload()
-            await self.__call_api(handler=self.benchmark_handler, payload=payload)
+            await self.__call_backend(handler=self.benchmark_handler, payload=payload)
 
             max_throughput = 0
             sum_throughput = 0
@@ -421,7 +421,7 @@ class Backend:
                 for i in range(concurrent_requests):
                     payload = self.benchmark_handler.make_benchmark_payload()
                     workload = payload.count_workload()
-                    task = self.__call_api(handler=self.benchmark_handler, payload=payload)
+                    task = self.__call_backend(handler=self.benchmark_handler, payload=payload)
                     benchmark_requests.append(
                         BenchmarkResult(request_idx=i, workload=workload, task=task)
                     )
