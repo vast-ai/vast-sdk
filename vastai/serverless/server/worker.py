@@ -190,7 +190,7 @@ class EndpointHandlerFactory:
                     else 10
                 )
             )
-            remote_function: Callable[..., Awaitable[Any]] = field(
+            remote_dispatch_function: Callable[..., Awaitable[Any]] = field(
                 default=(
                     handler_config.remote_function
                     if handler_config.remote_function is not None
@@ -218,11 +218,11 @@ class EndpointHandlerFactory:
                 """
                 define a remote dispatch function for this endpoint, return the result
                 """
-                if self.remote_function is None:
+                if self.remote_dispatch_function is None:
                     raise RuntimeError(f"remote_function is not configured for route {self._route}")
 
                 try:
-                    return await self.remote_function(**params)
+                    return await self.remote_dispatch_function(**params)
                 except Exception as ex:
                     raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
                 
