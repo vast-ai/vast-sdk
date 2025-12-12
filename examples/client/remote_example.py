@@ -14,7 +14,7 @@ async def main():
 
         # Get the file from the path on the local machine using SCP or SFTP
         # or configure S3 to upload to cloud storage.
-        print(response["response"])
+        print(response["response"]["result"])
 
 if __name__ == "__main__":
     asyncio.run(main())
