@@ -41,7 +41,7 @@ class HandlerConfig:
     """Configuration for defining handlers"""
     route: str
     allow_parallel_requests: bool = False
-    max_queue_time: Optional[float] = 30.0,
+    max_queue_time: Optional[float] = 30.0
     benchmark_config: Optional[BenchmarkConfig] = None
     handler_class: Optional[Type[EndpointHandler]] = None
     payload_class: Optional[Type[ApiPayload]] = None
