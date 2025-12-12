@@ -323,7 +323,7 @@ class Backend:
     async def __call_backend(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
-        if handler.is_remote_dispatch:
+        if handler.remote_dispatch_function:
             return await self.__call_remote_dispatch(handler=handler, payload=payload)
         else:
             return await self.__call_api(handler=handler, payload=payload)
