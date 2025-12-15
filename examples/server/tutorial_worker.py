@@ -42,7 +42,7 @@ worker_config = WorkerConfig(
                 # generator= lambda: { "prompt" : "a" * random.randint(60) }
 
                 # How many times you should run the benchmark
-                runs= 16,
+                runs= 5,
 
                 # If `allow_parallel_requests` == True, how many concurrent payloads per run
                 concurrency=10 

@@ -56,6 +56,7 @@ worker_config = WorkerConfig(
             max_queue_time=60.0,
             benchmark_config=BenchmarkConfig(
                 generator=benchmark_generator,
+                runs=3,
                 concurrency=50
             ),
             workload_calculator= lambda x: x["parameters"]["max_new_tokens"]
