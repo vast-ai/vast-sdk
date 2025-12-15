@@ -345,5 +345,5 @@ class LogAction(Enum):
 class Session:
     session_id: str
     expiration: float  # epoch seconds
-    created_at: float = time.time()
     request_metrics: RequestMetrics
+    created_at: float = time.time()
