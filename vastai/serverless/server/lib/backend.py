@@ -134,9 +134,9 @@ class Backend:
             session_id = generate_session_id()
 
             session_request_metrics = RequestMetrics(
-                request_idx= auth_data.request_idx,
-                reqnum= auth_data.reqnum,
-                workload= auth_data.cost,
+                request_idx= auth_data.get("requset_idx"),
+                reqnum= auth_data.get("reqnum"),
+                workload= auth_data.get("cost"),
                 status="SessionActive"
             )
 
