@@ -104,6 +104,7 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     max_queue_time: float = 30.0
     is_remote_dispatch: bool = False
     remote_dispatch_function: Callable = None
+    do_warmup_benchmark: bool = True
 
     @property
     @abstractmethod

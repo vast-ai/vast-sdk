@@ -151,7 +151,7 @@ class Backend:
                 expiration=expiration,
                 request_metrics = session_request_metrics
             )
-
+            self.sessions[session_id] = session
             self.metrics._request_start(session.request_metrics)
 
             return web.json_response(
@@ -498,10 +498,11 @@ class Backend:
                     return perf
             except FileNotFoundError:
                 pass
-            log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
-            log.debug("Initial run to trigger model loading...")
-            payload = self.benchmark_handler.make_benchmark_payload()
-            await self.__call_backend(handler=self.benchmark_handler, payload=payload)
+            if self.do_warmup_benchmark:
+                log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
+                log.debug("Initial run to trigger model loading...")
+                payload = self.benchmark_handler.make_benchmark_payload()
+                await self.__call_backend(handler=self.benchmark_handler, payload=payload)
 
             max_throughput = 0
             sum_throughput = 0

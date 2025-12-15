@@ -36,6 +36,7 @@ class BenchmarkConfig:
     runs: int = 8
     concurrency: int | None = 10
 
+
 @dataclass
 class HandlerConfig:
     """Configuration for defining handlers"""
