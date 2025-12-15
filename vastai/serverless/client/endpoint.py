@@ -1,5 +1,8 @@
 from .connection import _make_request
-from .session import Session
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .session import Session
 
 class Endpoint:
     name: str
