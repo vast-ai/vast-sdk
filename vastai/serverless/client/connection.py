@@ -131,7 +131,7 @@ async def _make_request(
                         kwargs=kwargs,
                     ) as resp:
                         last_status = resp.status
-                        if resp.status != 200:
+                        if resp.status < 200 or resp.status > 300:
                             text = await resp.text()
                             last_text = text
                             if not _retryable(resp.status) or attempt == retries:
@@ -175,7 +175,7 @@ async def _make_request(
                 text = await resp.text()
                 last_text = text
 
-                if resp.status == 200:
+                if resp.status >= 200 and resp.status < 300:
                     try:
                         return await resp.json(content_type=None)
                     except Exception:
