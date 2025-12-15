@@ -6,7 +6,7 @@ import subprocess
 import dataclasses
 import logging
 from asyncio import wait, sleep, gather, Semaphore, FIRST_COMPLETED, create_task
-from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any
+from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any, Dict
 from functools import cached_property
 from distutils.util import strtobool
 from collections import deque
@@ -79,34 +79,40 @@ class Backend:
     healthcheck_url: str = dataclasses.field(
         default_factory=lambda: os.environ.get("MODEL_HEALTH_ENDPOINT", "")
     )
-    sessions: list[Session] = dataclasses.field(default_factory=list)
-
+    sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
+        
     def create_session_end_handler(self) -> web.Response:
         async def session_end_handler(request: web.Request) -> web.Response:
             try:
                 data = await request.json()
                 session_id = data.get("session_id")
             except JsonDataException as e:
-                return web.json_response(data=e.message, status=422)
+                return web.json_response({"error": e.message}, status=422)
             except json.JSONDecodeError:
-                return web.json_response(dict(error="invalid JSON"), status=422)
+                return web.json_response({"error": "invalid JSON"}, status=422)
 
             if not session_id:
                 return web.json_response({"error": "missing session_id"}, status=422)
-            
-            if not self.sessions.get(session_id):
-                return web.json_response({"error": f"session with id {session_id} not found"}, status=400)
 
-            session: Session = self.sessions.get(session_id)
+            session = self.sessions.get(session_id)
+            if session is None:
+                return web.json_response(
+                    {"error": f"session with id {session_id} not found"},
+                    status=400,
+                )
 
             self.metrics._request_success(session.request_metrics)
             self.metrics._request_end(session.request_metrics)
 
-            self.sessions.pop(session_id)
+            self.sessions.pop(session_id, None)
 
-            return web.json_response({"ended": True, "removed_session": session_id}, status=200)
+            return web.json_response(
+                {"ended": True, "removed_session": session_id},
+                status=200,
+            )
 
         return session_end_handler
+
 
     def create_session_create_handler(self) -> Callable[[web.Request], Awaitable[web.Response]]:
         def generate_session_id():
