@@ -35,6 +35,7 @@ class BenchmarkConfig:
     generator: Callable[[], dict] | None = None  # optional sample factory
     runs: int = 8
     concurrency: int | None = 10
+    do_warmup: bool = True
 
 
 @dataclass
@@ -182,6 +183,13 @@ class EndpointHandlerFactory:
                     handler_config.benchmark_config.runs
                     if handler_config.benchmark_config
                     else 8
+                )
+            )
+            do_warmup_benchmark: bool = field(
+                default=(
+                    handler_config.benchmark_config.do_warmup
+                    if handler_config.benchmark_config
+                    else False
                 )
             )
             concurrency: int = field(

@@ -498,7 +498,7 @@ class Backend:
                     return perf
             except FileNotFoundError:
                 pass
-            if self.do_warmup_benchmark:
+            if self.benchmark_handler.do_warmup_benchmark:
                 log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
                 log.debug("Initial run to trigger model loading...")
                 payload = self.benchmark_handler.make_benchmark_payload()
