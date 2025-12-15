@@ -200,8 +200,8 @@ class Serverless:
                     return []
 
             
-            if not isinstance(data, list):
-                raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
+            # if not isinstance(data, list):
+            #     raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
 
             return [Worker.from_dict(item) for item in data]
 
