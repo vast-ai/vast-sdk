@@ -476,9 +476,6 @@ class Backend:
         if auth_data.reqnum < (self.reqnum - MSG_HISTORY_LEN):
             log.error(f"Signature error: reqnum failure, got {auth_data.reqnum}, current_reqnum: {self.reqnum}")
             return False
-        elif message in self.msg_history:
-            log.error(f"Signature error: message {message} already in message history")
-            return False
         elif verify_signature(json.dumps(message, indent=4, sort_keys=True), auth_data.signature):
             self.reqnum = max(auth_data.reqnum, self.reqnum)
             self.msg_history.append(message)
