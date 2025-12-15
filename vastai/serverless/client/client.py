@@ -196,12 +196,12 @@ class Serverless:
             # should normally return a list of dictionaries containing worker instance information.
             if isinstance(data,dict):
                 if 'error_msg' in data.keys():
-                    print(f"[Warning] Received the following error from get_endpoint_workers:{data['error_msg']}")
+                    print(f"[Warning] Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again.")
                     return []
 
             
-            # if not isinstance(data, list):
-            #     raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
+            if not isinstance(data, list):
+                raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
 
             return [Worker.from_dict(item) for item in data]
 
