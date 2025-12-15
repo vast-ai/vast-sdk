@@ -150,6 +150,7 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     ) -> Tuple[AuthData, ApiPayload_T]:
         errors = {}
         auth_data: Optional[AuthData] = None
+        session_id: Optional[str] = None
         payload: Optional[ApiPayload_T] = None
         try:
             if "auth_data" in req_data:
@@ -166,10 +167,14 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
                 errors["payload"] = "field missing"
         except JsonDataException as e:
             errors["payload"] = e.message
+
+        if "session_id" in req_data:
+            session_id = req_data["session_id"]
+
         if errors:
             raise JsonDataException(errors)
         if auth_data and payload:
-            return (auth_data, payload)
+            return (auth_data, payload, session_id)
         else:
             raise Exception("error deserializing request data")
 
@@ -335,3 +340,10 @@ class LogAction(Enum):
     ModelLoaded = 1
     ModelError = 2
     Info = 3
+
+@dataclass
+class Session:
+    session_id: str
+    expiration: float  # epoch seconds
+    created_at: float = time.time()
+    request_metrics: RequestMetrics

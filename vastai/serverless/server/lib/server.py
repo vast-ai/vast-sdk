@@ -30,6 +30,11 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
         log.debug("Starting Worker Server...")
         app = web.Application()
         app.add_routes(routes)
+
+        # Hardcoded session routes
+        app.router.add_post("/session/create", backend.create_session_create_handler())
+        app.router.add_post("/session/end", backend.create_session_end_handler())
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(

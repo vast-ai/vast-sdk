@@ -15,6 +15,8 @@ from asyncio import sleep, CancelledError
 from anyio import open_file
 from aiohttp import web, ClientResponse, ClientSession, ClientConnectorError, ClientTimeout, TCPConnector
 import asyncio
+import string
+import random
 
 import requests
 from Crypto.Signature import pkcs1_15
@@ -29,7 +31,8 @@ from .data_types import (
     ApiPayload_T,
     JsonDataException,
     RequestMetrics,
-    BenchmarkResult
+    BenchmarkResult,
+    Session
 )
 
 VERSION = "0.3.0"
@@ -76,6 +79,82 @@ class Backend:
     healthcheck_url: str = dataclasses.field(
         default_factory=lambda: os.environ.get("MODEL_HEALTH_ENDPOINT", "")
     )
+    sessions: list[Session] = dataclasses.field(default_factory=list)
+
+    def create_session_end_handler(self) -> web.Response:
+        async def session_end_handler(request: web.Request) -> web.Response:
+            try:
+                data = await request.json()
+                auth_data, payload, session_id = EndpointHandler.get_data_from_request(data)
+            except JsonDataException as e:
+                return web.json_response(data=e.message, status=422)
+            except json.JSONDecodeError:
+                return web.json_response(dict(error="invalid JSON"), status=422)
+
+            if not session_id:
+                return web.json_response({"error": "missing session_id"}, status=422)
+            
+            if not self.sessions.get(session_id):
+                return web.json_response({"error": f"session with id {session_id} not found"}, status=400)
+
+            session: Session = self.sessions.get(session_id)
+
+            self.metrics._request_success(session.request_metrics)
+            self.metrics._request_end(session.request_metrics)
+
+            self.sessions.pop(session_id)
+
+            return web.json_response({"ended": True, "removed_session": session_id}, status=200)
+
+        return session_end_handler
+
+    def create_session_create_handler(self) -> Callable[[web.Request], Awaitable[web.Response]]:
+        def generate_session_id():
+            characters = string.ascii_letters + string.digits
+            random_string = ''.join(random.choices(characters, k=13))
+            return random_string
+
+
+        async def session_create_handler(request: web.Request) -> web.Response:
+            try:
+                data = await request.json()
+                auth_data, payload, session_id = EndpointHandler.get_data_from_request(data)
+            except JsonDataException as e:
+                return web.json_response(data=e.message, status=422)
+            except json.JSONDecodeError:
+                return web.json_response(dict(error="invalid JSON"), status=422)
+
+            lifetime = payload.get("lifetime", 60 * 60 * 4) # sessions live for 4 hours by default
+
+            now = time.time()
+            expiration = now + lifetime
+
+            session_id = generate_session_id()
+
+            session_request_metrics = RequestMetrics(
+                request_idx= auth_data.request_idx,
+                reqnum= auth_data.reqnum,
+                workload= auth_data.cost,
+                status="SessionActive"
+            )
+
+            session = Session(
+                session_id=session_id,
+                expiration=expiration,
+                request_metrics = session_request_metrics
+            )
+
+            self.metrics._request_start(session.request_metrics)
+
+            return web.json_response(
+                {
+                    "session_id": session.session_id,
+                    "expiration": session.expiration
+                },
+                status=201,
+            )
+
+        return session_create_handler
 
     def __post_init__(self):
         self.metrics = Metrics()
@@ -137,7 +216,7 @@ class Backend:
         """use this function to forward requests to the model endpoint"""
         try:
             data = await request.json()
-            auth_data, payload = handler.get_data_from_request(data)
+            auth_data, payload, session_id = handler.get_data_from_request(data)
         except JsonDataException as e:
             return web.json_response(data=e.message, status=422)
         except json.JSONDecodeError:
@@ -162,37 +241,42 @@ class Backend:
 
         async def cancel_api_call_if_disconnected() -> None:
             await request.wait_for_disconnection()
-            self.metrics._request_canceled(request_metrics)
+            if not session_id:
+                self.metrics._request_canceled(request_metrics)
             return
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
                 response = await self.__call_backend(handler=handler, payload=payload)
                 res = await handler.generate_client_response(request, response)
-                self.metrics._request_success(request_metrics)
+                if not session_id:
+                    self.metrics._request_success(request_metrics)
                 return res
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.metrics._request_errored(request_metrics, str(e))
+                if not session_id:
+                    self.metrics._request_errored(request_metrics, str(e))
                 return web.Response(status=500)
 
         ###########
 
         if self.__check_signature(auth_data) is False:
-            self.metrics._request_reject(request_metrics)
+            if not session_id:
+                self.metrics._request_reject(request_metrics)
             return web.Response(status=401)
         
         if self.metrics.model_metrics.wait_time > handler.max_queue_time:
-            self.metrics._request_reject(request_metrics)
+            if not session_id:
+                self.metrics._request_reject(request_metrics)
             return web.Response(status=429)
 
         disconnect_task = create_task(cancel_api_call_if_disconnected())
         next_request_task = None
         work_task = None
         event = asyncio.Event() # Used in finally block, so initialize here
-
-        self.metrics._request_start(request_metrics)
+        if not session_id:
+            self.metrics._request_start(request_metrics)
 
         try:
             if handler.allow_parallel_requests:
@@ -258,8 +342,8 @@ class Backend:
         finally:
             if not handler.allow_parallel_requests:
                 advance_queue_after_completion(event)
-
-            self.metrics._request_end(request_metrics)
+            if not session_id:
+                self.metrics._request_end(request_metrics)
             cleanup_tasks = [t for t in (next_request_task, work_task, disconnect_task) if t]
             for t in cleanup_tasks:
                 if not t.done():

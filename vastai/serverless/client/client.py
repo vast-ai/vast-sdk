@@ -1,6 +1,7 @@
 from .connection import _make_request
 from .endpoint import Endpoint
 from .worker import Worker
+from .session import Session
 import asyncio
 import aiohttp
 import ssl
@@ -194,11 +195,51 @@ class Serverless:
 
             return [Worker.from_dict(item) for item in data]
 
+    async def end_endpoint_session(
+            self,
+            endpoint: Endpoint,
+            session: Session
+    ):
+        session_end_response = await self.queue_endpoint_request(
+            endpoint=endpoint,
+            worker_route="/session/end",
+            worker_payload={"session_id" : session.session_id},
+            session=session
+        )
+        if session_end_response.get("response").get("ended"):
+            return
+        else:
+            raise Exception(f"Failed to end session: {session_end_response.get("response")}")
+
+    async def start_endpoint_session(
+            self,
+            endpoint: Endpoint,
+            cost: int = 100,
+            lifetime: float = 4 * 60 * 60
+    ) -> str:
+        session_start_response = await self.queue_endpoint_request(
+            endpoint=endpoint,
+            worker_route="/session/create",
+            worker_payload={},
+            cost=cost,
+        )
+        session_id = session_start_response.get("response").get("session_id")
+        lifetime = session_start_response.get("response").get("lifetime")
+        url = session_start_response.get("url")
+        auth_data = session_start_response.get("auth_data")
+        if session_id:
+            return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, url=url, auth_data=auth_data)
+        else:
+            raise Exception(f"Failed to create session: {session_start_response["response"]}")
+
+        
+
     def queue_endpoint_request(
         self,
         endpoint: Endpoint,
         worker_route: str,
         worker_payload: dict,
+        session: Session = None,
         serverless_request: Optional[ServerlessRequest] = None,
         cost: int = 100,
         max_wait_time: Optional[float] = None,
@@ -217,40 +258,50 @@ class Serverless:
                 while True:
                     total_attempts += 1
                     request.status = "Queued"
-                    self.logger.debug("Sending initial route call")
-
-                    route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
-                    request_idx = route.request_idx
-                    if (request_idx):
-                        self.logger.debug(f"Got initial request index {request_idx}")
-                    else:
-                        self.logger.error("Did not get request_idx from initial route")
-
-                    poll_interval = 1
-                    elapsed_time = 0
-                    attempt = 0
-                    while route.status != "READY":
-                        request.status = "Polling"
-                        if max_wait_time is not None and elapsed_time >= max_wait_time:
-                            raise asyncio.TimeoutError("Timed out waiting for worker to become ready")
-
-                        await asyncio.sleep(poll_interval)
-                        elapsed_time += poll_interval
+                    worker_url = ""
+                    auth_data = {}
+                    session_id = None
+                    if session is None:
+                        self.logger.debug("Sending initial route call")
 
                         route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
-                        request_idx = route.request_idx or request_idx
+                        request_idx = route.request_idx
+                        if (request_idx):
+                            self.logger.debug(f"Got initial request index {request_idx}")
+                        else:
+                            self.logger.error("Did not get request_idx from initial route")
 
-                        # exponential backoff + jitter (cap)
-                        attempt += 1
-                        poll_interval = min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval)
-                        self.logger.debug("Polling route...")
+                        poll_interval = 1
+                        elapsed_time = 0
+                        attempt = 0
+                        while route.status != "READY":
+                            request.status = "Polling"
+                            if max_wait_time is not None and elapsed_time >= max_wait_time:
+                                raise asyncio.TimeoutError("Timed out waiting for worker to become ready")
 
-                    # Now, route is ready for sending request to worker
-                    worker_url = route.get_url()
-                    auth_data = route.body
+                            await asyncio.sleep(poll_interval)
+                            elapsed_time += poll_interval
+
+                            route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
+                            request_idx = route.request_idx or request_idx
+
+                            # exponential backoff + jitter (cap)
+                            attempt += 1
+                            poll_interval = min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval)
+                            self.logger.debug("Polling route...")
+                        # Now, route is ready for sending request to worker
+                        worker_url = route.get_url()
+                        auth_data = route.body
+                    else:
+                        if session.url is not None:
+                            worker_url = session.url
+                            auth_data = session.auth_data
+                            session_id = session.session_id
+
                     payload = worker_payload
                     worker_request_body = {
                                             "auth_data" : auth_data,
+                                            "session_id" : session_id,
                                             "payload" : payload
                                         }
                     

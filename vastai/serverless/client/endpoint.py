@@ -1,4 +1,5 @@
 from .connection import _make_request
+from .session import Session
 
 class Endpoint:
     name: str
@@ -29,6 +30,19 @@ class Endpoint:
             cost=cost,
             retry=retry,
             stream=stream
+        )
+    
+    def close_session(self, session: Session):
+        return self.client.end_endpoint_session(
+            endpoint=self,
+            session=session
+        )
+
+    def session(self, cost: int = 100, lifetime: float = 4 * 60 * 60) -> Session:
+        return self.client.start_endpoint_session(
+            endpoint=self,
+            cost=cost,
+            lifetime=lifetime
         )
 
     
