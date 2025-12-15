@@ -209,14 +209,14 @@ class Serverless:
         if session_end_response.get("response").get("ended"):
             return
         else:
-            raise Exception(f"Failed to end session: {session_end_response.get("response")}")
+            raise Exception(f"Failed to end session: {session_end_response.get('response')}")
 
     async def start_endpoint_session(
             self,
             endpoint: Endpoint,
             cost: int = 100,
             lifetime: float = 4 * 60 * 60
-    ) -> str:
+    ) -> Session:
         session_start_response = await self.queue_endpoint_request(
             endpoint=endpoint,
             worker_route="/session/create",
@@ -230,7 +230,7 @@ class Serverless:
         if session_id:
             return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, url=url, auth_data=auth_data)
         else:
-            raise Exception(f"Failed to create session: {session_start_response["response"]}")
+            raise Exception(f"Failed to create session: {session_start_response['response']}")
 
         
 

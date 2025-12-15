@@ -20,7 +20,7 @@ class Endpoint:
         self.id = id
         self.api_key = api_key
 
-    def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True, stream: bool = False):
+    def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True, stream: bool = False, session: Session = None):
         """Forward requests to the parent client."""
         return self.client.queue_endpoint_request(
             endpoint=self,
@@ -29,7 +29,8 @@ class Endpoint:
             serverless_request=serverless_request,
             cost=cost,
             retry=retry,
-            stream=stream
+            stream=stream,
+            session=session
         )
     
     def close_session(self, session: Session):
