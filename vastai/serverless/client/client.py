@@ -189,6 +189,7 @@ class Serverless:
                 raise RuntimeError(f"get_endpoint_workers failed: HTTP {resp.status} - {text}")
 
             data = await resp.json(content_type=None)
+            print(f"Received Response from get_endpoint_workers:{data}")
             if not isinstance(data, list):
                 raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
 
