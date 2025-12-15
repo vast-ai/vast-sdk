@@ -80,6 +80,7 @@ class Backend:
         default_factory=lambda: os.environ.get("MODEL_HEALTH_ENDPOINT", "")
     )
     sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
+    session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
         
     def create_session_end_handler(self) -> web.Response:
         async def session_end_handler(request: web.Request) -> web.Response:
@@ -100,9 +101,9 @@ class Backend:
                     {"error": f"session with id {session_id} not found"},
                     status=400,
                 )
-
-            self.metrics._request_success(session.request_metrics)
-            self.metrics._request_end(session.request_metrics)
+            request_metrics = self.session_metrics.get(session_id)
+            self.metrics._request_success(request_metrics)
+            self.metrics._request_end(request_metrics)
 
             self.sessions.pop(session_id, None)
 
@@ -149,10 +150,10 @@ class Backend:
             session = Session(
                 session_id=session_id,
                 expiration=expiration,
-                request_metrics = session_request_metrics
             )
             self.sessions[session_id] = session
-            self.metrics._request_start(session.request_metrics)
+            self.session_metrics[session_id] = session_request_metrics
+            self.metrics._request_start(session_request_metrics)
 
             return web.json_response(
                 {

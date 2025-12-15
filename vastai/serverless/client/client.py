@@ -223,6 +223,7 @@ class Serverless:
             worker_payload={ "lifetime" : lifetime },
             cost=cost,
         )
+        print(f"Got response {session_start_response}")
         session_id = session_start_response.get("response").get("session_id")
         lifetime = session_start_response.get("response").get("lifetime")
         url = session_start_response.get("url")
@@ -338,7 +339,8 @@ class Serverless:
                         "response" : worker_response,
                         "latency" : request.complete_time - request.start_time,
                         "url" : worker_url,
-                        "reuqest_idx" : request_idx
+                        "reuqest_idx" : request_idx,
+                        "auth_data" : auth_data
                     }
                     request.set_result(response)
                     return
