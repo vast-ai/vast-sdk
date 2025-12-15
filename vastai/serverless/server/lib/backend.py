@@ -118,7 +118,9 @@ class Backend:
         async def session_create_handler(request: web.Request) -> web.Response:
             try:
                 data = await request.json()
-                auth_data, payload, session_id = EndpointHandler.get_data_from_request(data)
+                auth_data = data.get("auth_data")
+                payload = data.get("payload")
+                session_id = data.get("session_id")
             except JsonDataException as e:
                 return web.json_response(data=e.message, status=422)
             except json.JSONDecodeError:

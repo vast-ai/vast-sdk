@@ -220,7 +220,7 @@ class Serverless:
         session_start_response = await self.queue_endpoint_request(
             endpoint=endpoint,
             worker_route="/session/create",
-            worker_payload={},
+            worker_payload={ "lifetime" : lifetime },
             cost=cost,
         )
         session_id = session_start_response.get("response").get("session_id")
