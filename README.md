@@ -41,13 +41,11 @@ endpoint = await serverless.get_endpoint("my-endpoint")
 3. Make a request
 ```python
 request_body = {
-                "input" : {
-                    "model": "Qwen/Qwen3-8B",
-                    "prompt" : "Who are you?",
-                    "max_tokens" : 100,
-                    "temperature" : 0.7
-                }
-            }
+    "model": "Qwen/Qwen3-8B",
+    "prompt" : "Who are you?",
+    "max_tokens" : 100,
+    "temperature" : 0.7
+}
 response = await serverless.request("/v1/completions", request_body)
 ```
 4. Read the response
