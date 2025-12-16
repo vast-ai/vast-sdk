@@ -20,13 +20,11 @@ async def main():
         ]
 
         payload = {
-            "input": {
-                "model": "Qwen/Qwen3-8B",
-                "messages": messages,
-                "stream": True,
-                "max_tokens": MAX_TOKENS,
-                "temperature": 0.7,
-            }
+            "model": "Qwen/Qwen3-8B",
+            "messages": messages,
+            "stream": True,
+            "max_tokens": MAX_TOKENS,
+            "temperature": 0.7,
         }
 
         response = await endpoint.request("/v1/chat/completions", payload, cost=MAX_TOKENS, stream=True)

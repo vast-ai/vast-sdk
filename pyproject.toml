@@ -26,19 +26,25 @@ vcs = "git"
 
 [tool.poetry.dependencies]
 python = ">=3.9"
-requests = ">=2.25"
 jsonschema = ">=3.2"
 xdg = ">=1.0.0"
 borb = "~2.1.25"
-python-dateutil = "*"
-pyparsing = "*"
-pytz = "*"
-urllib3 = "*"
+requests = "==2.32.3"
+python-dateutil = ">=2.8.2"
+pytz = ">=2023.3"
+urllib3 = ">=2.0,<3.0"
+pyparsing = ">=3.1,<4.0"
+fastapi = ">=0.110,<1.0"
+uvicorn = { version = ">=0.24,<0.32", extras = ["standard"] }
 aiohttp = "==3.10.1" 
 aiodns = ">=3.6.0" 
-pycares = "=4.11.0" # pinned because v5.0.0 was incompatible with aiodns
-asyncio = "*"
-
+pycares = "=4.11.0"
+anyio = "~4.4"
+nltk = "~3.9"
+psutil = "~6.0"
+pycryptodome = "~3.20"
+transformers = "~4.52"
+hf_transfer = ">=0.1.9"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
