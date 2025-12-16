@@ -43,7 +43,6 @@ def benchmark_generator() -> dict:
 
     return benchmark_data
 
-
 worker_config = WorkerConfig(
     model_server_url=MODEL_SERVER_URL,
     model_server_port=MODEL_SERVER_PORT,
@@ -56,7 +55,6 @@ worker_config = WorkerConfig(
             max_queue_time=60.0,
             benchmark_config=BenchmarkConfig(
                 generator=benchmark_generator,
-                runs=3,
                 concurrency=50
             ),
             workload_calculator= lambda x: x["parameters"]["max_new_tokens"]
