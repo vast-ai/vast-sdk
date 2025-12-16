@@ -32,7 +32,7 @@ from .data_types import (
     BenchmarkResult
 )
 
-VERSION = "0.3.0"
+VERSION = "1.0.0"
 
 MSG_HISTORY_LEN = 100
 log = logging.getLogger(__file__)
