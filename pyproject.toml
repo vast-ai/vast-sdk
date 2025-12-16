@@ -25,7 +25,7 @@ style = "semver"
 vcs = "git"
 
 [tool.poetry.dependencies]
-python = ">=3.8"
+python = ">=3.9"
 jsonschema = ">=3.2"
 xdg = ">=1.0.0"
 borb = "~2.1.25"
