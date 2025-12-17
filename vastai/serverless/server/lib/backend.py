@@ -87,7 +87,7 @@ class Backend:
             try:
                 data = await request.json()
                 session_id = data.get("session_id")
-                signature = data.get("session_key")
+                session_auth = data.get("session_auth")
             except JsonDataException as e:
                 return web.json_response({"error": e.message}, status=422)
             except json.JSONDecodeError:
@@ -100,8 +100,8 @@ class Backend:
             if session is None:
                 return web.json_response({"error": "session does not exist"}, status=410)
             
-            if signature is None or session.auth_data.signature != signature:
-                return web.json_response({"error": "session_key is not valid"}, status=401)
+            if session_auth is None or session.auth_data != session_auth:
+                return web.json_response({"error": "session_auth is not valid"}, status=401)
             else:
                 return web.json_response(
                     {
