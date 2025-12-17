@@ -196,7 +196,7 @@ class Serverless:
             # should normally return a list of dictionaries containing worker instance information.
             if isinstance(data,dict):
                 if 'error_msg' in data.keys():
-                    print(f"[Warning] Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again.")
+                    self.logger.warning(f"Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again.")
                     return []
 
             
