@@ -197,6 +197,36 @@ class Serverless:
 
             return [Worker.from_dict(item) for item in data]
 
+    async def get_endpoint_session(
+            self,
+            endpoint,
+            session_id: int,
+            session_auth: str,
+            session_url: str,
+    ):
+        try:
+            worker_response = await _make_request(
+                client=self,
+                url=session_url,
+                route='/session/get',
+                body={"session_id" : session_id, "session_key" : session_auth.signature },
+                method="POST",
+                retries=1,
+                timeout=600
+            )
+            session = Session(
+                endpoint=endpoint,
+                session_id=session_id,
+                lifetime=worker_response.get("expiration"),
+                auth_data=worker_response.get("auth_data")
+            )
+            return session
+        except Exception as ex:
+            self.logger.info(f"Got error message from get_session: {ex}")
+            return None
+        
+
+            
     async def end_endpoint_session(
             self,
             endpoint: Endpoint,

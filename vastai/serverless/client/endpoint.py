@@ -41,6 +41,23 @@ class Endpoint:
             endpoint=self,
             session=session
         )
+    
+    def session_health(self, session: "Session"):
+        result = self.client.get_endpoint_session(
+            endpoint=self,
+            session_id=session.session_id,
+            auth_data=session.auth_data,
+            session_url=session.url
+        )
+        return result is not None
+
+    def get_session(self, session_id: int, auth_data:dict, session_url:str):
+        return self.client.get_endpoint_session(
+            endpoint=self,
+            session_id=session_id,
+            auth_data=auth_data,
+            session_url=session_url
+        )
 
     def session(self, cost: int = 100, lifetime: float = 4 * 60 * 60) -> "Session":
         return self.client.start_endpoint_session(

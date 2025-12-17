@@ -40,6 +40,11 @@ class Session:
     def set_on_close(self, on_close_fn: Callable):
         self.on_close = on_close_fn
 
+    async def is_open(self):
+        result = self.endpoint.session_healthcheck(self)
+        self.open = result
+        return result
+
     async def _run_close_hooks(self):
         """
         Execute on_close hook (sync or async) exactly once,

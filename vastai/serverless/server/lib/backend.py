@@ -82,6 +82,38 @@ class Backend:
     sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
         
+    def create_session_get_handler(self) -> web.Response:
+        async def session_get_handler(request: web.Request) -> web.Response:
+            try:
+                data = await request.json()
+                session_id = data.get("session_id")
+                signature = data.get("session_key")
+            except JsonDataException as e:
+                return web.json_response({"error": e.message}, status=422)
+            except json.JSONDecodeError:
+                return web.json_response({"error": "invalid JSON"}, status=422)
+
+            if not session_id:
+                return web.json_response({"error": "missing session_id"}, status=422)
+
+            session = self.sessions.get(session_id)
+            if session is None:
+                return web.json_response({"error": "session does not exist"}, status=410)
+            
+            if signature is None or session.auth_data.signature != signature:
+                return web.json_response({"error": "session_key is not valid"}, status=401)
+            else:
+                return web.json_response(
+                    {
+                        "session_id" : session_id,
+                        "auth_data" : session.auth_data,
+                        "expiration" : session.expiration,
+                        "created_at": session.created_at
+                      }
+                )
+
+        return session_get_handler
+
     def create_session_end_handler(self) -> web.Response:
         async def session_end_handler(request: web.Request) -> web.Response:
             try:
@@ -113,7 +145,6 @@ class Backend:
             )
 
         return session_end_handler
-
 
     def create_session_create_handler(self) -> Callable[[web.Request], Awaitable[web.Response]]:
         def generate_session_id():
@@ -150,6 +181,7 @@ class Backend:
             session = Session(
                 session_id=session_id,
                 expiration=expiration,
+                auth_data=auth_data
             )
             self.sessions[session_id] = session
             self.session_metrics[session_id] = session_request_metrics
@@ -158,7 +190,8 @@ class Backend:
             return web.json_response(
                 {
                     "session_id": session.session_id,
-                    "expiration": session.expiration
+                    "expiration": session.expiration,
+                    "session_key" : auth_data.signature
                 },
                 status=201,
             )
@@ -233,7 +266,10 @@ class Backend:
         workload = payload.count_workload()
         request_metrics: RequestMetrics = RequestMetrics(request_idx=auth_data.request_idx, reqnum=auth_data.reqnum, workload=workload, status="Created")
 
-
+        session = self.sessions.get(session_id)
+        if session_id is not None and session is None:
+            return web.json_response(dict(error="invalid session"), status=410)
+        
         def advance_queue_after_completion(event: asyncio.Event):
             """Pop current head and wake next waiter, if any."""
             # If this event is current head, wake next waiter
