@@ -275,7 +275,7 @@ class Backend:
                 self.metrics._request_reject(request_metrics)
             return web.Response(status=401)
         
-        if self.metrics.model_metrics.wait_time > handler.max_queue_time:
+        if handler.max_queue_time is not None and self.metrics.model_metrics.wait_time > handler.max_queue_time:
             if not session_id:
                 self.metrics._request_reject(request_metrics)
             return web.Response(status=429)

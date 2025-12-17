@@ -56,6 +56,8 @@ class Serverless:
                 self.autoscaler_url = "https://run.vast.ai"
             case "alpha":
                 self.autoscaler_url = "https://run-alpha.vast.ai"
+            case "candidate":
+                self.autoscaler_url = "https://run-candidate.vast.ai"
             case "local":
                 self.autoscaler_url = "http://localhost:8080"
             case _:

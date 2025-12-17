@@ -101,7 +101,7 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     concurrency: int = 10
     benchmark_runs: int = 8
     allow_parallel_requests: bool = False
-    max_queue_time: float = 30.0
+    max_queue_time: float = None
     is_remote_dispatch: bool = False
     remote_dispatch_function: Callable = None
     do_warmup_benchmark: bool = True
