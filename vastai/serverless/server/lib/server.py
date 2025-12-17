@@ -34,8 +34,8 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
         # Hardcoded session routes
         app.router.add_post("/session/create", backend.create_session_create_handler())
         app.router.add_post("/session/end", backend.create_session_end_handler())
-        app.router.add_post("/session/health", backend.create_session_health_handler())
-        
+        app.router.add_post("/session/health", backend.create_session_get_handler())
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(
