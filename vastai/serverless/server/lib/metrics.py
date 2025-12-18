@@ -151,13 +151,17 @@ class Metrics:
     #######################################Private#######################################
 
     async def __send_delete_requests_and_reset(self):
-        async def post(report_addr: str, idxs: list[int], success_flag: bool) -> bool:
+        async def post(
+            report_addr: str, idxs: list[int], success_flag: bool, is_pyworker_error: bool | None = None
+        ) -> bool:
             data = {
                 "worker_id": self.id,
                 "mtoken": self.mtoken,
                 "request_idxs": idxs,
                 "success": success_flag,
             }
+            if is_pyworker_error is not None:
+                data["is_pyworker_error"] = is_pyworker_error
             log.debug(
                 f"Deleting requests that {'succeeded' if success_flag else 'failed'}: {data['request_idxs']}"
             )
@@ -180,10 +184,11 @@ class Metrics:
         # Take a snapshot of what we plan to send this tick.
         # New arrivals after this snapshot will remain in the queue for the next tick.
         snapshot = list(self.model_metrics.requests_deleting)
-        success_idxs = [r.request_idx for r in snapshot if r.success is True]
-        failed_idxs  = [r.request_idx for r in snapshot if r.success is False]
+        success_idxs      = [r.request_idx for r in snapshot if r.success is True]
+        failed_error_idxs = [r.request_idx for r in snapshot if r.success is False and r.status == "Error"]
+        failed_other_idxs = [r.request_idx for r in snapshot if r.success is False and r.status != "Error"]
 
-        if not success_idxs and not failed_idxs:
+        if not success_idxs and not failed_error_idxs and not failed_other_idxs:
             return  # nothing to do
 
         for report_addr in self.report_addr:
@@ -191,17 +196,20 @@ class Metrics:
             if report_addr == "https://cloud.vast.ai/api/v0":
                 # Patch: ignore the Redis API report_addr
                 continue
-            sent_success = True
-            sent_failed  = True
+            sent_success      = True
+            sent_failed_error = True
+            sent_failed_other = True
 
             if success_idxs:
                 sent_success = await post(report_addr, success_idxs, True)
-            if failed_idxs:
-                sent_failed = await post(report_addr, failed_idxs, False)
+            if failed_error_idxs:
+                sent_failed_error = await post(report_addr, failed_error_idxs, False, True)
+            if failed_other_idxs:
+                sent_failed_other = await post(report_addr, failed_other_idxs, False, False)
 
-            if sent_success and sent_failed:
+            if sent_success and sent_failed_error and sent_failed_other:
                 # Remove only the items we actually sent from the live queue.
-                sent_set = set(success_idxs) | set(failed_idxs)
+                sent_set = set(success_idxs) | set(failed_error_idxs) | set(failed_other_idxs)
                 self.model_metrics.requests_deleting[:] = [
                     r for r in self.model_metrics.requests_deleting
                     if r.request_idx not in sent_set
