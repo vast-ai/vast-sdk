@@ -41,7 +41,7 @@ class Session:
         self.on_close = on_close_fn
 
     async def is_open(self):
-        result = self.endpoint.session_healthcheck(self)
+        result = await self.endpoint.session_healthcheck(self)
         self.open = result
         return result
 
@@ -83,7 +83,7 @@ class Session:
 
         return _close_async()
 
-    def request(
+    async def request(
         self,
         route,
         payload,
@@ -96,7 +96,7 @@ class Session:
         if not self.open:
             raise ValueError("Cannot make request on closed session.")
 
-        return self.endpoint.request(
+        result = await self.endpoint.request(
             route=route,
             payload=payload,
             serverless_request=serverless_request,
@@ -105,3 +105,7 @@ class Session:
             stream=stream,
             session=self,
         )
+        if result.get("response").get("status") == 410:
+            self.open = False
+            raise ValueError("Cannot make request on closed session.")
+        return result

@@ -70,17 +70,19 @@ class Serverless:
         self.logger = logging.getLogger(self.__class__.__name__)
 
         if self.debug:
-            # Only set up logging if debug is True
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '[%(asctime)s] %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
+            if not self.logger.handlers:
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter(
+                    '[%(asctime)s] %(name)s - %(levelname)s - %(message)s'
+                )
+                handler.setFormatter(formatter)
+                self.logger.addHandler(handler)
+
             self.logger.setLevel(logging.DEBUG)
         else:
-            # If debug is False, disable logging
-            self.logger.addHandler(logging.NullHandler())
+            if not self.logger.handlers:
+                self.logger.addHandler(logging.NullHandler())
+
         self.logger.propagate = False
 
         self.connection_limit = connection_limit
@@ -201,15 +203,15 @@ class Serverless:
             self,
             endpoint,
             session_id: int,
-            session_auth: str,
-            session_url: str,
+            session_auth: str
     ):
         try:
             worker_response = await _make_request(
                 client=self,
-                url=session_url,
+                url=session_auth.get("url"),
+                api_key="",
                 route='/session/get',
-                body={"session_id" : session_id, "session_key" : session_auth.signature },
+                body={"session_id" : session_id, "session_auth" : session_auth },
                 method="POST",
                 retries=1,
                 timeout=600
@@ -218,7 +220,8 @@ class Serverless:
                 endpoint=endpoint,
                 session_id=session_id,
                 lifetime=worker_response.get("expiration"),
-                auth_data=worker_response.get("auth_data")
+                auth_data=worker_response.get("auth_data"),
+                url=worker_response.get("auth_data").get("url")
             )
             return session
         except Exception as ex:

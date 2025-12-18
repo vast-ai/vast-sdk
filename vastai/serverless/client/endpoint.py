@@ -42,21 +42,19 @@ class Endpoint:
             session=session
         )
     
-    def session_health(self, session: "Session"):
-        result = self.client.get_endpoint_session(
+    async def session_healthcheck(self, session: "Session"):
+        result = await self.client.get_endpoint_session(
             endpoint=self,
             session_id=session.session_id,
-            auth_data=session.auth_data,
-            session_url=session.url
+            session_auth=session.auth_data
         )
         return result is not None
 
-    def get_session(self, session_id: int, auth_data:dict, session_url:str):
+    def get_session(self, session_id: int, session_auth: dict):
         return self.client.get_endpoint_session(
             endpoint=self,
             session_id=session_id,
-            auth_data=auth_data,
-            session_url=session_url
+            session_auth=session_auth
         )
 
     def session(self, cost: int = 100, lifetime: float = 4 * 60 * 60) -> "Session":
