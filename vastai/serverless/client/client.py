@@ -296,7 +296,7 @@ class Serverless:
                         self.logger.debug("Sending initial route call")
 
                         route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
-                        request_idx = route.request_idx
+                        #request_idx = route.request_idx
                         if (request_idx):
                             self.logger.debug(f"Got initial request index {request_idx}")
                         else:
@@ -314,7 +314,7 @@ class Serverless:
                             elapsed_time += poll_interval
 
                             route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
-                            request_idx = route.request_idx or request_idx
+                            #request_idx = route.request_idx or request_idx
 
                             # exponential backoff + jitter (cap)
                             attempt += 1
@@ -369,7 +369,7 @@ class Serverless:
                         "response" : worker_response,
                         "latency" : request.complete_time - request.start_time,
                         "url" : worker_url,
-                        "reuqest_idx" : request_idx,
+                        "request_idx" : request_idx,
                         "auth_data" : auth_data
                     }
                     request.set_result(response)
