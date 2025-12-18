@@ -165,9 +165,6 @@ class Backend:
             except json.JSONDecodeError:
                 return web.json_response(dict(error="invalid JSON"), status=422)
 
-            if self.max_sessions > 0 and len(self.sessions) >= self.max_sessions:
-                return web.Response(status=429)
-
             lifetime = payload.get("lifetime", 60 * 60 * 4) # sessions live for 4 hours by default
 
             now = time.time()
@@ -181,6 +178,10 @@ class Backend:
                 workload= auth_data.get("cost"),
                 status="SessionActive"
             )
+
+            if self.max_sessions > 0 and len(self.sessions) >= self.max_sessions:
+                self.metrics._request_reject(session_request_metrics)
+                return web.Response(status=429)
 
             session = Session(
                 session_id=session_id,

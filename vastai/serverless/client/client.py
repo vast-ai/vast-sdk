@@ -70,18 +70,14 @@ class Serverless:
         self.logger = logging.getLogger(self.__class__.__name__)
 
         if self.debug:
-            if not self.logger.handlers:
-                handler = logging.StreamHandler()
-                formatter = logging.Formatter(
-                    '[%(asctime)s] %(name)s - %(levelname)s - %(message)s'
-                )
-                handler.setFormatter(formatter)
-                self.logger.addHandler(handler)
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '[%(asctime)s] %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
 
             self.logger.setLevel(logging.DEBUG)
-        else:
-            if not self.logger.handlers:
-                self.logger.addHandler(logging.NullHandler())
 
         self.logger.propagate = False
 
