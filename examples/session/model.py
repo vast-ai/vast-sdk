@@ -24,8 +24,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
-
+import urllib.request
+import urllib.error
 from aiohttp import web
+import ssl
 
 # ---- PyTorch / TorchVision ----
 import torch
@@ -35,9 +37,6 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 
-# -----------------------------
-# Training model + helpers
-# -----------------------------
 
 class SmallCNN(nn.Module):
     def __init__(self, num_classes: int = 10):
@@ -65,6 +64,31 @@ def accuracy(logits: torch.Tensor, y: torch.Tensor) -> float:
 def now_s() -> float:
     return time.time()
 
+async def on_startup(app: web.Application) -> None:
+    """
+    Runs after the app is created and just before the server starts accepting requests.
+    Put any real readiness work here (warmups, checks, etc.).
+    """
+    # Example: do small CPU torch warmup so first request isn't "cold"
+    # (optional; remove if you don't want it)
+    try:
+        import torch
+        x = torch.randn(1, 1, 28, 28)
+        m = SmallCNN().eval()
+        with torch.no_grad():
+            _ = m(x)
+    except Exception:
+        # If warmup fails, you can decide to raise to fail-fast,
+        # or just continue. I'd usually fail-fast:
+        raise
+
+    # Signal readiness
+    app["ready_event"].set()
+
+# -----------------------------
+# Training model + helpers
+# -----------------------------
+
 
 # -----------------------------
 # Task lifecycle + status
@@ -75,11 +99,14 @@ class TaskConfig:
     epochs: int = 2
     batch_size: int = 64
     lr: float = 1e-3
-    max_train_batches_per_epoch: int = 200   # keep it small / fast
+    max_train_batches_per_epoch: int = 200
     max_val_batches: int = 50
     seed: int = 1337
     data_dir: str = "./data"
-    num_workers: int = 0  # keep deterministic + simple
+    num_workers: int = 2          # GPU input pipeline benefits from workers (tune per box)
+    device: str = "auto"          # "auto" | "cuda" | "cpu"
+    pin_memory: bool = True
+    task_id: str = None
 
 
 @dataclass
@@ -133,14 +160,15 @@ class TaskManager:
             return True, ""
 
     def start(self, cfg: TaskConfig) -> str:
-        ok, msg = self.can_start()
-        if not ok:
-            raise RuntimeError(msg)
-
-        task_id = str(uuid.uuid4())
+        if cfg.task_id is None:
+            raise RuntimeError("Cannot start task without session_id")
+        task_id = cfg.task_id
         cancel_event = threading.Event()
 
         with self._lock:
+            if self._status.state == "running":
+                raise RuntimeError("A task is already running")
+
             self._status = TaskStatus(
                 task_id=task_id,
                 state="running",
@@ -168,11 +196,14 @@ class TaskManager:
     def cancel(self) -> Dict[str, Any]:
         with self._lock:
             if self._status.state != "running":
-                return self.snapshot()
+                # return a snapshot WITHOUT re-locking
+                return json.loads(json.dumps(self._status, default=lambda o: o.__dict__))
+
             if self._cancel_event is not None:
                 self._cancel_event.set()
             self._status.message = "Cancellation requested"
             self._status.last_update_at = now_s()
+
         return self.snapshot()
 
     def _set_status_update(self, **kwargs: Any) -> None:
@@ -181,9 +212,50 @@ class TaskManager:
                 setattr(self._status, k, v)
             self._status.last_update_at = now_s()
 
+    def end_session(self, task_id: str) -> None:
+            """
+            Best-effort HTTPS POST to the local worker session server.
+
+            Assumes the session server is running with aiohttp + USE_SSL=true
+            and is bound on WORKER_PORT in the same environment.
+            """
+            port = int(os.environ.get("WORKER_PORT", "3000"))
+            use_ssl = os.environ.get("USE_SSL", "true") == "true"
+            scheme = "https" if use_ssl else "http"
+            url = f"{scheme}://127.0.0.1:{port}/session/end"
+
+            payload = json.dumps({"session_id": task_id}).encode("utf-8")
+            req = urllib.request.Request(
+                url=url,
+                data=payload,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+
+            # Simplest: internal call, TLS on, skip cert verification.
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+            try:
+                with urllib.request.urlopen(req, timeout=2.0, context=ctx) as resp:
+                    _ = resp.read()
+            except Exception as e:
+                # Best-effort: don't fail training if session end fails.
+                try:
+                    self._set_status_update(
+                        message=f"{self._status.message} | end_session failed: {type(e).__name__}: {e}"
+                    )
+                except Exception:
+                    pass
+
+
     def _train_entrypoint(self, task_id: str, cfg: TaskConfig, cancel_event: threading.Event) -> None:
         try:
             run_training(task_id=task_id, cfg=cfg, cancel_event=cancel_event, report=self._set_status_update)
+            
+            # IMPORTANT: We call this function to tell our worker that the session has ended.
+            self.end_session(task_id)
 
             if cancel_event.is_set():
                 self._set_status_update(
@@ -211,16 +283,24 @@ class TaskManager:
 # Training loop
 # -----------------------------
 
-def run_training(
-    task_id: str,
-    cfg: TaskConfig,
-    cancel_event: threading.Event,
-    report,
-) -> None:
-    # Determinism-ish
+def run_training(task_id: str, cfg: TaskConfig, cancel_event: threading.Event, report) -> None:
     torch.manual_seed(cfg.seed)
 
-    device = torch.device("cpu")
+    # ---- Device selection ----
+    if cfg.device == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("device='cuda' requested but CUDA is not available")
+        device = torch.device("cuda")
+    elif cfg.device == "cpu":
+        device = torch.device("cpu")
+    else:  # "auto"
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    use_cuda = (device.type == "cuda")
+
+    # Optional: faster convs on fixed-size inputs
+    if use_cuda:
+        torch.backends.cudnn.benchmark = True
 
     tfm = transforms.Compose([
         transforms.ToTensor(),
@@ -231,12 +311,20 @@ def run_training(
     val_ds = datasets.MNIST(cfg.data_dir, train=False, download=True, transform=tfm)
 
     train_loader = DataLoader(
-        train_ds, batch_size=cfg.batch_size, shuffle=True,
-        num_workers=cfg.num_workers, pin_memory=False
+        train_ds,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+        pin_memory=(cfg.pin_memory and use_cuda),
+        persistent_workers=(cfg.num_workers > 0),
     )
     val_loader = DataLoader(
-        val_ds, batch_size=cfg.batch_size, shuffle=False,
-        num_workers=cfg.num_workers, pin_memory=False
+        val_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=(cfg.pin_memory and use_cuda),
+        persistent_workers=(cfg.num_workers > 0),
     )
 
     model = SmallCNN().to(device)
@@ -248,7 +336,7 @@ def run_training(
 
     report(
         total_steps=total_steps,
-        message="Training initialized",
+        message=f"Training initialized on {device.type}",
         epoch=0,
         step=0,
         train_loss=None,
@@ -276,7 +364,9 @@ def run_training(
                 report(message=f"Canceled during epoch {epoch}", epoch=epoch, step=global_step)
                 return
 
-            x, y = x.to(device), y.to(device)
+            # ---- Move batch to GPU (non_blocking only matters with pin_memory=True) ----
+            x = x.to(device, non_blocking=use_cuda)
+            y = y.to(device, non_blocking=use_cuda)
 
             opt.zero_grad(set_to_none=True)
             logits = model(x)
@@ -301,7 +391,6 @@ def run_training(
                     train_acc=running_acc / max(1, n_batches),
                 )
 
-        # Validation (small)
         model.eval()
         v_loss_sum = 0.0
         v_acc_sum = 0.0
@@ -314,7 +403,9 @@ def run_training(
                     report(message=f"Canceled during validation epoch {epoch}", epoch=epoch, step=global_step)
                     return
 
-                x, y = x.to(device), y.to(device)
+                x = x.to(device, non_blocking=use_cuda)
+                y = y.to(device, non_blocking=use_cuda)
+
                 logits = model(x)
                 loss = loss_fn(logits, y)
 
@@ -329,7 +420,6 @@ def run_training(
             val_loss=v_loss_sum / max(1, v_batches),
             val_acc=v_acc_sum / max(1, v_batches),
         )
-
 
 # -----------------------------
 # aiohttp server
@@ -347,6 +437,11 @@ async def json_request(request: web.Request) -> Dict[str, Any]:
 def make_app(manager: TaskManager) -> web.Application:
     app = web.Application()
 
+    app["ready_event"] = asyncio.Event()
+    app.on_startup.append(on_startup)
+
+    app["sync_lock"] = asyncio.Lock()
+
     async def start_task(request: web.Request) -> web.Response:
         payload = await json_request(request)
 
@@ -359,7 +454,10 @@ def make_app(manager: TaskManager) -> web.Application:
             max_val_batches=int(payload.get("max_val_batches", 50)),
             seed=int(payload.get("seed", 1337)),
             data_dir=str(payload.get("data_dir", "./data")),
-            num_workers=int(payload.get("num_workers", 0)),
+            num_workers=int(payload.get("num_workers", 2)),
+            device=str(payload.get("device", "auto")),
+            pin_memory=bool(payload.get("pin_memory", True)),
+            task_id=str(payload.get("session_id"))
         )
 
         try:
@@ -377,8 +475,107 @@ def make_app(manager: TaskManager) -> web.Application:
         _ = await json_request(request)
         st = manager.cancel()
         return web.json_response({"ok": True, "status": st})
+    
+    async def start_sync_task(request: web.Request) -> web.Response:
+        payload = await json_request(request)
+
+        # Build config (same defaults as /start_task)
+        session_id = payload.get("session_id")
+        if not session_id:
+            session_id = str(uuid.uuid4())
+
+        cfg = TaskConfig(
+            epochs=int(payload.get("epochs", 2)),
+            batch_size=int(payload.get("batch_size", 64)),
+            lr=float(payload.get("lr", 1e-3)),
+            max_train_batches_per_epoch=int(payload.get("max_train_batches_per_epoch", 200)),
+            max_val_batches=int(payload.get("max_val_batches", 50)),
+            seed=int(payload.get("seed", 1337)),
+            data_dir=str(payload.get("data_dir", "./data")),
+            num_workers=int(payload.get("num_workers", 2)),
+            device=str(payload.get("device", "auto")),
+            pin_memory=bool(payload.get("pin_memory", True)),
+            task_id=str(session_id),
+        )
+
+        # Disallow if an async task is already running
+        can, reason = manager.can_start()
+        if not can:
+            return web.json_response(
+                {"ok": False, "error": reason, "status": manager.snapshot()},
+                status=409,
+            )
+
+        # Disallow concurrent sync runs
+        sync_lock: asyncio.Lock = request.app["sync_lock"]
+        if sync_lock.locked():
+            return web.json_response(
+                {"ok": False, "error": "A sync task is already running"},
+                status=409,
+            )
+
+        # Local status (not TaskManager-backed)
+        st_lock = threading.Lock()
+        st = TaskStatus(
+            task_id=cfg.task_id,
+            state="running",
+            message="Sync task started",
+            created_at=now_s(),
+            started_at=now_s(),
+            last_update_at=now_s(),
+            epoch=0,
+            step=0,
+            total_steps=0,
+            config=cfg.__dict__.copy(),
+        )
+
+        def report(**kwargs: Any) -> None:
+            with st_lock:
+                for k, v in kwargs.items():
+                    setattr(st, k, v)
+                st.last_update_at = now_s()
+
+        dummy_cancel = threading.Event()  # never set; no canceling
+
+        async with sync_lock:
+            try:
+                loop = asyncio.get_running_loop()
+                # Run training off the event loop, but await completion = synchronous API
+                await loop.run_in_executor(
+                    None,
+                    run_training,
+                    cfg.task_id,
+                    cfg,
+                    dummy_cancel,
+                    report,
+                )
+
+                with st_lock:
+                    st.state = "completed"
+                    st.message = "Sync task completed"
+                    st.finished_at = now_s()
+                    st.last_update_at = now_s()
+
+                return web.json_response(
+                    {"ok": True, "task_id": cfg.task_id, "status": json.loads(json.dumps(st, default=lambda o: o.__dict__))},
+                )
+
+            except Exception as e:
+                with st_lock:
+                    st.state = "failed"
+                    st.message = "Sync task failed"
+                    st.finished_at = now_s()
+                    st.error_type = type(e).__name__
+                    st.error = str(e)
+                    st.last_update_at = now_s()
+
+                return web.json_response(
+                    {"ok": False, "error": str(e), "task_id": cfg.task_id, "status": json.loads(json.dumps(st, default=lambda o: o.__dict__))},
+                    status=500,
+                )
 
     app.router.add_post("/start_task", start_task)
+    app.router.add_post("/start_sync_task", start_sync_task)
     app.router.add_post("/status", status)
     app.router.add_post("/cancel_task", cancel_task)
 
@@ -398,7 +595,11 @@ async def _run_server(host: str, port: int) -> None:
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)
     await site.start()
+
+    await app["ready_event"].wait()
+
     print("Model Server Running")
+
     stop_event = asyncio.Event()
 
     def _handle_sig(*_args: Any) -> None:
