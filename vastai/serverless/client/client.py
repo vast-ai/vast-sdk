@@ -189,6 +189,17 @@ class Serverless:
                 raise RuntimeError(f"get_endpoint_workers failed: HTTP {resp.status} - {text}")
 
             data = await resp.json(content_type=None)
+
+            # If error message from authenticate_endpoint_apikey_by_id occurs, there is a possibility that
+            # the endpoint's worker instances are not ready to be queried. If an error message occurs,
+            # return an empty list and print the error message to the user. The endpoint get_endpoint_workers
+            # should normally return a list of dictionaries containing worker instance information.
+            if isinstance(data,dict):
+                if 'error_msg' in data.keys():
+                    self.logger.warning(f"Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again.")
+                    return []
+
+            
             if not isinstance(data, list):
                 raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
 
