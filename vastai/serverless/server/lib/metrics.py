@@ -152,18 +152,17 @@ class Metrics:
 
     async def __send_delete_requests_and_reset(self):
         async def post(
-            report_addr: str, idxs: list[int], success_flag: bool, is_pyworker_error: bool | None = None
+            report_addr: str, idxs: list[int], success_flag: bool, error: bool = False
         ) -> bool:
             data = {
                 "worker_id": self.id,
                 "mtoken": self.mtoken,
                 "request_idxs": idxs,
                 "success": success_flag,
+                "error": error,
             }
-            if is_pyworker_error is not None:
-                data["is_pyworker_error"] = is_pyworker_error
             log.debug(
-                f"Deleting requests that {'succeeded' if success_flag else 'failed'}: {data['request_idxs']}"
+                f"Deleting requests (success={success_flag}, error={error}): {data['request_idxs']}"
             )
             full_path = report_addr.rstrip("/") + "/delete_requests/"
             for attempt in range(1, 4):
@@ -201,7 +200,7 @@ class Metrics:
             sent_failed_other = True
 
             if success_idxs:
-                sent_success = await post(report_addr, success_idxs, True)
+                sent_success = await post(report_addr, success_idxs, True, False)
             if failed_error_idxs:
                 sent_failed_error = await post(report_addr, failed_error_idxs, False, True)
             if failed_other_idxs:
