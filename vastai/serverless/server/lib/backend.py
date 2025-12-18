@@ -190,8 +190,7 @@ class Backend:
             return web.json_response(
                 {
                     "session_id": session.session_id,
-                    "expiration": session.expiration,
-                    "session_key" : auth_data.signature
+                    "expiration": session.expiration
                 },
                 status=201,
             )
