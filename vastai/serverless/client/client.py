@@ -69,17 +69,23 @@ class Serverless:
         self.max_poll_interval = float(max_poll_interval)
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        if self.debug:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '[%(asctime)s] %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
+        if not self.logger.handlers:
+            self.logger.addHandler(logging.NullHandler())
 
+        if debug:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            handler.setLevel(logging.DEBUG)
+
+            self.logger.addHandler(handler)
             self.logger.setLevel(logging.DEBUG)
 
-        self.logger.propagate = False
+            # If we attach our own handler, avoid double-logging via root handlers.
+            self.logger.propagate = False
+        else:
+            # Let the application decide if/where logs go.
+            self.logger.propagate = True
 
         self.connection_limit = connection_limit
         self._session: aiohttp.ClientSession | None = None
