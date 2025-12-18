@@ -81,6 +81,7 @@ class Backend:
     )
     sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
+    max_sessions: int = dataclasses.field(default=-1)
         
     def create_session_get_handler(self) -> web.Response:
         async def session_get_handler(request: web.Request) -> web.Response:
@@ -163,6 +164,9 @@ class Backend:
                 return web.json_response(data=e.message, status=422)
             except json.JSONDecodeError:
                 return web.json_response(dict(error="invalid JSON"), status=422)
+
+            if self.max_sessions > 0 and len(self.sessions) >= self.max_sessions:
+                return web.Response(status=429)
 
             lifetime = payload.get("lifetime", 60 * 60 * 4) # sessions live for 4 hours by default
 
