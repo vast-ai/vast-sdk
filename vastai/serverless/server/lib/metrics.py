@@ -281,7 +281,7 @@ class Metrics:
 
         if sent:
             # clear the one-shot loadtime only if we actually sent *this* value
-            self.system_metrics.reset(expected=loadtime_snapshot)
+            # self.system_metrics.reset(expected=loadtime_snapshot)
             self.update_pending = False
             self.model_metrics.reset()
             self.last_metric_update = time.time()
