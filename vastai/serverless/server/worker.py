@@ -35,22 +35,20 @@ class BenchmarkConfig:
     generator: Callable[[], dict] | None = None  # optional sample factory
     runs: int = 8
     concurrency: int | None = 10
-    do_warmup: bool = True
-
 
 @dataclass
 class HandlerConfig:
     """Configuration for defining handlers"""
     route: str
+    healthcheck: Optional[str] = None
     allow_parallel_requests: bool = False
-    max_queue_time: Optional[float] = None
+    max_queue_time: Optional[float] = 30.0,
     benchmark_config: Optional[BenchmarkConfig] = None
     handler_class: Optional[Type[EndpointHandler]] = None
     payload_class: Optional[Type[ApiPayload]] = None
     request_parser: Optional[RequestPayloadParser] = None
     response_generator: Optional[ClientResponseGenerator] = None
     workload_calculator: Optional[WorkloadCalculator] = None
-    remote_function: Optional[Callable] = None
 
 
 @dataclass
@@ -58,10 +56,11 @@ class WorkerConfig:
     model_server_url: str = None
     model_server_port: int = None
     model_log_file: str = None
-    model_healthcheck_url: str = None
+    benchmark_data: list[dict[str, Any]] = field(default_factory=list)
     handlers: list[HandlerConfig] = field(default_factory=list)
+    model_healthcheck_url: str = None
+    benchmark_route: Optional[str] = None
     log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
-    max_sessions: int = -1
 
 
 class EndpointHandlerFactory:
@@ -78,6 +77,7 @@ class EndpointHandlerFactory:
         if not self.config.handlers:
             default_handler_config = HandlerConfig(
                 route="/",
+                healthcheck=self.config.model_healthcheck_url
             )
             handler = self._create_handler(default_handler_config)
             self._handlers["/"] = handler
@@ -98,6 +98,7 @@ class EndpointHandlerFactory:
         
         # Extract config values with defaults
         route_path = handler_config.route
+        healthcheck_path = handler_config.healthcheck
         benchmark_config = handler_config.benchmark_config
         user_payload_class = handler_config.payload_class
         user_request_parser = handler_config.request_parser
@@ -186,25 +187,11 @@ class EndpointHandlerFactory:
                     else 8
                 )
             )
-            do_warmup_benchmark: bool = field(
-                default=(
-                    handler_config.benchmark_config.do_warmup
-                    if handler_config.benchmark_config
-                    else False
-                )
-            )
             concurrency: int = field(
                 default=(
                     handler_config.benchmark_config.concurrency
                     if handler_config.benchmark_config and handler_config.benchmark_config.concurrency
                     else 10
-                )
-            )
-            remote_dispatch_function: Callable[..., Awaitable[Any]] = field(
-                default=(
-                    handler_config.remote_function
-                    if handler_config.remote_function is not None
-                    else None
                 )
             )
             @property
@@ -224,18 +211,6 @@ class EndpointHandlerFactory:
                 """Just call the payload class's for_test() method"""
                 return PayloadClass.for_test()
             
-            async def call_remote_dispatch_function(self, params: dict):
-                """
-                define a remote dispatch function for this endpoint, return the result
-                """
-                if self.remote_dispatch_function is None:
-                    raise RuntimeError(f"remote_function is not configured for route {self._route}")
-
-                try:
-                    return await self.remote_dispatch_function(**params)
-                except Exception as ex:
-                    raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
-                
             async def generate_client_response(
                 self,
                 client_request: web.Request,
@@ -355,8 +330,7 @@ class Worker:
             model_log_file=config.model_log_file,
             benchmark_handler=benchmark_handler,
             log_actions=config.log_action_config.log_actions,
-            healthcheck_url=config.model_healthcheck_url,
-            max_sessions=config.max_sessions
+            healthcheck_url=config.model_healthcheck_url
         )
         
         # Attach endpoint handlers to HTTP routes

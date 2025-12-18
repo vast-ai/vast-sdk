@@ -57,7 +57,8 @@ worker_config = WorkerConfig(
             max_queue_time=60.0,
             benchmark_config=BenchmarkConfig(
                 generator=completions_benchmark_generator,
-                concurrency=100
+                concurrency=100,
+                runs=2
             )
         ),
         HandlerConfig(

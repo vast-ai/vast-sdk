@@ -42,14 +42,16 @@ benchmark_prompts = [
 
 benchmark_dataset = [
     {
-        "request_id": f"test-{random.randint(1000, 99999)}",
-        "modifier": "Text2Image",
-        "modifications": {
-            "prompt": prompt,
-            "width": 512,
-            "height": 512,
-            "steps": 20,
-            "seed": random.randint(0, sys.maxsize)
+        "input": {
+            "request_id": f"test-{random.randint(1000, 99999)}",
+            "modifier": "Text2Image",
+            "modifications": {
+                "prompt": prompt,
+                "width": 512,
+                "height": 512,
+                "steps": 20,
+                "seed": random.randint(0, sys.maxsize)
+            }
         }
     } for prompt in benchmark_prompts
 ]

@@ -43,7 +43,6 @@ def benchmark_generator() -> dict:
 
     return benchmark_data
 
-
 worker_config = WorkerConfig(
     model_server_url=MODEL_SERVER_URL,
     model_server_port=MODEL_SERVER_PORT,

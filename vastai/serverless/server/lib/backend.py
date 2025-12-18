@@ -567,7 +567,7 @@ class Backend:
                 if successful_responses == 0:
                     self.backend_errored("No successful responses from benchmark")
                     log.error(f"Benchmark Failed: No successful responses")
-
+                    return 0.0
                 throughput = total_workload / time_elapsed
                 sum_throughput += throughput
                 max_throughput = max(max_throughput, throughput)
