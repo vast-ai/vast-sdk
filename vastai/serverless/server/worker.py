@@ -62,6 +62,7 @@ class WorkerConfig:
     model_healthcheck_url: str = None
     benchmark_route: Optional[str] = None
     log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
+    max_sessions: Optional[int] = None
 
 
 class EndpointHandlerFactory:
@@ -338,7 +339,8 @@ class Worker:
             model_log_file=config.model_log_file,
             benchmark_handler=benchmark_handler,
             log_actions=config.log_action_config.log_actions,
-            healthcheck_url=config.model_healthcheck_url
+            healthcheck_url=config.model_healthcheck_url,
+            max_sessions=config.max_sessions
         )
         
         # Attach endpoint handlers to HTTP routes
