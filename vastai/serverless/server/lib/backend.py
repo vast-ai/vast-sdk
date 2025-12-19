@@ -344,7 +344,7 @@ class Backend:
                 return False
 
         message = {
-            auth_data.url
+            "url" : auth_data.url
         }
         if auth_data.reqnum < (self.reqnum - MSG_HISTORY_LEN):
             log.error(f"Signature error: reqnum failure, got {auth_data.reqnum}, current_reqnum: {self.reqnum}")
