@@ -1,8 +1,9 @@
+# connection.py
 import aiohttp
 import asyncio
 import random
 import json
-from typing import AsyncIterator, Dict, Optional, Union
+from typing import AsyncIterator, Dict, Optional, Union, Any
 
 _JITTER_CAP_SECONDS = 5.0
 
@@ -71,10 +72,10 @@ async def _open_once(
 ):
     """
     Execute one HTTP attempt and return the aiohttp response object.
-    Caller is responsible for reading/closing via 'async with'.
+    Caller is responsible for reading/closing via 'async with' or resp.release()/resp.close().
     """
     request_fn = session.get if method == "GET" else session.post
-    return request_fn(url + route, **kwargs)
+    return await request_fn(url + route, **kwargs)
 
 async def _make_request(
     client,
@@ -87,17 +88,30 @@ async def _make_request(
     retries: int = 5,
     timeout: float = 30,
     stream: bool = False,
-) -> Union[dict, AsyncIterator[dict]]:
+) -> Dict[str, Any]:
     """
-    Make an HTTP request with capped exponential backoff + jitter.
+    Make an HTTP request with capped exponential backoff + jitter, returning a structured result.
 
-    - On success (non-stream): returns parsed JSON (dict/list).
-    - On success (stream=True): returns an async iterator yielding parsed JSON objects.
-    - Raises Exception with last status/text after exhausting retries.
+    - Never raises for HTTP non-2xx responses. Instead returns result with ok=False and status/text/json.
+    - Raises only for "mechanical" failures (aiohttp/transport) and invalid JSON on successful (2xx) responses.
+
+    Return shape (non-stream):
+      {
+        "ok": bool,
+        "status": int|None,
+        "url": str,
+        "headers": dict,
+        "text": str,
+        "json": Any|None,
+        "retryable": bool,
+        "attempt": int
+      }
+
+    Return shape (stream=True, ok=True adds "stream"):
+      { ... , "stream": AsyncIterator[dict] }
     """
     method = method.upper()
     body = body or {}
-    # copy so we don't mutate caller's dict
     params = {**(params or {})}
     params["api_key"] = api_key
 
@@ -106,54 +120,96 @@ async def _make_request(
     session = await client._get_session()
     ssl_context = await client.get_ssl_context() if client else None
 
-    last_text = ""
-    last_status = None
+    full_url = url + route
 
+    last_result: Dict[str, Any] = {
+        "ok": False,
+        "status": None,
+        "url": full_url,
+        "headers": {},
+        "text": "",
+        "json": None,
+        "retryable": False,
+        "attempt": 0,
+    }
+
+    # STREAMING PATH (open upfront so we can return status + a stream iterator)
     if stream:
-        async def _stream_gen() -> AsyncIterator[dict]:
-            nonlocal last_text, last_status
-            for attempt in range(1, retries + 1):
-                try:
-                    kwargs = _build_kwargs(
-                        headers=headers,
-                        params=params,
-                        ssl_context=ssl_context,
-                        timeout=timeout,
-                        body=body,
-                        method=method,
-                        stream=True,
-                    )
-                    async with await _open_once(
-                        session=session,
-                        method=method,
-                        url=url,
-                        route=route,
-                        kwargs=kwargs,
-                    ) as resp:
-                        last_status = resp.status
-                        if resp.status < 200 or resp.status > 300:
-                            text = await resp.text()
-                            last_text = text
-                            if not _retryable(resp.status) or attempt == retries:
-                                raise Exception(f"HTTP {resp.status} from {url + route}: {text}")
-                            await asyncio.sleep(_backoff_delay(attempt))
-                            continue
+        for attempt in range(1, retries + 1):
+            last_result["attempt"] = attempt
+            try:
+                kwargs = _build_kwargs(
+                    headers=headers,
+                    params=params,
+                    ssl_context=ssl_context,
+                    timeout=timeout,
+                    body=body,
+                    method=method,
+                    stream=True,
+                )
 
+                resp = await _open_once(
+                    session=session,
+                    method=method,
+                    url=url,
+                    route=route,
+                    kwargs=kwargs,
+                )
+
+                status = resp.status
+                last_result["status"] = status
+                last_result["headers"] = dict(resp.headers)
+                last_result["retryable"] = _retryable(status)
+
+                if status < 200 or status >= 300:
+                    text = await resp.text()
+                    last_result["text"] = text
+
+                    # best-effort JSON parse (do not raise)
+                    try:
+                        if text and text.lstrip().startswith(("{", "[")):
+                            last_result["json"] = json.loads(text)
+                    except Exception:
+                        pass
+
+                    resp.release()
+
+                    if last_result["retryable"] and attempt < retries:
+                        await asyncio.sleep(_backoff_delay(attempt))
+                        continue
+
+                    # final non-2xx: return what we saw
+                    return last_result
+
+                # 2xx: return stream iterator that owns the response lifetime
+                last_result["ok"] = True
+                last_result["text"] = ""  # streaming: we don't pre-read body
+
+                async def _stream_iter() -> AsyncIterator[dict]:
+                    try:
                         async for obj in _iter_sse_json(resp):
                             yield obj
+                    finally:
+                        try:
+                            resp.release()
+                        except Exception:
+                            pass
 
-                        return
+                last_result["stream"] = _stream_iter()
+                return last_result
 
-                except Exception as ex:
+            except Exception as ex:
+                if client and getattr(client, "logger", None):
                     client.logger.error(f"Stream attempt {attempt} failed: {ex}")
-                    if attempt == retries:
-                        raise
-                    await asyncio.sleep(_backoff_delay(attempt))
+                if attempt == retries:
+                    raise
+                await asyncio.sleep(_backoff_delay(attempt))
 
-        return _stream_gen()
+        return last_result
 
-    # Non-streaming path
+    # NON-STREAMING PATH
     for attempt in range(1, retries + 1):
+        last_result["attempt"] = attempt
         try:
             kwargs = _build_kwargs(
                 headers=headers,
@@ -164,34 +220,50 @@ async def _make_request(
                 method=method,
                 stream=False,
             )
-            async with await _open_once(
-                session=session,
-                method=method,
-                url=url,
-                route=route,
-                kwargs=kwargs,
-            ) as resp:
-                last_status = resp.status
+
+            async with await (session.get(full_url, **kwargs) if method == "GET" else session.post(full_url, **kwargs)) as resp:
+                status = resp.status
                 text = await resp.text()
-                last_text = text
 
-                if resp.status >= 200 and resp.status < 300:
+                result: Dict[str, Any] = {
+                    "ok": 200 <= status < 300,
+                    "status": status,
+                    "url": full_url,
+                    "headers": dict(resp.headers),
+                    "text": text,
+                    "json": None,
+                    "retryable": _retryable(status),
+                    "attempt": attempt,
+                }
+
+                if result["ok"]:
+                    # Successful responses are expected to be JSON; invalid JSON is a hard failure
                     try:
-                        return await resp.json(content_type=None)
+                        result["json"] = await resp.json(content_type=None)
                     except Exception:
-                        raise Exception(f"Invalid JSON from {url + route}:\n{text}")
+                        raise Exception(f"Invalid JSON from {full_url}:\n{text}")
+                    return result
 
-                if not _retryable(resp.status):
-                    raise Exception(f"HTTP {resp.status} from {url + route}: {text}")
+                # Non-2xx: best-effort JSON parse (do not raise)
+                try:
+                    if text and text.lstrip().startswith(("{", "[")):
+                        result["json"] = json.loads(text)
+                except Exception:
+                    pass
 
-                await asyncio.sleep(_backoff_delay(attempt))
+                # Retry only if retryable and attempts remain
+                if result["retryable"] and attempt < retries:
+                    last_result = result
+                    await asyncio.sleep(_backoff_delay(attempt))
+                    continue
+
+                return result
 
         except Exception as ex:
-            client.logger.error(f"Attempt {attempt} failed: {ex}")
+            if client and getattr(client, "logger", None):
+                client.logger.error(f"Attempt {attempt} failed: {ex}")
             if attempt == retries:
-                break
+                raise
             await asyncio.sleep(_backoff_delay(attempt))
 
-    raise Exception(
-        f"Too many retries for {url + route} (last_status={last_status}, last_text={last_text[:256]!r})"
-    )
+    return last_result

@@ -10,6 +10,7 @@ import random
 import json
 import psutil
 import os
+import asyncio
 
 """
 type variable representing an incoming payload to pyworker that will used to calculate load and will then
@@ -345,6 +346,10 @@ class LogAction(Enum):
 @dataclass
 class Session:
     session_id: str
-    expiration: float  # epoch seconds
+    lifetime: float # extends TTL per-request
     auth_data: dict
-    created_at: float = time.time()
+    expiration: float  # epoch seconds
+    requests: list[web.Request] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+

@@ -1,3 +1,4 @@
+# client.py
 from .connection import _make_request
 from .endpoint import Endpoint
 from .worker import Worker
@@ -101,10 +102,10 @@ class Serverless:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self.logger.info("Started aiohttp ClientSession")
-            connector = aiohttp.TCPConnector(limit=self.connection_limit, ssl= await self.get_ssl_context())
+            connector = aiohttp.TCPConnector(limit=self.connection_limit, ssl=await self.get_ssl_context())
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
-    
+
     def is_open(self):
         return self._session is not None and not self._session.closed
 
@@ -116,40 +117,24 @@ class Serverless:
     async def get_ssl_context(self) -> ssl.SSLContext:
         """Download Vast.ai root cert and build SSL context (cached)."""
         if self._ssl_context is None:
-            # Download the Vast root cert
             async with aiohttp.ClientSession() as s:
                 async with s.get(self.SSL_CERT_URL) as resp:
                     if resp.status != 200:
                         raise Exception(f"Failed to fetch SSL cert: {resp.status}")
                     cert_bytes = await resp.read()
 
-            # Write to a temporary PEM file
             tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix=".cer")
             tmpfile.write(cert_bytes)
             tmpfile.close()
 
-            # Start with system defaults
             ctx = ssl.create_default_context()
             ctx.load_verify_locations(cafile=tmpfile.name)
             self.logger.info("Loaded Vast.ai SSL certificate")
 
             self._ssl_context = ctx
-
             os.unlink(tmpfile.name)
 
         return self._ssl_context
-
-    def get_avg_request_time(self) -> float:
-        """
-        Rolling estimate for routing timeout. A small safety margin is added.
-        Currently unused. default to 60.0
-        """
-        return 60.0
-        if len(self.latencies) < 10:
-            return 30.0  # conservative default until we have data
-        avg = sum(self.latencies) / len(self.latencies)
-        # Clamp to reasonable bounds
-        return float(max(5.0, min(avg + 2.0, 600.0)))
 
     async def get_endpoint(self, name="") -> Endpoint:
         endpoints = await self.get_endpoints()
@@ -160,7 +145,7 @@ class Serverless:
 
     async def get_endpoints(self) -> list[Endpoint]:
         try:
-            response = await _make_request(
+            result = await _make_request(
                 client=self,
                 url=self.VAST_WEB_URL,
                 route="/api/v0/endptjobs/",
@@ -168,22 +153,19 @@ class Serverless:
                 params={"client_id": "me"}
             )
         except Exception as ex:
-            raise Exception(
-                f"Failed to get endpoints:\nReason={ex}"
-            )
+            raise Exception(f"Failed to get endpoints:\nReason={ex}")
+
+        if not result.get("ok"):
+            raise Exception(f"Failed to get endpoints: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+
+        response = result.get("json") or {}
         endpoints = []
-        for e in response["results"]:
+        for e in response.get("results", []):
             endpoints.append(Endpoint(client=self, name=e["endpoint_name"], id=e["id"], api_key=e["api_key"]))
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
-    
+
     async def get_endpoint_workers(self, endpoint: Endpoint) -> List[Worker]:
-        """
-        Equivalent to:
-          curl -X POST https://run.vast.ai/get_endpoint_workers/ \
-               -H "Content-Type: application/json" \
-               -d '{"id": <endpoint_id>, "api_key": "<VAST_API_KEY>"}'
-        """
         if not isinstance(endpoint, Endpoint):
             raise ValueError("endpoint must be an Endpoint")
 
@@ -202,45 +184,55 @@ class Serverless:
             return [Worker.from_dict(item) for item in data]
 
     async def get_endpoint_session(
-            self,
-            endpoint,
-            session_id: int,
-            session_auth: str
+        self,
+        endpoint,
+        session_id: int,
+        session_auth: str
     ):
         try:
-            worker_response = await _make_request(
+            result = await _make_request(
                 client=self,
                 url=session_auth.get("url"),
                 api_key="",
-                route='/session/get',
-                body={"session_id" : session_id, "session_auth" : session_auth },
+                route="/session/get",
+                body={"session_id": session_id, "session_auth": session_auth},
                 method="POST",
                 retries=1,
-                timeout=600
+                timeout=600,
+                stream=False,
             )
+
+            if not result.get("ok"):
+                self.logger.info(
+                    f"get_session returned HTTP {result.get('status')}: {result.get('text','')[:256]}"
+                )
+                return None
+
+            worker_response = result.get("json") or {}
+
             session = Session(
                 endpoint=endpoint,
                 session_id=session_id,
-                lifetime=worker_response.get("expiration"),
+                lifetime=worker_response.get("lifetime"),
+                expiration=worker_response.get("expiration"),
                 auth_data=worker_response.get("auth_data"),
                 url=worker_response.get("auth_data").get("url")
             )
             return session
+
         except Exception as ex:
             self.logger.info(f"Got error message from get_session: {ex}")
             return None
-        
 
-            
     async def end_endpoint_session(
-            self,
-            endpoint: Endpoint,
-            session: Session
+        self,
+        endpoint: Endpoint,
+        session: Session
     ):
         session_end_response = await self.queue_endpoint_request(
             endpoint=endpoint,
             worker_route="/session/end",
-            worker_payload={"session_id" : session.session_id},
+            worker_payload={"session_id": session.session_id},
             session=session
         )
         if session_end_response.get("response").get("ended"):
@@ -249,27 +241,26 @@ class Serverless:
             raise Exception(f"Failed to end session: {session_end_response.get('response')}")
 
     async def start_endpoint_session(
-            self,
-            endpoint: Endpoint,
-            cost: int = 100,
-            lifetime: float = 4 * 60 * 60
+        self,
+        endpoint: Endpoint,
+        cost: int = 100,
+        lifetime: float = 60
     ) -> Session:
         session_start_response = await self.queue_endpoint_request(
             endpoint=endpoint,
             worker_route="/session/create",
-            worker_payload={ "lifetime" : lifetime },
+            worker_payload={"lifetime": lifetime},
             cost=cost,
         )
         session_id = session_start_response.get("response").get("session_id")
         lifetime = session_start_response.get("response").get("lifetime")
+        expiration = session_start_response.get("response").get("lifetime")
         url = session_start_response.get("url")
         auth_data = session_start_response.get("auth_data")
         if session_id:
-            return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, url=url, auth_data=auth_data)
+            return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, expiration=expiration, url=url, auth_data=auth_data)
         else:
             raise Exception(f"Failed to create session: {session_start_response['response']}")
-
-        
 
     def queue_endpoint_request(
         self,
@@ -298,15 +289,11 @@ class Serverless:
                     worker_url = ""
                     auth_data = {}
                     session_id = None
+
                     if session is None:
                         self.logger.debug("Sending initial route call")
 
                         route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
-                        #request_idx = route.request_idx
-                        if (request_idx):
-                            self.logger.debug(f"Got initial request index {request_idx}")
-                        else:
-                            self.logger.error("Did not get request_idx from initial route")
 
                         poll_interval = 1
                         elapsed_time = 0
@@ -320,13 +307,11 @@ class Serverless:
                             elapsed_time += poll_interval
 
                             route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
-                            #request_idx = route.request_idx or request_idx
 
-                            # exponential backoff + jitter (cap)
                             attempt += 1
                             poll_interval = min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval)
                             self.logger.debug("Polling route...")
-                        # Now, route is ready for sending request to worker
+
                         worker_url = route.get_url()
                         auth_data = route.body
                     else:
@@ -337,46 +322,68 @@ class Serverless:
 
                     payload = worker_payload
                     worker_request_body = {
-                                            "auth_data" : auth_data,
-                                            "session_id" : session_id,
-                                            "payload" : payload
-                                        }
-                    
-                    try:
-                        self.logger.debug("Found worker machine, starting work")
-                        if request.status != "Retrying":
-                            request.status = "In Progress"
-                            request.start_time = time.time()
-                        worker_response = await _make_request(
-                            client=self,
-                            url=worker_url,
-                            route=worker_route,
-                            api_key=endpoint.api_key,
-                            body=worker_request_body,
-                            method="POST",
-                            retries=1,
-                            timeout=600,
-                            stream=stream
-                        )
-                    except Exception as ex:
-                        if retry and (max_retries is None or total_attempts < max_retries):
+                        "auth_data": auth_data,
+                        "session_id": session_id,
+                        "payload": payload
+                    }
+
+                    self.logger.debug("Found worker machine, starting work")
+                    if request.status != "Retrying":
+                        request.status = "In Progress"
+                        request.start_time = time.time()
+
+                    # Transport/JSON failures may raise; HTTP errors return ok=False.
+                    result = await _make_request(
+                        client=self,
+                        url=worker_url,
+                        route=worker_route,
+                        api_key=endpoint.api_key,
+                        body=worker_request_body,
+                        method="POST",
+                        retries=1,  # avoid stacking retries with the outer loop
+                        timeout=600,
+                        stream=stream
+                    )
+
+                    if not result.get("ok"):
+                        # Retry decision is now *outside* _make_request()
+                        if retry and result.get("retryable") and (max_retries is None or total_attempts < max_retries):
                             request.status = "Retrying"
                             await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
                             continue
-                        raise
 
-                    # Resolve future, task complete 
+                        # Return the raw HTTP result to the caller
+                        request.status = "Complete"
+                        request.complete_time = time.time()
+                        if request.start_time is not None:
+                            self.latencies.append(request.complete_time - request.start_time)
+
+                        response = {
+                            "response": result.get("json") if result.get("json") is not None else {"error": result.get("text", "")},
+                            "result": result,
+                            "latency": (request.complete_time - request.start_time) if request.start_time else None,
+                            "url": worker_url,
+                            "request_idx": request_idx,
+                            "auth_data": auth_data
+                        }
+                        request.set_result(response)
+                        return
+
+                    # Success
+                    worker_response = result.get("stream") if stream else result.get("json")
+
                     request.status = "Complete"
                     request.complete_time = time.time()
                     self.latencies.append(request.complete_time - request.start_time)
                     self.logger.info("Endpoint request task completed")
 
                     response = {
-                        "response" : worker_response,
-                        "latency" : request.complete_time - request.start_time,
-                        "url" : worker_url,
-                        "request_idx" : request_idx,
-                        "auth_data" : auth_data
+                        "response": worker_response,
+                        "result": result,
+                        "latency": request.complete_time - request.start_time,
+                        "url": worker_url,
+                        "request_idx": request_idx,
+                        "auth_data": auth_data
                     }
                     request.set_result(response)
                     return
@@ -387,12 +394,10 @@ class Serverless:
                 return
             except Exception as ex:
                 request.status = "Errored"
-                # Fail the future so awaiters / then().catch() are notified
                 request.set_exception(ex)
                 self.logger.error(f"Request errored: {ex}")
                 return
 
-        # Create asyncio task for request lifetime management
         bg_task = asyncio.create_task(task(serverless_request))
 
         def _propagate_cancel(fut: ServerlessRequest):

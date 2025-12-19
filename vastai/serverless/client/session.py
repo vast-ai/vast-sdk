@@ -5,14 +5,14 @@ import inspect
 
 class Session:
     endpoint: Endpoint
-    session_id: int
+    session_id: str
     open: bool
     url: str
     lifetime: float
     auth_data: dict
     on_close: Optional[Callable]
 
-    def __init__(self, endpoint: Endpoint, session_id: int, lifetime: float, url: str, auth_data: dict):
+    def __init__(self, endpoint: Endpoint, session_id: str, lifetime: float, url: str, auth_data: dict):
         if endpoint is None:
             raise ValueError("Session cannot be created with empty endpoint")
         if session_id is None:
@@ -105,7 +105,7 @@ class Session:
             stream=stream,
             session=self,
         )
-        if result.get("response").get("status") == 410:
+        if result.get("status") == 410:
             self.open = False
             raise ValueError("Cannot make request on closed session.")
         return result

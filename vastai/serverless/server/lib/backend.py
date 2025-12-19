@@ -42,6 +42,8 @@ log = logging.getLogger(__file__)
 
 # defines the minimum wait time between sending updates to autoscaler
 LOG_POLL_INTERVAL = 0.1
+# Defines waiting interval for session garbage collection
+SESSION_GC_INTERVAL = 5.0
 BENCHMARK_INDICATOR_FILE = ".has_benchmark"
 MAX_PUBKEY_FETCH_ATTEMPTS = 3
 
@@ -79,112 +81,160 @@ class Backend:
     healthcheck_url: str = dataclasses.field(
         default_factory=lambda: os.environ.get("MODEL_HEALTH_ENDPOINT", "")
     )
+    _sessions_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock, repr=False)
     sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
     max_sessions: int = dataclasses.field(default=-1)
         
-    def create_session_get_handler(self) -> web.Response:
-        async def session_get_handler(request: web.Request) -> web.Response:
-            try:
-                data = await request.json()
-                session_id = data.get("session_id")
-                session_auth = data.get("session_auth")
-            except JsonDataException as e:
-                return web.json_response({"error": e.message}, status=422)
-            except json.JSONDecodeError:
-                return web.json_response({"error": "invalid JSON"}, status=422)
+    async def session_health_handler(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            session_id = data.get("session_id")
+            session_auth = data.get("session_auth")
+        except json.JSONDecodeError:
+            return web.json_response({"error": "invalid JSON"}, status=422)
 
-            if not session_id:
-                return web.json_response({"error": "missing session_id"}, status=422)
+        if not session_id:
+            return web.json_response({"error": "missing session_id"}, status=422)
 
+        async with self._sessions_lock:
             session = self.sessions.get(session_id)
             if session is None:
-                return web.json_response({"error": "session does not exist"}, status=410)
-            
+                return web.json_response({"ok": False}, status=200)
+
             if session_auth is None or session.auth_data != session_auth:
                 return web.json_response({"error": "session_auth is not valid"}, status=401)
-            else:
-                return web.json_response(
-                    {
-                        "session_id" : session_id,
-                        "auth_data" : session.auth_data,
-                        "expiration" : session.expiration,
-                        "created_at": session.created_at
-                      }
-                )
 
-        return session_get_handler
+            return web.json_response({"ok": True}, status=200)
+        
+    async def session_get_handler(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            session_id = data.get("session_id")
+            session_auth = data.get("session_auth")
+        except json.JSONDecodeError:
+            return web.json_response({"error": "invalid JSON"}, status=422)
 
-    def create_session_end_handler(self) -> web.Response:
-        async def session_end_handler(request: web.Request) -> web.Response:
-            try:
-                data = await request.json()
-                session_id = data.get("session_id")
-            except JsonDataException as e:
-                return web.json_response({"error": e.message}, status=422)
-            except json.JSONDecodeError:
-                return web.json_response({"error": "invalid JSON"}, status=422)
-
-            if not session_id:
-                return web.json_response({"error": "missing session_id"}, status=422)
-
+        if not session_id:
+            return web.json_response({"error": "missing session_id"}, status=422)
+        session = None
+        async with self._sessions_lock:
             session = self.sessions.get(session_id)
+        if session is None:
+            return web.json_response({"error": "session does not exist"}, status=400)
+        
+        if session_auth is None or session.auth_data != session_auth:
+            return web.json_response({"error": "session_auth is not valid"}, status=401)
+        else:
+            return web.json_response(
+                {
+                    "session_id" : session_id,
+                    "auth_data" : session.auth_data,
+                    "lifetime" : session.lifetime,
+                    "expiration" : session.expiration,
+                    "created_at": session.created_at
+                }
+            )
+
+    async def __close_session(self, session_id: str) -> bool:
+        """
+        Close a session and cancel all in-flight tasks associated with it.
+        Returns True if a session was removed, False if it didn't exist.
+        """
+        async with self._sessions_lock:
+            session = self.sessions.pop(session_id, None)
+            if session is None:
+                return False
+
+            session.cancel_event.set()
+
+            for req in list(session.requests):
+                try:
+                    tr = getattr(req, "transport", None)
+                    if tr is not None and not tr.is_closing():
+                        tr.close()
+                except Exception:
+                    pass
+            session.requests.clear()
+
+            request_metrics = self.session_metrics.pop(session_id, None)
+
+        # metrics outside lock
+        if request_metrics is not None:
+            self.metrics._request_success(request_metrics)
+            self.metrics._request_end(request_metrics)
+
+        return True
+
+
+    async def session_end_handler(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            session_id = data.get("session_id")
+            session_auth = data.get("session_auth")
+        except json.JSONDecodeError:
+            return web.json_response({"error": "invalid JSON"}, status=422)
+
+        if not session_id:
+            return web.json_response({"error": "missing session_id"}, status=422)
+        
+        session = None
+        async with self._sessions_lock:
+            session = self.sessions.get(session_id)
+
             if session is None:
                 return web.json_response(
                     {"error": f"session with id {session_id} not found"},
                     status=400,
                 )
-            request_metrics = self.session_metrics.get(session_id)
-            self.metrics._request_success(request_metrics)
-            self.metrics._request_end(request_metrics)
+            if session_auth is None or session.auth_data != session_auth:
+                return web.json_response({"error": "session_auth is not valid"}, status=401)
+                    
+        closed = await self.__close_session(session_id)
+        if not closed:
+            return web.json_response({"error": "session already closed"}, status=410)
 
-            self.sessions.pop(session_id, None)
-
-            return web.json_response(
-                {"ended": True, "removed_session": session_id},
-                status=200,
-            )
-
-        return session_end_handler
-
-    def create_session_create_handler(self) -> Callable[[web.Request], Awaitable[web.Response]]:
-        def generate_session_id():
-            characters = string.ascii_letters + string.digits
-            random_string = ''.join(random.choices(characters, k=13))
-            return random_string
+        return web.json_response(
+            {"ended": True, "removed_session": session_id},
+            status=200,
+        )
 
 
-        async def session_create_handler(request: web.Request) -> web.Response:
-            try:
-                data = await request.json()
-                auth_data = data.get("auth_data")
-                payload = data.get("payload")
-                session_id = data.get("session_id")
-            except JsonDataException as e:
-                return web.json_response(data=e.message, status=422)
-            except json.JSONDecodeError:
-                return web.json_response(dict(error="invalid JSON"), status=422)
+    def generate_session_id(self):
+        characters = string.ascii_letters + string.digits
+        random_string = ''.join(random.choices(characters, k=13))
+        return random_string
 
-            lifetime = payload.get("lifetime", 60 * 60 * 4) # sessions live for 4 hours by default
 
-            now = time.time()
-            expiration = now + lifetime
+    async def session_create_handler(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            auth_data = data.get("auth_data")
+            payload = data.get("payload")
+        except json.JSONDecodeError:
+            return web.json_response(dict(error="invalid JSON"), status=422)
 
-            session_id = generate_session_id()
+        session_request_metrics = RequestMetrics(
+            request_idx= auth_data.get("request_idx"),
+            reqnum= auth_data.get("reqnum"),
+            workload= auth_data.get("cost"),
+            status="SessionActive"
+        )
 
-            session_request_metrics = RequestMetrics(
-                request_idx= auth_data.get("request_idx"),
-                reqnum= auth_data.get("reqnum"),
-                workload= auth_data.get("cost"),
-                status="SessionActive"
-            )
-
+        async with self._sessions_lock:
             if self.max_sessions > 0 and len(self.sessions) >= self.max_sessions:
                 self.metrics._request_reject(session_request_metrics)
                 return web.Response(status=429)
+            
+            # Set the session expiration time, and the TTL extension per request/get
+            lifetime = payload.get("lifetime", 60.0)
+            now = time.time()
+            expiration = now + lifetime
 
+            session_id = self.generate_session_id()
             session = Session(
                 session_id=session_id,
+                lifetime=lifetime,
                 expiration=expiration,
                 auth_data=auth_data
             )
@@ -192,15 +242,14 @@ class Backend:
             self.session_metrics[session_id] = session_request_metrics
             self.metrics._request_start(session_request_metrics)
 
-            return web.json_response(
-                {
-                    "session_id": session.session_id,
-                    "expiration": session.expiration
-                },
-                status=201,
-            )
+        return web.json_response(
+            {
+                "session_id": session.session_id,
+                "expiration": session.expiration
+            },
+            status=201,
+        )
 
-        return session_create_handler
 
     def __post_init__(self):
         self.metrics = Metrics()
@@ -270,9 +319,17 @@ class Backend:
         workload = payload.count_workload()
         request_metrics: RequestMetrics = RequestMetrics(request_idx=auth_data.request_idx, reqnum=auth_data.reqnum, workload=workload, status="Created")
 
-        session = self.sessions.get(session_id)
-        if session_id is not None and session is None:
-            return web.json_response(dict(error="invalid session"), status=410)
+        event = asyncio.Event()
+        finished = asyncio.Event()
+
+        session = None
+        if session_id is not None:
+            async with self._sessions_lock:
+                session = self.sessions.get(session_id)
+                if session is None:
+                    return web.json_response(dict(error="invalid session"), status=410)
+                session.expiration += session.lifetime
+                session.requests.append(request)
         
         def advance_queue_after_completion(event: asyncio.Event):
             """Pop current head and wake next waiter, if any."""
@@ -290,58 +347,67 @@ class Backend:
 
         async def cancel_api_call_if_disconnected() -> None:
             await request.wait_for_disconnection()
-            if not session_id:
+            if not finished.is_set():
                 self.metrics._request_canceled(request_metrics)
-            return
+        
+        async def cancel_if_session_closed() -> None:
+            await session.cancel_event.wait()
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
                 response = await self.__call_backend(handler=handler, payload=payload)
                 res = await handler.generate_client_response(request, response)
-                if not session_id:
-                    self.metrics._request_success(request_metrics)
+                self.metrics._request_success(request_metrics)
                 return res
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                if not session_id:
-                    self.metrics._request_errored(request_metrics, str(e))
+                self.metrics._request_errored(request_metrics, str(e))
                 return web.Response(status=500)
 
         ###########
 
         if self.__check_signature(auth_data) is False:
-            if not session_id:
-                self.metrics._request_reject(request_metrics)
+            self.metrics._request_reject(request_metrics)
             return web.Response(status=401)
         
         if handler.max_queue_time is not None and self.metrics.model_metrics.wait_time > handler.max_queue_time:
-            if not session_id:
-                self.metrics._request_reject(request_metrics)
+            self.metrics._request_reject(request_metrics)
             return web.Response(status=429)
-
+        
         disconnect_task = create_task(cancel_api_call_if_disconnected())
+        session_cancel_task = None
+        if session is not None:
+            session_cancel_task = create_task(cancel_if_session_closed())
+
         next_request_task = None
         work_task = None
-        event = asyncio.Event() # Used in finally block, so initialize here
-        if not session_id:
-            self.metrics._request_start(request_metrics)
+
+        self.metrics._request_start(request_metrics, session)
 
         try:
             if handler.allow_parallel_requests:
                 work_task = create_task(make_request())
-                done, pending = await wait([work_task, disconnect_task], return_when=FIRST_COMPLETED)
+
+                wait_set = [work_task, disconnect_task]
+                if session_cancel_task is not None:
+                    wait_set.append(session_cancel_task)
+
+                done, pending = await wait(
+                    wait_set,
+                    return_when=FIRST_COMPLETED,
+                )
 
                 for t in pending:
                     t.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
 
-                if disconnect_task in done:
-                    return web.Response(status=499)
+                if disconnect_task in done or (session_cancel_task is not None and session_cancel_task in done):
+                    return web.Response(status=499)  # request cancelled
 
                 # otherwise work_task completed
                 return await work_task
-            
+
             # FIFO-queue branch
             else:
                 # Insert a Event into the queue for this request
@@ -352,12 +418,17 @@ class Backend:
 
                 # Race between our request being next and request being cancelled
                 next_request_task = create_task(event.wait())
-                first_done, first_pending = await wait(
-                    [next_request_task, disconnect_task], return_when=FIRST_COMPLETED
-                )
 
+                wait_set = [next_request_task, disconnect_task]
+                if session_cancel_task is not None:
+                    wait_set.append(session_cancel_task)
+
+                first_done, first_pending = await wait(
+                    wait_set,
+                    return_when=FIRST_COMPLETED,
+                )
                 # If the disconnect task wins the race
-                if disconnect_task in first_done:
+                if disconnect_task in first_done or (session_cancel_task is not None and session_cancel_task in first_done):
                     # Clean up the next_request_task, then exit
                     for t in first_pending:
                         t.cancel()
@@ -365,22 +436,31 @@ class Backend:
                     return web.Response(status=499)
 
                 # We are the next-up request in the queue
-                log.debug(f"Starting work on request {request_metrics.reqnum}")
+                if session is not None:
+                    log.debug(f"Starting work on request {request_metrics.reqnum}")
 
                 # Race the backend API call with the disconnect task
                 work_task = create_task(make_request())
 
-                done, pending = await wait([work_task, disconnect_task], return_when=FIRST_COMPLETED)
+                wait_set = [work_task, disconnect_task]
+                if session_cancel_task is not None:
+                    wait_set.append(session_cancel_task)
+
+                done, pending = await wait(
+                    wait_set,
+                    return_when=FIRST_COMPLETED,
+                )
+
                 for t in pending:
                     t.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
 
-                if disconnect_task in done:
+                if disconnect_task in done or (session_cancel_task is not None and session_cancel_task in done):
                     return web.Response(status=499)
 
                 # otherwise work_task completed
                 return await work_task
-            
+
         except asyncio.CancelledError:
             return web.Response(status=499)
         
@@ -389,11 +469,22 @@ class Backend:
             return web.Response(status=500)
         
         finally:
+            # Set finished flag so we don't cancel after completion
+            finished.set()
+
+            if session is not None and session_id is not None:
+                async with self._sessions_lock:
+                    s = self.sessions.get(session_id)
+                    if s is not None:
+                        try:
+                            s.requests.remove(request)
+                        except ValueError:
+                            pass
+
             if not handler.allow_parallel_requests:
                 advance_queue_after_completion(event)
-            if not session_id:
-                self.metrics._request_end(request_metrics)
-            cleanup_tasks = [t for t in (next_request_task, work_task, disconnect_task) if t]
+            self.metrics._request_end(request_metrics, session)
+            cleanup_tasks = [t for t in (next_request_task, work_task, disconnect_task, session_cancel_task) if t]
             for t in cleanup_tasks:
                 if not t.done():
                     t.cancel()
@@ -447,7 +538,7 @@ class Backend:
 
     async def _start_tracking(self) -> None:
         await gather(
-            self.__read_logs(), self.metrics._send_metrics_loop(), self.__healthcheck(), self.metrics._send_delete_requests_loop()
+            self.__read_logs(), self.metrics._send_metrics_loop(), self.__healthcheck(), self.metrics._send_delete_requests_loop(), self.__session_gc_loop(), 
         )
 
     def backend_errored(self, msg: str) -> None:
@@ -612,11 +703,9 @@ class Backend:
                             self.metrics._model_loaded(
                                 max_throughput=max_throughput,
                             )
-                        except ClientConnectorError as e:
-                            log.debug(
-                                f"failed to connect to comfyui api during benchmark"
-                            )
-                            self.backend_errored(str(e))
+                        except Exception as e:
+                            log.debug(f"Benchmark failed with errror: {e}")
+                            self.backend_errored(f"Benchmark failed with errror: {e}")
                     case LogAction.ModelError if msg in log_line:
                         log.debug(f"Got log line indicating error: {log_line}")
                         self.backend_errored(msg)
@@ -633,11 +722,35 @@ class Backend:
                         await handle_log_line(line.rstrip())
                     else:
                         await asyncio.sleep(LOG_POLL_INTERVAL)
-
-        ###########
-
         while True:
             if os.path.isfile(self.model_log_file) is True:
                 return await tail_log()
             else:
                 await sleep(1)
+      
+
+
+    async def __session_gc_loop(self) -> NoReturn:
+        while True:
+            try:
+                await sleep(SESSION_GC_INTERVAL)
+                now = time.time()
+
+                async with self._sessions_lock:
+                    expired = [
+                        sid for sid, s in self.sessions.items()
+                        if s.expiration is not None and s.expiration <= now
+                    ]
+
+                if expired:
+                    log.debug(f"Removing {len(expired)} expired sessions")
+                for sid in expired:
+                    await self.__close_session(sid)
+
+            except CancelledError:
+                log.debug("Session GC task cancelled; exiting loop")
+                raise
+            except Exception as e:
+                log.debug(f"Session GC loop error: {e}")
+                continue
+                
