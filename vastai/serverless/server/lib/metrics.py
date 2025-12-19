@@ -151,19 +151,13 @@ class Metrics:
     #######################################Private#######################################
 
     async def __send_delete_requests_and_reset(self):
-        async def post(
-            report_addr: str, idxs: list[int], success_flag: bool, error: bool = False
-        ) -> bool:
+        async def post(report_addr: str, requests: list[dict]) -> bool:
             data = {
                 "worker_id": self.id,
                 "mtoken": self.mtoken,
-                "request_idxs": idxs,
-                "success": success_flag,
-                "error": error,
+                "requests": requests,
             }
-            log.debug(
-                f"Deleting requests (success={success_flag}, error={error}): {data['request_idxs']}"
-            )
+            log.debug(f"Deleting requests: {[r['request_idx'] for r in requests]}")
             full_path = report_addr.rstrip("/") + "/delete_requests/"
             for attempt in range(1, 4):
                 try:
@@ -183,32 +177,24 @@ class Metrics:
         # Take a snapshot of what we plan to send this tick.
         # New arrivals after this snapshot will remain in the queue for the next tick.
         snapshot = list(self.model_metrics.requests_deleting)
-        success_idxs      = [r.request_idx for r in snapshot if r.success is True]
-        failed_error_idxs = [r.request_idx for r in snapshot if r.success is False and r.status == "Error"]
-        failed_other_idxs = [r.request_idx for r in snapshot if r.success is False and r.status != "Error"]
 
-        if not success_idxs and not failed_error_idxs and not failed_other_idxs:
+        if not snapshot:
             return  # nothing to do
+
+        requests_payload = [
+            {"request_idx": r.request_idx, "success": r.success, "status": r.status}
+            for r in snapshot
+        ]
 
         for report_addr in self.report_addr:
             # TODO: Add a Redis subscriber queue for delete_requests
             if report_addr == "https://cloud.vast.ai/api/v0":
                 # Patch: ignore the Redis API report_addr
                 continue
-            sent_success      = True
-            sent_failed_error = True
-            sent_failed_other = True
 
-            if success_idxs:
-                sent_success = await post(report_addr, success_idxs, True, False)
-            if failed_error_idxs:
-                sent_failed_error = await post(report_addr, failed_error_idxs, False, True)
-            if failed_other_idxs:
-                sent_failed_other = await post(report_addr, failed_other_idxs, False, False)
-
-            if sent_success and sent_failed_error and sent_failed_other:
+            if await post(report_addr, requests_payload):
                 # Remove only the items we actually sent from the live queue.
-                sent_set = set(success_idxs) | set(failed_error_idxs) | set(failed_other_idxs)
+                sent_set = {r.request_idx for r in snapshot}
                 self.model_metrics.requests_deleting[:] = [
                     r for r in self.model_metrics.requests_deleting
                     if r.request_idx not in sent_set
