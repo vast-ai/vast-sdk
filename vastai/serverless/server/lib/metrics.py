@@ -174,11 +174,12 @@ class Metrics:
                 log.debug(f"Retrying delete_request, attempt: {attempt}")
             return False
 
-        # Take a snapshot of what we plan to send this tick.
-        # New arrivals after this snapshot will remain in the queue for the next tick.
-        snapshot = list(self.model_metrics.requests_deleting)
+        requests_payload = [
+            {"request_idx": r.request_idx, "success": r.success, "status": r.status}
+            for r in self.model_metrics.requests_deleting
+        ]
 
-        if not snapshot:
+        if not requests_payload:
             return  # nothing to do
 
         for report_addr in self.report_addr:
@@ -187,9 +188,9 @@ class Metrics:
                 # Patch: ignore the Redis API report_addr
                 continue
 
-            if await post(report_addr, snapshot):
+            if await post(report_addr, requests_payload):
                 # Remove only the items we actually sent from the live queue.
-                sent_set = {r.request_idx for r in snapshot}
+                sent_set = {r["request_idx"] for r in requests_payload}
                 self.model_metrics.requests_deleting[:] = [
                     r for r in self.model_metrics.requests_deleting
                     if r.request_idx not in sent_set
