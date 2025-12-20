@@ -181,18 +181,13 @@ class Metrics:
         if not snapshot:
             return  # nothing to do
 
-        requests_payload = [
-            {"request_idx": r.request_idx, "success": r.success, "status": r.status}
-            for r in snapshot
-        ]
-
         for report_addr in self.report_addr:
             # TODO: Add a Redis subscriber queue for delete_requests
             if report_addr == "https://cloud.vast.ai/api/v0":
                 # Patch: ignore the Redis API report_addr
                 continue
 
-            if await post(report_addr, requests_payload):
+            if await post(report_addr, snapshot):
                 # Remove only the items we actually sent from the live queue.
                 sent_set = {r.request_idx for r in snapshot}
                 self.model_metrics.requests_deleting[:] = [
