@@ -203,7 +203,7 @@ async def main(
             # Step 1: Create all sessions
             print("Creating sessions...")
             for i in range(num_sessions):
-                session = await endpoint.session(cost=session_cost)
+                session = await endpoint.session(cost=session_cost, on_close_route="/cancel_task")
                 sessions.append(session)
                 print(f"  Created session {i+1}/{num_sessions}: {session.session_id[:8]}")
 

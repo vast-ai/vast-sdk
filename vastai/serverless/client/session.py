@@ -13,7 +13,7 @@ class Session:
     on_close_route: str
     on_close_payload: dict
 
-    def __init__(self, endpoint: Endpoint, session_id: str, lifetime: float, url: str, auth_data: dict, on_close_route: str, on_close_payload: dict):
+    def __init__(self, endpoint: Endpoint, session_id: str, lifetime: float, expiration: str, url: str, auth_data: dict, on_close_route: str = None, on_close_payload: dict = None):
         if endpoint is None:
             raise ValueError("Session cannot be created with empty endpoint")
         if session_id is None:
@@ -24,6 +24,7 @@ class Session:
         self.endpoint = endpoint
         self.session_id = session_id
         self.lifetime = lifetime
+        self.expiration = expiration
         self.url = url
         self.auth_data = auth_data
 

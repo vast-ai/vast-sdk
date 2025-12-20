@@ -295,7 +295,7 @@ class Serverless:
                     if session is None:
                         self.logger.debug("Sending initial route call")
 
-                        route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
+                        route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
 
                         poll_interval = 1
                         elapsed_time = 0
@@ -308,7 +308,7 @@ class Serverless:
                             await asyncio.sleep(poll_interval)
                             elapsed_time += poll_interval
 
-                            route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=self.get_avg_request_time())
+                            route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
 
                             attempt += 1
                             poll_interval = min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval)
@@ -392,11 +392,9 @@ class Serverless:
 
             except asyncio.CancelledError:
                 request.status = "Cancelled"
-                request.set_exception(asyncio.CancelledError())
                 return
             except Exception as ex:
                 request.status = "Errored"
-                request.set_exception(ex)
                 self.logger.error(f"Request errored: {ex}")
                 return
 
