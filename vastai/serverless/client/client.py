@@ -244,12 +244,14 @@ class Serverless:
         self,
         endpoint: Endpoint,
         cost: int = 100,
-        lifetime: float = 60
+        lifetime: float = 60,
+        on_close_route: str = None,
+        on_close_payload: dict = None
     ) -> Session:
         session_start_response = await self.queue_endpoint_request(
             endpoint=endpoint,
             worker_route="/session/create",
-            worker_payload={"lifetime": lifetime},
+            worker_payload={"lifetime": lifetime, "on_close_route" : on_close_route, "on_close_payload" : on_close_payload },
             cost=cost,
         )
         session_id = session_start_response.get("response").get("session_id")

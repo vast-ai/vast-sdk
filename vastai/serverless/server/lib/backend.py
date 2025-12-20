@@ -132,9 +132,48 @@ class Backend:
                     "auth_data" : session.auth_data,
                     "lifetime" : session.lifetime,
                     "expiration" : session.expiration,
-                    "created_at": session.created_at
+                    "created_at": session.created_at,
+                    "on_close_route" : session.on_cancel_route
                 }
             )
+
+    async def __run_session_on_close(self, session: Session) -> None:
+        """
+        Best-effort POST to session.on_close_route with session.on_close_payload as JSON body.
+        Intended to be non-fatal and bounded in time.
+        """
+        on_close_route = getattr(session, "on_close_route", None)
+        if not on_close_route:
+            return
+
+        on_close_payload = getattr(session, "on_close_payload", None)
+
+        if isinstance(on_close_payload, dict):
+            body: Dict[str, Any] = dict(on_close_payload)  # copy
+        elif on_close_payload is None:
+            body = {}
+        else:
+            # Allow non-dict payloads without breaking the call contract.
+            body = {"payload": on_close_payload}
+
+        # Make it easier for the receiver to correlate the callback.
+        body.setdefault("session_id", getattr(session, "session_id", None))
+
+        try:
+            timeout = ClientTimeout(total=10)
+            async with self.session.post(
+                url=on_close_route,
+                json=body,
+                timeout=timeout,
+            ) as resp:
+                text = await resp.text()
+                if resp.status >= 400:
+                    log.debug(
+                        f"on_close POST failed: route={on_close_route} status={resp.status} body={text[:512]!r}"
+                    )
+        except Exception as e:
+            log.debug(f"on_close POST exception: route={on_close_route} error={e!r}")
+            return
 
     async def __close_session(self, session_id: str) -> bool:
         """
@@ -158,6 +197,11 @@ class Backend:
             session.requests.clear()
 
             request_metrics = self.session_metrics.pop(session_id, None)
+
+        try:
+            await self.__run_session_on_close(session)
+        except Exception:
+            pass
 
         # metrics outside lock
         if request_metrics is not None:
@@ -232,11 +276,21 @@ class Backend:
             expiration = now + lifetime
 
             session_id = self.generate_session_id()
+
+            on_close_route = None
+            on_close_payload = None
+            if payload.get("on_close_route") is not None:
+                on_close_route = payload.get("on_close_route")
+                if payload.get("on_close_payload") is not None:
+                    on_close_payload = payload.get("on_close_payload")
+
             session = Session(
                 session_id=session_id,
                 lifetime=lifetime,
                 expiration=expiration,
-                auth_data=auth_data
+                auth_data=auth_data,
+                on_close_route=on_close_route,
+                on_close_payload=on_close_payload
             )
             self.sessions[session_id] = session
             self.session_metrics[session_id] = session_request_metrics

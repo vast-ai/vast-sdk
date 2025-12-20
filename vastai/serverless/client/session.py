@@ -10,9 +10,10 @@ class Session:
     url: str
     lifetime: float
     auth_data: dict
-    on_close: Optional[Callable]
+    on_close_route: str
+    on_close_payload: dict
 
-    def __init__(self, endpoint: Endpoint, session_id: str, lifetime: float, url: str, auth_data: dict):
+    def __init__(self, endpoint: Endpoint, session_id: str, lifetime: float, url: str, auth_data: dict, on_close_route: str, on_close_payload: dict):
         if endpoint is None:
             raise ValueError("Session cannot be created with empty endpoint")
         if session_id is None:
@@ -27,61 +28,33 @@ class Session:
         self.auth_data = auth_data
 
         self.open = True
-        self.on_close: Optional[Callable[[ "Session" ], object]] = None
+        self.on_close_route = on_close_route
+        self.on_close_payload = on_close_payload
         self._closing = False  # guard to ensure one-time execution
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        await self._run_close_hooks()
+        await self.close()
         return False
-
-    def set_on_close(self, on_close_fn: Callable):
-        self.on_close = on_close_fn
 
     async def is_open(self):
         result = await self.endpoint.session_healthcheck(self)
         self.open = result
         return result
 
-    async def _run_close_hooks(self):
-        """
-        Execute on_close hook (sync or async) exactly once,
-        then close the underlying endpoint session.
-        """
-        if not self.open or self._closing:
-            return
-
-        self._closing = True
-
-        if self.on_close is not None:
-            try:
-                result = self.on_close(self)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                pass
-
-        # Close endpoint session
-        result = self.endpoint.close_session(self)
-        if inspect.isawaitable(result):
-            await result
-
-        self.open = False
-
-    def close(self):
+    async def close(self):
         """
         Explicit close for non-async contexts.
         Returns an awaitable if async work is required.
         """
         if not self.open or self._closing:
             return None
-
-        async def _close_async():
-            await self._run_close_hooks()
-
-        return _close_async()
+        self._closing = True
+        await self.endpoint.close_session(self)
+        self.open = False
+        return
 
     async def request(
         self,

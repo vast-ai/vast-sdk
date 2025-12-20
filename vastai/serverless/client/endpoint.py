@@ -57,7 +57,7 @@ class Endpoint:
             session_auth=session_auth
         )
 
-    def session(self, cost: int = 100, lifetime: float = 4 * 60 * 60) -> "Session":
+    def session(self, cost: int = 100, lifetime: float = 60) -> "Session":
         return self.client.start_endpoint_session(
             endpoint=self,
             cost=cost,
