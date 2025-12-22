@@ -348,18 +348,21 @@ class VastAI(VastAIBase):
 
         sig = getattr(func, "mysignature", None)
         sig_help = getattr(func, "mysignature_help", None)
+
         if sig:
             wrapper.__signature__, docappend = self.generate_signature_from_argparse(sig)
-            epi = None
 
-            if sig.epilog:
-                epi = re.sub('Example.?:.*', '', sig.epilog, flags=re.DOTALL|re.M).strip()
-                wrapper.__doc__ += epi
-
-            if not (epi or hasDoc) and sig_help:
-                wrapper.__doc__ += sig_help
+            # append epilog if exists
+            if getattr(sig, "epilog", None):
+                wrapper.__doc__ = f"{wrapper.__doc__.rstrip()}\n\n{sig.epilog.strip()}\n"
             
-            wrapper.__doc__ = '\n\n'.join([ wrapper.__doc__.rstrip(), docappend ])
+            # if no epilog or func docstring, fall back to parser help text
+            elif sig_help and not hasDoc:
+                wrapper.__doc__ += f"\n\n{sig_help}"
+
+            # finally append the arg details
+            wrapper.__doc__ = f"{wrapper.__doc__.rstrip()}\n\n{docappend}"
+
         return wrapper
 
     def credentials_on_disk(self):
