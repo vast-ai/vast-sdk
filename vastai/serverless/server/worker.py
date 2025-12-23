@@ -50,6 +50,7 @@ class HandlerConfig:
     request_parser: Optional[RequestPayloadParser] = None
     response_generator: Optional[ClientResponseGenerator] = None
     workload_calculator: Optional[WorkloadCalculator] = None
+    remote_function: Optional[Callable] = None
 
 
 @dataclass
@@ -203,11 +204,32 @@ class EndpointHandlerFactory:
                     else True
                 )
             )
+            remote_dispatch_function: Callable[..., Awaitable[Any]] = field(
+                default=(
+                    handler_config.remote_function
+                    if handler_config.remote_function is not None
+                    else None
+                )
+            )
+
             @property
             def endpoint(self) -> str:
                 """The endpoint is the same as the route"""
                 return self._route
 
+            async def call_remote_dispatch_function(self, params: dict):
+                """
+                define a remote dispatch function for this endpoint, return the result
+                """
+                if self.remote_dispatch_function is None:
+                    raise RuntimeError(f"remote_function is not configured for route {self._route}")
+
+                try:
+                    return await self.remote_dispatch_function(**params)
+                except Exception as ex:
+                    raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
+
+            
             @property
             def healthcheck_endpoint(self) -> Optional[str]:
                 return None
