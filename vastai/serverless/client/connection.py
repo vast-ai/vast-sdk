@@ -199,8 +199,6 @@ async def _make_request(
                 return last_result
 
             except Exception as ex:
-                if client and getattr(client, "logger", None):
-                    client.logger.error(f"Stream attempt {attempt} failed: {ex}")
                 if attempt == retries:
                     raise
                 await asyncio.sleep(_backoff_delay(attempt))
@@ -260,8 +258,6 @@ async def _make_request(
                 return result
 
         except Exception as ex:
-            if client and getattr(client, "logger", None):
-                client.logger.error(f"Attempt {attempt} failed: {ex}")
             if attempt == retries:
                 raise
             await asyncio.sleep(_backoff_delay(attempt))

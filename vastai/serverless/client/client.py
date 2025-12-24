@@ -255,8 +255,7 @@ class Serverless:
             cost=cost,
         )
         session_id = session_start_response.get("response").get("session_id")
-        lifetime = session_start_response.get("response").get("lifetime")
-        expiration = session_start_response.get("response").get("lifetime")
+        expiration = session_start_response.get("response").get("expiration")
         url = session_start_response.get("url")
         auth_data = session_start_response.get("auth_data")
         if session_id:
@@ -293,9 +292,18 @@ class Serverless:
                     session_id = None
 
                     if session is None:
-                        self.logger.debug("Sending initial route call")
+                        if request.status != "Retrying":
+                            self.logger.debug(f"Sending initial route call for request_idx {request_idx}")
+                        else:
+                            self.logger.debug(f"Sending retry route call for request_idx {request_idx}")
 
                         route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
+
+                        request_idx = route.request_idx
+                        if request_idx:
+                            self.logger.debug(f"Got request index {request_idx}")
+                        else:
+                            self.logger.error("Did not get request_idx from initial route")
 
                         poll_interval = 1
                         elapsed_time = 0
@@ -309,10 +317,11 @@ class Serverless:
                             elapsed_time += poll_interval
 
                             route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
-
+                            request_idx = route.request_idx or request_idx
+                            
                             attempt += 1
-                            poll_interval = min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval)
-                            self.logger.debug("Polling route...")
+                            poll_interval = random.uniform(0.1, min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval))
+                            self.logger.debug(f"Polling route, attempt {attempt}")
 
                         worker_url = route.get_url()
                         auth_data = route.body
@@ -335,17 +344,23 @@ class Serverless:
                         request.start_time = time.time()
 
                     # Transport/JSON failures may raise; HTTP errors return ok=False.
-                    result = await _make_request(
-                        client=self,
-                        url=worker_url,
-                        route=worker_route,
-                        api_key=endpoint.api_key,
-                        body=worker_request_body,
-                        method="POST",
-                        retries=1,  # avoid stacking retries with the outer loop
-                        timeout=600,
-                        stream=stream
-                    )
+                    try:
+                        result = await _make_request(
+                            client=self,
+                            url=worker_url,
+                            route=worker_route,
+                            api_key=endpoint.api_key,
+                            body=worker_request_body,
+                            method="POST",
+                            retries=1,  # avoid stacking retries with the outer loop
+                            timeout=30,
+                            stream=stream
+                        )
+                    except Exception as ex:
+                        self.logger.error(f"Worker request failed: {ex}")
+                        request.status = "Retrying"
+                        continue
+
 
                     if not result.get("ok"):
                         # Retry decision is now *outside* _make_request()

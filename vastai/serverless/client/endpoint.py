@@ -85,7 +85,7 @@ class Endpoint:
                 },
                 method="POST",
                 timeout=10.0,
-                retries=1,
+                retries=5,
                 stream=False,
             )
         except Exception as ex:

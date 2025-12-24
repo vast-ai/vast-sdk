@@ -1,6 +1,9 @@
 from .endpoint import Endpoint
 from typing import Callable, Optional
 import inspect
+import logging
+
+log = logging.getLogger(__name__)
 
 
 class Session:
@@ -53,8 +56,12 @@ class Session:
         if not self.open or self._closing:
             return None
         self._closing = True
-        await self.endpoint.close_session(self)
-        self.open = False
+        try:
+            await self.endpoint.close_session(self)
+        except Exception as e:
+            log.warning(f"Error closing session {self.session_id}: {e}")
+        finally:
+            self.open = False
         return
 
     async def request(
@@ -83,3 +90,15 @@ class Session:
             self.open = False
             raise ValueError("Cannot make request on closed session.")
         return result
+
+    def __del__(self):
+        """
+        Destructor to warn about unclosed sessions.
+        Sessions should be explicitly closed or used with context managers.
+        """
+        if self.open and not self._closing:
+            log.warning(
+                f"Session {self.session_id} was not explicitly closed. "
+                f"It will be garbage collected on the worker after {self.lifetime}s of inactivity. "
+                f"Please use 'await session.close()' or 'async with session:' to properly close sessions."
+            )
