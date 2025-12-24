@@ -108,7 +108,10 @@ def _extract_local_path(resp: dict) -> str:
     return first["local_path"]
 
 
-async def generate(endpoint, idx, state):
+async def generate(endpoint, idx, state, http_port):
+    # Create a session for this request
+    session = await endpoint.session(cost=100, lifetime=30)
+
     payload = {
         "input": {
             "modifier": "Text2Image",
@@ -119,6 +122,13 @@ async def generate(endpoint, idx, state):
                 "steps": 10,
                 "seed": random.randint(1, 1000),
             },
+            "webhook": {
+                "url": f"http://localhost:{http_port}/session/end",
+                "extra_params": {
+                    "session_id": session.session_id,
+                    "session_auth": session.auth_data
+                }
+            }
         }
     }
 
@@ -128,16 +138,20 @@ async def generate(endpoint, idx, state):
         state.statuses[idx] = STATUS_IN_FLIGHT
 
     try:
-        resp = await endpoint.request("/generate/sync", payload)
-        local_path = _extract_local_path(resp)
+        # Send the request with webhook - don't wait for the response
+        await session.request("/generate", payload)
+
+        # Wait for the session to be closed by the webhook
+        while await session.is_open():
+            await asyncio.sleep(0.5)  # Poll every 500ms
 
         t_end = time.monotonic()
         async with state.lock:
             state.end_ts[idx] = t_end
             state.statuses[idx] = STATUS_DONE
 
-        print(f"[{idx}] Generated image at: {local_path}")
-        return local_path
+        print(f"[{idx}] Request completed (session closed by webhook)")
+        return idx
 
     except Exception as e:
         t_end = time.monotonic()
@@ -517,6 +531,7 @@ async def main(
     outdir: str,
     endpoint_name: str,
     cooldown_s: float,
+    http_port: int,
 ) -> int:
     _ensure_dir(outdir)
     t0 = time.monotonic()
@@ -555,7 +570,7 @@ async def main(
         endpoint = await client.get_endpoint(name=endpoint_name)
 
         # Launch requests first so we have the task list
-        req_tasks = [asyncio.create_task(generate(endpoint, idx, state)) for idx in range(concurrency)]
+        req_tasks = [asyncio.create_task(generate(endpoint, idx, state, http_port)) for idx in range(concurrency)]
 
         # Start background samplers (including request task monitor)
         sampler_tasks = [
@@ -701,8 +716,9 @@ if __name__ == "__main__":
         default=60.0,
         help="Cooldown sampling duration after last request returns (seconds)",
     )
+    parser.add_argument("--http-port", type=int, default=3001, help="HTTP port for session/end webhook (default: 3001)")
     args = parser.parse_args()
 
     raise SystemExit(
-        asyncio.run(main(args.concurrency, args.interval, args.outdir, args.endpoint_name, args.cooldown))
+        asyncio.run(main(args.concurrency, args.interval, args.outdir, args.endpoint_name, args.cooldown, args.http_port))
     )
