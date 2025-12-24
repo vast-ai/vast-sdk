@@ -45,7 +45,23 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
             port=int(os.environ["WORKER_PORT"]),
             **kwargs
         )
-        await gather(site.start(), backend._start_tracking())
+
+        # Create HTTP-only app for internal webhooks to /session/end
+        http_app = web.Application()
+        http_app.router.add_post("/session/end", backend.session_end_handler)
+
+        http_runner = web.AppRunner(http_app)
+        await http_runner.setup()
+        http_port = int(os.environ.get("WORKER_HTTP_PORT", int(os.environ["WORKER_PORT"]) + 1))
+        http_site = web.TCPSite(
+            http_runner,
+            ssl_context=None,  # No SSL for internal webhooks
+            port=http_port,
+            **kwargs
+        )
+
+        log.debug(f"Starting HTTP-only server for /session/end on port {http_port}")
+        await gather(site.start(), http_site.start(), backend._start_tracking())
 
     except Exception as e:
         err_msg = f"Worker Server failed to launch: {e}"

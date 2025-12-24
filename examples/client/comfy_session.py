@@ -17,7 +17,7 @@ async def main():
                     "seed": random.randint(1, 1000)
                 },
                 "webhook": {
-                    "url": "https://localhost:8080/session/end",
+                    "url": "https://localhost:3000/session/end",
                     "extra_params": {
                         "session_id": session.session_id
                     }
