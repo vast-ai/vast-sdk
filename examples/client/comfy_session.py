@@ -1,0 +1,36 @@
+import asyncio
+from vastai import Serverless
+import random
+
+async def main():
+    async with Serverless(instance="local", debug=True) as client:
+        endpoint = await client.get_endpoint(name="my-comfy-endpoint")
+        session = await endpoint.session(cost=100, lifetime=30)
+        payload = {
+            "input": {
+                "modifier": "Text2Image",
+                "modifications": {
+                    "prompt": "Generate a page from a peanuts comic strip.",
+                    "width": 512,
+                    "height": 512,
+                    "steps": 10,
+                    "seed": random.randint(1, 1000)
+                },
+                "webhook": {
+                    "url": "http://localhost:3001/session/end",
+                    "extra_params": {
+                        "session_id": session.session_id,
+                        "session_auth" : session.auth_data
+                    }
+                }
+            }
+        }
+        
+        response = await session.request("/generate", payload)
+
+        # Get the file from the path on the local machine using SCP or SFTP
+        # or configure S3 to upload to cloud storage.
+        print(response["response"])
+
+if __name__ == "__main__":
+    asyncio.run(main())
