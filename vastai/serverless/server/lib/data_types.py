@@ -350,7 +350,7 @@ class Session:
     auth_data: dict
     expiration: float  # epoch seconds
     on_close_route: str
-    on_cancel_payload: dict
+    on_close_payload: dict
     requests: list[web.Request] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
