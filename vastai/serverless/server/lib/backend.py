@@ -133,7 +133,8 @@ class Backend:
                     "lifetime" : session.lifetime,
                     "expiration" : session.expiration,
                     "created_at": session.created_at,
-                    "on_close_route" : session.on_cancel_route
+                    "on_close_route" : session.on_close_route,
+                    "on_close_payload": session.on_close_payload
                 }
             )
 
@@ -266,7 +267,7 @@ class Backend:
         )
 
         async with self._sessions_lock:
-            if self.max_sessions > 0 and len(self.sessions) >= self.max_sessions:
+            if not (self.max_sessions is None or self.max_sessions == 0) and len(self.sessions) >= self.max_sessions:
                 self.metrics._request_reject(session_request_metrics)
                 return web.Response(status=429)
             

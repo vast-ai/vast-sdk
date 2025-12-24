@@ -349,7 +349,7 @@ class Session:
     lifetime: float # extends TTL per-request
     auth_data: dict
     expiration: float  # epoch seconds
-    on_cancel_route: str
+    on_close_route: str
     on_cancel_payload: dict
     requests: list[web.Request] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)

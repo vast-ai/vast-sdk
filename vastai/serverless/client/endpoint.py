@@ -61,7 +61,9 @@ class Endpoint:
         return self.client.start_endpoint_session(
             endpoint=self,
             cost=cost,
-            lifetime=lifetime
+            lifetime=lifetime,
+            on_close_route=on_close_route,
+            on_close_payload=on_close_payload
         )
 
     def get_workers(self):
