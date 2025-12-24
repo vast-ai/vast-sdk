@@ -63,7 +63,7 @@ class WorkerConfig:
     model_healthcheck_url: str = None
     benchmark_route: Optional[str] = None
     log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
-    max_sessions: Optional[int] = None
+    max_sessions: Optional[int] = 10
 
 
 class EndpointHandlerFactory:
