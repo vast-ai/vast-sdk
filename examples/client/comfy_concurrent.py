@@ -1,7 +1,9 @@
 import argparse
 import asyncio
+import contextlib
 import os
 import random
+import signal
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -97,7 +99,6 @@ def _extract_local_path(resp: dict) -> str:
     outputs = r.get("output")
 
     if not isinstance(outputs, list) or len(outputs) == 0:
-        # Try to surface whatever error fields exist
         err = r.get("error") or r.get("errors") or r.get("detail") or r.get("message") or r
         raise RuntimeError(f"No outputs returned. error={err}")
 
@@ -108,42 +109,55 @@ def _extract_local_path(resp: dict) -> str:
     return first["local_path"]
 
 
-async def generate(endpoint, idx, state, http_port):
-    # Create a session for this request
-    session = await endpoint.session(cost=100, lifetime=30)
-
-    payload = {
-        "input": {
-            "modifier": "Text2Image",
-            "modifications": {
-                "prompt": "Generate a page from a peanuts comic strip.",
-                "width": 512,
-                "height": 512,
-                "steps": 10,
-                "seed": random.randint(1, 1000),
-            },
-            "webhook": {
-                "url": f"http://localhost:{http_port}/session/end",
-                "extra_params": {
-                    "session_id": session.session_id,
-                    "session_auth": session.auth_data
-                }
+async def generate(endpoint, idx, state, http_port, use_session):
+    session = None
+    if use_session:
+        session = await endpoint.session(cost=100, lifetime=10)
+        payload = {
+            "input": {
+                "modifier": "Text2Image",
+                "modifications": {
+                    "prompt": f"{random.randint(1, 1000000)} Generate a page from a peanuts comic strip.",
+                    "width": 512,
+                    "height": 512,
+                    "steps": 10,
+                    "seed": random.randint(1, 1000000),
+                },
+                "webhook": {
+                    "url": f"http://localhost:{http_port}/session/end",
+                    "extra_params": {
+                        "session_id": session.session_id,
+                        "session_auth": session.auth_data,
+                    },
+                },
             }
         }
-    }
+    else:
+        payload = {
+            "input": {
+                "modifier": "Text2Image",
+                "modifications": {
+                    "prompt": "Generate a page from a peanuts comic strip.",
+                    "width": 512,
+                    "height": 512,
+                    "steps": 10,
+                    "seed": random.randint(1, 1000000),
+                },
+            }
+        }
 
-    t_start = time.monotonic()
     async with state.lock:
-        state.start_ts[idx] = t_start
+        state.start_ts[idx] = state.t0
         state.statuses[idx] = STATUS_IN_FLIGHT
 
     try:
-        # Send the request with webhook - don't wait for the response
-        await session.request("/generate", payload)
-
-        # Wait for the session to be closed by the webhook
-        while await session.is_open():
-            await asyncio.sleep(0.5)  # Poll every 500ms
+        if use_session:
+            await session.request("/generate", payload)
+            while await session.is_open():
+                await asyncio.sleep(0.5)
+            await session.close()
+        else:
+            await endpoint.request("/generate", payload, cost=100)
 
         t_end = time.monotonic()
         async with state.lock:
@@ -153,6 +167,20 @@ async def generate(endpoint, idx, state, http_port):
         print(f"[{idx}] Request completed (session closed by webhook)")
         return idx
 
+    except asyncio.CancelledError:
+        # CancelledError is not an Exception in modern Python
+        t_end = time.monotonic()
+        async with state.lock:
+            state.end_ts[idx] = t_end
+            state.statuses[idx] = STATUS_FAILED
+            state.errors[idx] = "CancelledError()"
+
+        with contextlib.suppress(Exception):
+            if session is not None and hasattr(session, "close"):
+                await session.close()
+
+        raise
+
     except Exception as e:
         t_end = time.monotonic()
         async with state.lock:
@@ -160,8 +188,6 @@ async def generate(endpoint, idx, state, http_port):
             state.statuses[idx] = STATUS_FAILED
             state.errors[idx] = repr(e)
 
-        # Optional: dump the full response if parsing failed
-        # print(f"[{idx}] RAW RESPONSE: {json.dumps(resp, indent=2)[:4000]}")
         print(f"[{idx}] FAILED: {e!r}")
         return None
 
@@ -193,12 +219,11 @@ async def sample_request_statuses(
         for k in (STATUS_PENDING, STATUS_IN_FLIGHT, STATUS_DONE, STATUS_FAILED):
             req_counts[k].append(int(ctr.get(k, 0)))
 
-        # store as codes for heatmap-like timeline
         req_matrix_snapshots.append(
             np.fromiter((STATUS_TO_CODE[s] for s in snap), dtype=np.uint8, count=state.n)
         )
 
-    # final snapshot after completion (helps plots end cleanly)
+    # final snapshot
     now = time.monotonic()
     async with state.lock:
         snap = list(state.statuses)
@@ -217,7 +242,6 @@ async def monitor_request_tasks(
     interval_s: float,
     t0: float,
 ):
-    """Periodically dump the state of all request tasks to help debug hanging issues."""
     next_tick = time.monotonic()
     dump_counter = 0
 
@@ -231,20 +255,26 @@ async def monitor_request_tasks(
         dump_counter += 1
         elapsed = now - t0
 
-        # Count task states
         pending_count = sum(1 for t in req_tasks if not t.done())
         done_count = sum(1 for t in req_tasks if t.done())
         cancelled_count = sum(1 for t in req_tasks if t.cancelled())
-        exception_count = sum(1 for t in req_tasks if t.done() and not t.cancelled() and t.exception() is not None)
+        exception_count = sum(
+            1
+            for t in req_tasks
+            if t.done() and not t.cancelled() and t.exception() is not None
+        )
 
-        print(f"\n[MONITOR {dump_counter}] t={elapsed:.1f}s | Tasks: {len(req_tasks)} total, {pending_count} pending, {done_count} done, {cancelled_count} cancelled, {exception_count} with exceptions")
+        print(
+            f"\n[MONITOR {dump_counter}] t={elapsed:.1f}s | Tasks: {len(req_tasks)} total, "
+            f"{pending_count} pending, {done_count} done, {cancelled_count} cancelled, {exception_count} with exceptions"
+        )
 
-        # Show details of pending tasks
         if pending_count > 0:
             pending_indices = [i for i, t in enumerate(req_tasks) if not t.done()]
-            print(f"  Pending task indices: {pending_indices[:20]}{' ...' if len(pending_indices) > 20 else ''}")
+            print(
+                f"  Pending task indices: {pending_indices[:20]}{' ...' if len(pending_indices) > 20 else ''}"
+            )
 
-        # Show exceptions if any
         if exception_count > 0:
             for i, t in enumerate(req_tasks):
                 if t.done() and not t.cancelled():
@@ -279,7 +309,6 @@ async def sample_workers(
             if asyncio.iscoroutine(workers):
                 workers = await workers
         except Exception:
-            # If autoscaler endpoint intermittently fails, don’t kill the run—record empty sample
             workers = []
 
         ctr: Dict[str, int] = defaultdict(int)
@@ -381,12 +410,11 @@ def plot_request_timeline(
     cooldown_start_s: Optional[float] = None,
     cooldown_end_s: Optional[float] = None,
 ) -> str:
-    # shape: (n_requests, n_samples)
-    mat = np.stack(snapshots, axis=1)  # rows=request idx, cols=time samples
+    mat = np.stack(snapshots, axis=1)
 
     from matplotlib.colors import ListedColormap, BoundaryNorm
 
-    cmap = ListedColormap(["#9e9e9e", "#1f77b4", "#2ca02c", "#d62728"])  # pending, inflight, done, failed
+    cmap = ListedColormap(["#9e9e9e", "#1f77b4", "#2ca02c", "#d62728"])
     norm = BoundaryNorm(boundaries=[-0.5, 0.5, 1.5, 2.5, 3.5], ncolors=cmap.N)
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -397,7 +425,6 @@ def plot_request_timeline(
     cbar = fig.colorbar(ax.images[0], ticks=[0, 1, 2, 3])
     cbar.ax.set_yticklabels([CODE_TO_STATUS[i] for i in [0, 1, 2, 3]])
 
-    # Mark cooldown window in sample-index space
     if cooldown_start_s is not None:
         x0 = int(round(cooldown_start_s / interval_s))
         ax.axvline(x0, linestyle="--", linewidth=1, color="k")
@@ -444,11 +471,26 @@ def plot_worker_counts(
     cooldown_start_s: Optional[float] = None,
     cooldown_end_s: Optional[float] = None,
 ) -> str:
+    # Consistent color mapping for worker statuses
+    STATUS_COLORS = {
+        "idle": "#2ca02c",           # green
+        "stopped": "#404040",         # dark grey
+        "stopping": "#ff7f0e",        # orange
+        "starting": "#ffd700",        # yellow/gold
+        "running": "#1f77b4",         # blue
+        "loading": "#9467bd",         # purple
+        "error": "#d62728",           # red
+        "stop_queued": "#ff6b6b",     # light red
+        "creating": "#17becf",        # cyan
+        "unavail": "#7f7f7f",         # medium grey
+        "UNKNOWN": "#bcbd22",         # olive
+        "OTHER": "#8c564b",           # brown
+    }
+
     all_statuses = Counter()
     for s in samples:
         all_statuses.update(s)
 
-    # Keep the most common statuses; bucket the rest
     top = [k for k, _ in all_statuses.most_common(10)]
     series: Dict[str, List[int]] = {k: [] for k in top}
     series["OTHER"] = []
@@ -461,7 +503,6 @@ def plot_worker_counts(
             else:
                 other += int(v)
         series["OTHER"].append(other)
-        # fill missing keys for this sample
         for k in top:
             if len(series[k]) < len(series["OTHER"]):
                 series[k].append(0)
@@ -470,7 +511,9 @@ def plot_worker_counts(
     for k, ys in series.items():
         if k == "OTHER" and sum(ys) == 0:
             continue
-        ax.plot(t, ys, label=k)
+        # Use status-specific color if available, otherwise use default
+        color = STATUS_COLORS.get(k.lower(), STATUS_COLORS.get(k, None))
+        ax.plot(t, ys, label=k, color=color, linewidth=2)
 
     _mark_cooldown(ax, cooldown_start_s, cooldown_end_s)
 
@@ -532,6 +575,8 @@ async def main(
     endpoint_name: str,
     cooldown_s: float,
     http_port: int,
+    use_session: bool,
+    auto_instance: str,
 ) -> int:
     _ensure_dir(outdir)
     t0 = time.monotonic()
@@ -562,17 +607,27 @@ async def main(
 
     done_evt = asyncio.Event()
 
-    # These are "seconds since start" and will be used in plots after the run
+    # Ctrl-C should request a graceful stop (not abort plotting)
+    stop_evt = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    try:
+        loop.add_signal_handler(signal.SIGINT, stop_evt.set)
+    except NotImplementedError:
+        pass
+
     cooldown_start_s: Optional[float] = None
     cooldown_end_s: Optional[float] = None
 
-    async with Serverless(debug=False, instance="local") as client:
+    results: List[object] = []
+
+    async with Serverless(debug=True, instance=auto_instance) as client:
         endpoint = await client.get_endpoint(name=endpoint_name)
 
-        # Launch requests first so we have the task list
-        req_tasks = [asyncio.create_task(generate(endpoint, idx, state, http_port)) for idx in range(concurrency)]
+        req_tasks = [
+            asyncio.create_task(generate(endpoint, idx, state, http_port, use_session))
+            for idx in range(concurrency)
+        ]
 
-        # Start background samplers (including request task monitor)
         sampler_tasks = [
             asyncio.create_task(
                 sample_request_statuses(
@@ -595,47 +650,70 @@ async def main(
                 monitor_request_tasks(
                     req_tasks,
                     done_evt,
-                    interval_s * 10,  # Monitor every 1 second (10x the normal interval)
+                    interval_s * 10,
                     t0,
                 )
             ),
         ]
 
-        print(f"Launched {len(req_tasks)} request tasks, waiting for gather...")
-        results = await asyncio.gather(*req_tasks, return_exceptions=False)
-        print(f"Gather completed! Got {len(results)} results")
+        gather_task = asyncio.gather(*req_tasks, return_exceptions=True)
+        stop_task = asyncio.create_task(stop_evt.wait())
 
-        # Compute cooldown start as the last request completion timestamp we recorded in generate()
-        async with state.lock:
-            ends_snapshot = list(state.end_ts)
+        try:
+            print(f"Launched {len(req_tasks)} request tasks; waiting (Ctrl-C will stop + still plot)...")
 
-        non_none_ends = [e for e in ends_snapshot if e is not None]
-        t_last_end = max(non_none_ends) if non_none_ends else time.monotonic()
-
-        cooldown_start_s = float(t_last_end - t0)
-        cooldown_end_s = cooldown_start_s + float(cooldown_s)
-        cooldown_end_abs = t_last_end + float(cooldown_s)
-
-        now = time.monotonic()
-        remaining = cooldown_end_abs - now
-        if remaining > 0:
-            print(
-                f"All requests completed at t={cooldown_start_s:.3f}s; "
-                f"sampling cooldown for {cooldown_s:.1f}s..."
-            )
-            await asyncio.sleep(remaining)
-        else:
-            print(
-                f"All requests completed at t={cooldown_start_s:.3f}s; "
-                f"cooldown window already elapsed by {-remaining:.3f}s; stopping sampling."
+            done, _pending = await asyncio.wait(
+                {gather_task, stop_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
 
-        # Stop samplers and wait for them to flush final sample
-        done_evt.set()
-        await asyncio.gather(*sampler_tasks)
-        print("samplers finished; exiting Serverless context...")
+            if stop_task in done:
+                interrupt_s = time.monotonic() - t0
+                print(f"\n[INTERRUPT] Ctrl-C at t={interrupt_s:.3f}s; cancelling request tasks...")
 
-    # Summaries
+                for t in req_tasks:
+                    t.cancel()
+
+                results = await gather_task
+                print(f"Gather completed after interrupt! Got {len(results)} results/entries")
+            else:
+                results = await gather_task
+                print(f"Gather completed! Got {len(results)} results/entries")
+
+                async with state.lock:
+                    ends_snapshot = list(state.end_ts)
+
+                non_none_ends = [e for e in ends_snapshot if e is not None]
+                t_last_end = max(non_none_ends) if non_none_ends else time.monotonic()
+
+                cooldown_start_s = float(t_last_end - t0)
+                cooldown_end_s = cooldown_start_s + float(cooldown_s)
+                cooldown_end_abs = t_last_end + float(cooldown_s)
+
+                now = time.monotonic()
+                remaining = cooldown_end_abs - now
+                if remaining > 0:
+                    print(
+                        f"All requests completed at t={cooldown_start_s:.3f}s; "
+                        f"sampling cooldown for {cooldown_s:.1f}s..."
+                    )
+                    await asyncio.sleep(remaining)
+                else:
+                    print(
+                        f"All requests completed at t={cooldown_start_s:.3f}s; "
+                        f"cooldown window already elapsed by {-remaining:.3f}s; stopping sampling."
+                    )
+
+        finally:
+            done_evt.set()
+            await asyncio.gather(*sampler_tasks, return_exceptions=True)
+
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+
+            print("samplers finished; exiting Serverless context...")
+
     async with state.lock:
         statuses_final = list(state.statuses)
         starts = list(state.start_ts)
@@ -655,7 +733,7 @@ async def main(
 
     ok_durations_np = np.array(ok_durations, dtype=float)
 
-    # Plots
+    # Plots (will run even if interrupted)
     p_req_counts = plot_request_counts(outdir, req_time, req_counts, cooldown_start_s, cooldown_end_s)
     p_req_timeline = plot_request_timeline(outdir, req_matrix_snapshots, interval_s, cooldown_start_s, cooldown_end_s)
     p_workers_by_status = plot_worker_counts(outdir, w_time, w_counts, cooldown_start_s, cooldown_end_s)
@@ -665,10 +743,12 @@ async def main(
 
     p_dist, stats = plot_completion_distribution(outdir, ok_durations_np)
 
-    # Print results + stats
-    print("\nAll generations complete:")
-    for i, path in enumerate(results):
-        print(f" - [{i}] {path}")
+    print("\nAll generations complete (or cancelled):")
+    for i, r in enumerate(results):
+        if isinstance(r, BaseException):
+            print(f" - [{i}] EXCEPTION: {r!r}")
+        else:
+            print(f" - [{i}] {r}")
 
     print("\nFinal request status counts:")
     print(Counter(statuses_final))
@@ -686,10 +766,9 @@ async def main(
         print(f" - n   : {ok_durations_np.size}")
 
     if fail_durations:
-        print("\nFailures:")
+        print("\nFailures (includes cancellations):")
         failed_idxs = [i for i, s in enumerate(statuses_final) if s == STATUS_FAILED]
         print(f" - n_failed: {len(failed_idxs)}")
-        # Print up to 10 errors for quick debugging
         for i in failed_idxs[:10]:
             print(f"   - [{i}] {errs[i]}")
 
@@ -710,6 +789,11 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=float, default=0.1, help="Sampling interval in seconds (default: 0.1)")
     parser.add_argument("--outdir", type=str, default="./run_metrics", help="Output directory for plots")
     parser.add_argument("--endpoint-name", type=str, default="my-comfy-endpoint")
+
+    # Better CLI behavior than type=bool
+    parser.add_argument("--use-session", action="store_true", help="Use session+webhook flow instead of /generate/sync")
+
+    parser.add_argument("--auto-instance", type=str, default="prod")
     parser.add_argument(
         "--cooldown",
         type=float,
@@ -719,6 +803,20 @@ if __name__ == "__main__":
     parser.add_argument("--http-port", type=int, default=3001, help="HTTP port for session/end webhook (default: 3001)")
     args = parser.parse_args()
 
-    raise SystemExit(
-        asyncio.run(main(args.concurrency, args.interval, args.outdir, args.endpoint_name, args.cooldown, args.http_port))
-    )
+    try:
+        raise SystemExit(
+            asyncio.run(
+                main(
+                    args.concurrency,
+                    args.interval,
+                    args.outdir,
+                    args.endpoint_name,
+                    args.cooldown,
+                    args.http_port,
+                    args.use_session,
+                    args.auto_instance,
+                )
+            )
+        )
+    except KeyboardInterrupt:
+        raise SystemExit(130)

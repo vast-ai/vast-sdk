@@ -46,7 +46,7 @@ class Serverless:
         instance: str = "prod",
         connection_limit: int = 500,
         default_request_timeout: float = 600.0,
-        max_poll_interval: float = 15.0
+        max_poll_interval: float = 5.0
     ):
         if api_key is None or api_key == "":
             raise AttributeError("API key missing. Please set VAST_API_KEY in your environment variables.")
@@ -292,7 +292,7 @@ class Serverless:
                     session_id = None
 
                     if session is None:
-                        if request.status != "Retrying":
+                        if request_idx == 0:
                             self.logger.debug(f"Sending initial route call for request_idx {request_idx}")
                         else:
                             self.logger.debug(f"Sending retry route call for request_idx {request_idx}")
@@ -363,7 +363,6 @@ class Serverless:
 
 
                     if not result.get("ok"):
-                        # Retry decision is now *outside* _make_request()
                         if retry and result.get("retryable") and (max_retries is None or total_attempts < max_retries):
                             request.status = "Retrying"
                             await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))

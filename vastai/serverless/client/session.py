@@ -90,15 +90,3 @@ class Session:
             self.open = False
             raise ValueError("Cannot make request on closed session.")
         return result
-
-    def __del__(self):
-        """
-        Destructor to warn about unclosed sessions.
-        Sessions should be explicitly closed or used with context managers.
-        """
-        if self.open and not self._closing:
-            log.warning(
-                f"Session {self.session_id} was not explicitly closed. "
-                f"It will be garbage collected on the worker after {self.lifetime}s of inactivity. "
-                f"Please use 'await session.close()' or 'async with session:' to properly close sessions."
-            )

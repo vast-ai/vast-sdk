@@ -200,7 +200,7 @@ async def _make_request(
 
             except Exception as ex:
                 if attempt == retries:
-                    raise
+                    raise ex
                 await asyncio.sleep(_backoff_delay(attempt))
 
         return last_result
@@ -259,7 +259,7 @@ async def _make_request(
 
         except Exception as ex:
             if attempt == retries:
-                raise
+                raise ex
             await asyncio.sleep(_backoff_delay(attempt))
 
     return last_result
