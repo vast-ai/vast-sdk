@@ -5,7 +5,7 @@ import base64
 import subprocess
 import dataclasses
 import logging
-from asyncio import wait, sleep, gather, Semaphore, FIRST_COMPLETED, create_task
+from asyncio import sleep, gather, Semaphore, create_task
 from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional
 from functools import cached_property
 from distutils.util import strtobool
@@ -160,11 +160,6 @@ class Backend:
                 except ValueError:
                     pass
 
-        async def cancel_api_call_if_disconnected() -> None:
-            await request.wait_for_disconnection()
-            self.metrics._request_canceled(request_metrics)
-            return
-
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
                 response = await self.__call_api(handler=handler, payload=payload)
@@ -187,8 +182,6 @@ class Backend:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=429)
 
-        disconnect_task = create_task(cancel_api_call_if_disconnected())
-        next_request_task = None
         work_task = None
         event = asyncio.Event() # Used in finally block, so initialize here
 
@@ -197,18 +190,9 @@ class Backend:
         try:
             if handler.allow_parallel_requests:
                 work_task = create_task(make_request())
-                done, pending = await wait([work_task, disconnect_task], return_when=FIRST_COMPLETED)
-
-                for t in pending:
-                    t.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-
-                if disconnect_task in done:
-                    return web.Response(status=499)
-
-                # otherwise work_task completed
+                # Handler cancellation will raise CancelledError on client disconnect
                 return await work_task
-            
+
             # FIFO-queue branch
             else:
                 # Insert a Event into the queue for this request
@@ -217,55 +201,39 @@ class Backend:
                 if self.queue and self.queue[0] is event:
                     event.set()
 
-                # Race between our request being next and request being cancelled
-                next_request_task = create_task(event.wait())
-                first_done, first_pending = await wait(
-                    [next_request_task, disconnect_task], return_when=FIRST_COMPLETED
-                )
-
-                # If the disconnect task wins the race
-                if disconnect_task in first_done:
-                    # Clean up the next_request_task, then exit
-                    for t in first_pending:
-                        t.cancel()
-                    await asyncio.gather(*first_pending, return_exceptions=True)
-                    return web.Response(status=499)
+                # Wait for our turn - CancelledError raised if client disconnects
+                await event.wait()
 
                 # We are the next-up request in the queue
                 log.debug(f"Starting work on request {request_metrics.reqnum}")
 
-                # Race the backend API call with the disconnect task
+                # Execute the work task
                 work_task = create_task(make_request())
-
-                done, pending = await wait([work_task, disconnect_task], return_when=FIRST_COMPLETED)
-                for t in pending:
-                    t.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-
-                if disconnect_task in done:
-                    return web.Response(status=499)
-
-                # otherwise work_task completed
                 return await work_task
             
         except asyncio.CancelledError:
+            # With handler_cancellation enabled, this indicates client disconnect
+            log.debug(f"Request {request_metrics.reqnum} cancelled (client disconnect)")
+            self.metrics._request_canceled(request_metrics)
             return web.Response(status=499)
-        
+
         except Exception as e:
             log.debug(f"Exception in main handler loop {e}")
             return web.Response(status=500)
         
         finally:
-            if not handler.allow_parallel_requests:
-                advance_queue_after_completion(event)
+            try:
+                if not handler.allow_parallel_requests:
+                    advance_queue_after_completion(event)
 
-            self.metrics._request_end(request_metrics)
-            cleanup_tasks = [t for t in (next_request_task, work_task, disconnect_task) if t]
-            for t in cleanup_tasks:
-                if not t.done():
-                    t.cancel()
-            if cleanup_tasks:
-                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+                self.metrics._request_end(request_metrics)
+
+                # Cleanup work task if still pending
+                if work_task and not work_task.done():
+                    work_task.cancel()
+                    await asyncio.gather(work_task, return_exceptions=True)
+            except Exception as e:
+                log.error(f"Error during request cleanup: {e}")
 
     async def __healthcheck(self) -> None:
         """
