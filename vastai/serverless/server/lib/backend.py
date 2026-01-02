@@ -34,7 +34,6 @@ from .data_types import (
 
 VERSION = "1.0.1"
 
-MSG_HISTORY_LEN = 100
 log = logging.getLogger(__file__)
 
 # defines the minimum wait time between sending updates to autoscaler
@@ -61,7 +60,6 @@ class Backend:
     log_actions: List[Tuple[LogAction, str]]
     reqnum = -1
     version = VERSION
-    msg_history = []
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
     queue: deque = dataclasses.field(default_factory=deque, repr=False)
     unsecured: bool = dataclasses.field(
@@ -346,13 +344,9 @@ class Backend:
         message = {
             "url" : auth_data.url
         }
-        if auth_data.reqnum < (self.reqnum - MSG_HISTORY_LEN):
-            log.error(f"Signature error: reqnum failure, got {auth_data.reqnum}, current_reqnum: {self.reqnum}")
-            return False
-        elif verify_signature(json.dumps(message, indent=4, sort_keys=True), auth_data.signature):
+
+        if verify_signature(json.dumps(message, indent=4, sort_keys=True), auth_data.signature):
             self.reqnum = max(auth_data.reqnum, self.reqnum)
-            self.msg_history.append(message)
-            self.msg_history = self.msg_history[-MSG_HISTORY_LEN:]
             return True
         else:
             log.error(f"Signature error: signature verification failed, sig:{auth_data.signature}, message: {message}")
