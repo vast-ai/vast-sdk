@@ -201,7 +201,7 @@ class Serverless:
         worker_payload: dict,
         serverless_request: Optional[ServerlessRequest] = None,
         cost: int = 100,
-        max_wait_time: Optional[float] = None,
+        timeout: Optional[float] = None,
         retry: bool = True,
         max_retries: int = None,
         stream: bool = False
@@ -222,7 +222,7 @@ class Serverless:
                     auth_data = {}
 
                     # Check total elapsed time
-                    if max_wait_time is not None and (time.time() - start_time) >= max_wait_time:
+                    if timeout is not None and (time.time() - start_time) >= timeout:
                         raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker")
 
                     if request_idx == 0:
@@ -245,7 +245,7 @@ class Serverless:
                         request.status = "Polling"
 
                         # Check total elapsed time
-                        if max_wait_time is not None and (time.time() - start_time) >= max_wait_time:
+                        if timeout is not None and (time.time() - start_time) >= timeout:
                             raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker to become ready")
 
                         await asyncio.sleep(poll_interval)
@@ -293,7 +293,7 @@ class Serverless:
                     if not result.get("ok"):
                         if retry and result.get("retryable") and (max_retries is None or total_attempts < max_retries):
                             # Check if we have time left before retrying
-                            if max_wait_time is not None and (time.time() - start_time) >= max_wait_time:
+                            if timeout is not None and (time.time() - start_time) >= timeout:
                                 raise asyncio.TimeoutError(f"Request timed out after {time.time() - start_time:.1f}s")
 
                             request.status = "Retrying"
@@ -308,7 +308,9 @@ class Serverless:
 
                         response = {
                             "response": result.get("json") if result.get("json") is not None else {"error": result.get("text", "")},
-                            "result": result,
+                            "ok": result.get("ok"),
+                            "status": result.get("status"),
+                            "text" : result.get("text"),
                             "latency": (request.complete_time - request.start_time) if request.start_time else None,
                             "url": worker_url,
                             "request_idx": request_idx,
@@ -327,7 +329,9 @@ class Serverless:
 
                     response = {
                         "response": worker_response,
-                        "result": result,
+                        "ok" : result.get("ok"),
+                        "status" : result.get("status"),
+                        "text" : result.get("text"),
                         "latency": request.complete_time - request.start_time,
                         "url": worker_url,
                         "request_idx": request_idx,
@@ -342,6 +346,7 @@ class Serverless:
             except Exception as ex:
                 request.status = "Errored"
                 self.logger.error(f"Request errored: {ex}")
+                request.set_exception(ex)
                 return
 
         bg_task = asyncio.create_task(task(serverless_request))
