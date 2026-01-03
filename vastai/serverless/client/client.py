@@ -213,12 +213,17 @@ class Serverless:
         async def task(request: ServerlessRequest):
             request_idx: int = 0
             total_attempts = 0
+            start_time = time.time()
             try:
                 while True:
                     total_attempts += 1
                     request.status = "Queued"
                     worker_url = ""
                     auth_data = {}
+
+                    # Check total elapsed time
+                    if max_wait_time is not None and (time.time() - start_time) >= max_wait_time:
+                        raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker")
 
                     if request_idx == 0:
                         self.logger.debug(f"Sending initial route call for request_idx {request_idx}")
@@ -234,15 +239,17 @@ class Serverless:
                         self.logger.error("Did not get request_idx from initial route")
 
                     poll_interval = 1
-                    elapsed_time = 0
+                    poll_elapsed = 0
                     attempt = 0
                     while route.status != "READY":
                         request.status = "Polling"
-                        if max_wait_time is not None and elapsed_time >= max_wait_time:
-                            raise asyncio.TimeoutError("Timed out waiting for worker to become ready")
+
+                        # Check total elapsed time
+                        if max_wait_time is not None and (time.time() - start_time) >= max_wait_time:
+                            raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker to become ready")
 
                         await asyncio.sleep(poll_interval)
-                        elapsed_time += poll_interval
+                        poll_elapsed += poll_interval
 
                         route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
                         request_idx = route.request_idx or request_idx
@@ -285,6 +292,10 @@ class Serverless:
 
                     if not result.get("ok"):
                         if retry and result.get("retryable") and (max_retries is None or total_attempts < max_retries):
+                            # Check if we have time left before retrying
+                            if max_wait_time is not None and (time.time() - start_time) >= max_wait_time:
+                                raise asyncio.TimeoutError(f"Request timed out after {time.time() - start_time:.1f}s")
+
                             request.status = "Retrying"
                             await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
                             continue
