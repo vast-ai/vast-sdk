@@ -18,12 +18,14 @@ async def main():
                 }
             }
         }
-        
-        response = await endpoint.request("/generate/sync", payload)
-
-        # Get the file from the path on the local machine using SCP or SFTP
-        # or configure S3 to upload to cloud storage.
-        print(response["response"]["output"][0]["local_path"])
+        try:
+            result = await endpoint.request("/generate/sync", payload, timeout=0.0)
+            if result["ok"]:
+                print(result["response"]["output"][0]["local_path"])
+            else:
+                print(f"Request failed. Status={result.get("status")}, Msg={result.get("text")}")
+        except Exception as ex:
+            print(f"Request failed with exception: {ex}")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -22,7 +22,10 @@ async def main():
             req = ServerlessRequest()
             # Attach a callback to run when the machine finished work on the request
             def work_finished_callback(response):
-                print(response["response"]["choices"][0]["text"])
+                if response.get("ok"):
+                    print(response["response"]["choices"][0]["text"])
+                else:
+                    print(f"Request failed in callback. Status={response.get('status')}")
             req.then(work_finished_callback)
             responses.append(endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=MAX_TOKENS))
             await asyncio.sleep(MAX_TOKENS / CUR_LOAD)

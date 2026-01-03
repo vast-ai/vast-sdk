@@ -34,22 +34,31 @@ async def main():
             }
         }
 
-        resp = await endpoint.request(
-            "/generate_stream",
-            payload,
-            cost=MAX_TOKENS,
-            stream=True,
-        )
-        stream = resp["response"]
+        try:
+            result = await endpoint.request(
+                "/generate_stream",
+                payload,
+                cost=MAX_TOKENS,
+                stream=True,
+            )
+            if result["ok"]:
+                # Success path - process the stream
+                stream = result["response"]
 
-        printed_answer = False
-        async for event in stream:
-            tok = (event.get("token") or {}).get("text")
-            if tok:
-                if not printed_answer:
-                    printed_answer = True
-                    print("Answer:\n", end="", flush=True)
-                print(tok, end="", flush=True)
+                printed_answer = False
+                async for event in stream:
+                    tok = (event.get("token") or {}).get("text")
+                    if tok:
+                        if not printed_answer:
+                            printed_answer = True
+                            print("Answer:\n", end="", flush=True)
+                        print(tok, end="", flush=True)
+            else:
+                # Request failed (HTTP error)
+                print(f"Request failed. Status={result.get('status')}, Msg={result.get('text')}")
+        except Exception as ex:
+            # Exception raised (transport error, invalid JSON, etc.)
+            print(f"Request failed with exception: {ex}")
 
 if __name__ == "__main__":
     asyncio.run(main())

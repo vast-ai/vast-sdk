@@ -28,10 +28,19 @@ async def main():
             "stream" : True,
         }
 
-        response = await endpoint.request("/v1/completions", payload, cost=MAX_TOKENS, stream=True)
-        stream = response["response"]
-        async for event in stream:
-            print(event["choices"][0]["text"], end="", flush=True)
+        try:
+            result = await endpoint.request("/v1/completions", payload, cost=MAX_TOKENS, stream=True)
+            if result["ok"]:
+                # Success path - process the stream
+                stream = result["response"]
+                async for event in stream:
+                    print(event["choices"][0]["text"], end="", flush=True)
+            else:
+                # Request failed (HTTP error)
+                print(f"Request failed. Status={result.get('status')}, Msg={result.get('text')}")
+        except Exception as ex:
+            # Exception raised (transport error, invalid JSON, etc.)
+            print(f"Request failed with exception: {ex}")
 
 if __name__ == "__main__":
     asyncio.run(main())

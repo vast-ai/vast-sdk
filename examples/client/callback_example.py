@@ -21,12 +21,24 @@ async def main():
 
         # Attach a callback to run when the machine finished work on the request
         def work_finished_callback(response):
-            print(f"Request finished. Got response of length {len(response["response"]["choices"][0]["text"])}")
+            if response.get("ok"):
+                print(f"Request finished. Got response of length {len(response['response']['choices'][0]['text'])}")
+            else:
+                print(f"Request failed in callback. Status={response.get('status')}")
 
         req.then(work_finished_callback)
 
-        response = await endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=MAX_TOKENS)
-        print(response)
+        try:
+            result = await endpoint.request(route="/v1/completions", payload=payload, serverless_request=req, cost=MAX_TOKENS)
+            if result["ok"]:
+                # Success path
+                print(result["response"]["choices"][0]["text"])
+            else:
+                # Request failed (HTTP error)
+                print(f"Request failed. Status={result.get('status')}, Msg={result.get('text')}")
+        except Exception as ex:
+            # Exception raised (transport error, invalid JSON, etc.)
+            print(f"Request failed with exception: {ex}")
 
 if __name__ == "__main__":
     asyncio.run(main())
