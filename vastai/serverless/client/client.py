@@ -281,7 +281,7 @@ class Serverless:
                             body=worker_request_body,
                             method="POST",
                             retries=1,  # avoid stacking retries with the outer loop
-                            timeout=30,
+                            timeout=600,
                             stream=stream
                         )
                     except Exception as ex:
