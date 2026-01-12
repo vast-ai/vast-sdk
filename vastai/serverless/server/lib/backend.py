@@ -35,7 +35,7 @@ from .data_types import (
     Session
 )
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 log = logging.getLogger(__file__)
 
