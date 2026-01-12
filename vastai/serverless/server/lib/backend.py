@@ -5,7 +5,7 @@ import base64
 import subprocess
 import dataclasses
 import logging
-from asyncio import wait, sleep, gather, Semaphore, FIRST_COMPLETED, create_task
+from asyncio import sleep, gather, Semaphore, create_task
 from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any, Dict
 from functools import cached_property
 from distutils.util import strtobool
@@ -184,25 +184,27 @@ class Backend:
             if session is None:
                 return False
 
-            session.cancel_event.set()
-
+            # Cancel all in-flight request handler tasks
+            cancel_tasks = []
             for req in list(session.requests):
-                try:
-                    tr = getattr(req, "transport", None)
-                    if tr is not None and not tr.is_closing():
-                        tr.close()
-                except Exception:
-                    pass
-            session.requests.clear()
+                if hasattr(req, 'task') and req.task and not req.task.done():
+                    req.task.cancel()
+                    cancel_tasks.append(req.task)
 
+            session.requests.clear()
             request_metrics = self.session_metrics.pop(session_id, None)
 
+        # Wait for all cancelled tasks to finish (outside the lock)
+        if cancel_tasks:
+            await asyncio.gather(*cancel_tasks, return_exceptions=True)
+
+        # Run the on_close callback
         try:
             await self.__run_session_on_close(session)
         except Exception:
             pass
 
-        # metrics outside lock
+        # Update metrics outside lock
         if request_metrics is not None:
             self.metrics._request_success(request_metrics)
             self.metrics._request_end(request_metrics)
@@ -373,7 +375,6 @@ class Backend:
         request_metrics: RequestMetrics = RequestMetrics(request_idx=auth_data.request_idx, reqnum=auth_data.reqnum, workload=workload, status="Created")
 
         event = asyncio.Event()
-        finished = asyncio.Event()
 
         session = None
         if session_id is not None:
@@ -398,14 +399,6 @@ class Backend:
                 except ValueError:
                     pass
 
-        async def cancel_api_call_if_disconnected() -> None:
-            await request.wait_for_disconnection()
-            if not finished.is_set():
-                self.metrics._request_canceled(request_metrics)
-        
-        async def cancel_if_session_closed() -> None:
-            await session.cancel_event.wait()
-
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
                 response = await self.__call_backend(handler=handler, payload=payload)
@@ -427,13 +420,7 @@ class Backend:
         if handler.max_queue_time is not None and self.metrics.model_metrics.wait_time > handler.max_queue_time:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=429)
-        
-        disconnect_task = create_task(cancel_api_call_if_disconnected())
-        session_cancel_task = None
-        if session is not None:
-            session_cancel_task = create_task(cancel_if_session_closed())
 
-        next_request_task = None
         work_task = None
 
         self.metrics._request_start(request_metrics, session)
@@ -441,24 +428,7 @@ class Backend:
         try:
             if handler.allow_parallel_requests:
                 work_task = create_task(make_request())
-
-                wait_set = [work_task, disconnect_task]
-                if session_cancel_task is not None:
-                    wait_set.append(session_cancel_task)
-
-                done, pending = await wait(
-                    wait_set,
-                    return_when=FIRST_COMPLETED,
-                )
-
-                for t in pending:
-                    t.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-
-                if disconnect_task in done or (session_cancel_task is not None and session_cancel_task in done):
-                    return web.Response(status=499)  # request cancelled
-
-                # otherwise work_task completed
+                # Handler cancellation will raise CancelledError on client disconnect
                 return await work_task
 
             # FIFO-queue branch
@@ -469,80 +439,40 @@ class Backend:
                 if self.queue and self.queue[0] is event:
                     event.set()
 
-                # Race between our request being next and request being cancelled
-                next_request_task = create_task(event.wait())
-
-                wait_set = [next_request_task, disconnect_task]
-                if session_cancel_task is not None:
-                    wait_set.append(session_cancel_task)
-
-                first_done, first_pending = await wait(
-                    wait_set,
-                    return_when=FIRST_COMPLETED,
-                )
-                # If the disconnect task wins the race
-                if disconnect_task in first_done or (session_cancel_task is not None and session_cancel_task in first_done):
-                    # Clean up the next_request_task, then exit
-                    for t in first_pending:
-                        t.cancel()
-                    await asyncio.gather(*first_pending, return_exceptions=True)
-                    return web.Response(status=499)
+                # Wait for our turn - CancelledError raised if client disconnects
+                await event.wait()
 
                 # We are the next-up request in the queue
                 if session is not None:
                     log.debug(f"Starting work on request {request_metrics.reqnum}")
 
-                # Race the backend API call with the disconnect task
+                # Execute the work task
                 work_task = create_task(make_request())
-
-                wait_set = [work_task, disconnect_task]
-                if session_cancel_task is not None:
-                    wait_set.append(session_cancel_task)
-
-                done, pending = await wait(
-                    wait_set,
-                    return_when=FIRST_COMPLETED,
-                )
-
-                for t in pending:
-                    t.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-
-                if disconnect_task in done or (session_cancel_task is not None and session_cancel_task in done):
-                    return web.Response(status=499)
-
-                # otherwise work_task completed
                 return await work_task
 
         except asyncio.CancelledError:
+            # With handler_cancellation enabled, this indicates client disconnect
+            log.debug(f"Request {request_metrics.reqnum} cancelled (client disconnect)")
+            self.metrics._request_canceled(request_metrics)
             return web.Response(status=499)
-        
+
         except Exception as e:
             log.debug(f"Exception in main handler loop {e}")
             return web.Response(status=500)
         
         finally:
-            # Set finished flag so we don't cancel after completion
-            finished.set()
+            try:
+                if not handler.allow_parallel_requests:
+                    advance_queue_after_completion(event)
 
-            if session is not None and session_id is not None:
-                async with self._sessions_lock:
-                    s = self.sessions.get(session_id)
-                    if s is not None:
-                        try:
-                            s.requests.remove(request)
-                        except ValueError:
-                            pass
+                self.metrics._request_end(request_metrics)
 
-            if not handler.allow_parallel_requests:
-                advance_queue_after_completion(event)
-            self.metrics._request_end(request_metrics, session)
-            cleanup_tasks = [t for t in (next_request_task, work_task, disconnect_task, session_cancel_task) if t]
-            for t in cleanup_tasks:
-                if not t.done():
-                    t.cancel()
-            if cleanup_tasks:
-                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+                # Cleanup work task if still pending
+                if work_task and not work_task.done():
+                    work_task.cancel()
+                    await asyncio.gather(work_task, return_exceptions=True)
+            except Exception as e:
+                log.error(f"Error during request cleanup: {e}")
 
     async def __healthcheck(self) -> None:
         """

@@ -37,7 +37,7 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
         app.router.add_post("/session/get", backend.session_get_handler)
         app.router.add_post("/session/health", backend.session_health_handler)
 
-        runner = web.AppRunner(app)
+        runner = web.AppRunner(app, handler_cancellation=True)
         await runner.setup()
         site = web.TCPSite(
             runner,

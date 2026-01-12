@@ -353,6 +353,5 @@ class Session:
     on_close_payload: dict
     requests: list[web.Request] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
-    cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
 
