@@ -8,7 +8,7 @@ from functools import cache
 import asyncio
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, ClientResponseError
 
-from .data_types import WorkerStatusData, SystemMetrics, ModelMetrics, RequestMetrics
+from .data_types import WorkerStatusData, SystemMetrics, ModelMetrics, RequestMetrics, Session
 from typing import Awaitable, NoReturn, List
 
 METRICS_UPDATE_INTERVAL = 1
@@ -54,7 +54,7 @@ class Metrics:
             await self._session.close()
             self._session = None
 
-    def _request_start(self, request: RequestMetrics) -> None:
+    def _request_start(self, request: RequestMetrics, session: Session = None) -> None:
         """
         this function is called prior to forwarding a request to a model API.
         """
@@ -62,18 +62,20 @@ class Metrics:
         request.status = "Started"
         self.model_metrics.workload_pending += request.workload
         self.model_metrics.workload_received += request.workload
-        self.model_metrics.requests_recieved.add(request.reqnum)
-        self.model_metrics.requests_working[request.reqnum] = request
+        if session is None:
+            self.model_metrics.requests_recieved.add(request.reqnum)
+            self.model_metrics.requests_working[request.reqnum] = request
         self.update_pending = True
 
-    def _request_end(self, request: RequestMetrics) -> None:
+    def _request_end(self, request: RequestMetrics, session: Session = None) -> None:
         """
         this function is called after handling of a request ends, regardless of the outcome
         """
         log.debug(f"Ending request {request.reqnum}")
         self.model_metrics.workload_pending -= request.workload
-        self.model_metrics.requests_working.pop(request.reqnum, None)
-        self.model_metrics.requests_deleting.append(request)
+        if session is None:
+            self.model_metrics.requests_working.pop(request.reqnum, None)
+            self.model_metrics.requests_deleting.append(request)
         self.last_request_served = time.time()
 
     def _request_success(self, request: RequestMetrics) -> None:
@@ -105,13 +107,14 @@ class Metrics:
         request.success = True
         request.status = "Cancelled"
     
-    def _request_reject(self, request: RequestMetrics):
+    def _request_reject(self, request: RequestMetrics, session: Session = None):
         """
         this function is called if the current wait time for the model is above max_queue_time
         """
-        self.model_metrics.requests_recieved.add(request.reqnum)
-        self.model_metrics.requests_deleting.append(request)
         self.model_metrics.workload_rejected += request.workload
+        if session is None:
+            self.model_metrics.requests_recieved.add(request.reqnum)
+            self.model_metrics.requests_deleting.append(request)
         request.success = False
         request.status = "Rejected"
         self.update_pending = True
@@ -280,8 +283,6 @@ class Metrics:
                 break
 
         if sent:
-            # clear the one-shot loadtime only if we actually sent *this* value
-            self.system_metrics.reset(expected=loadtime_snapshot)
             self.update_pending = False
             self.model_metrics.reset()
             self.last_metric_update = time.time()

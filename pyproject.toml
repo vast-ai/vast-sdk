@@ -21,7 +21,7 @@ packages = [
 
 [tool.poetry-dynamic-versioning]
 enable = true
-style = "semver"
+style = "pep440"
 vcs = "git"
 
 [tool.poetry.dependencies]
