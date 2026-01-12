@@ -38,10 +38,7 @@ class Endpoint:
         )
 
     def close_session(self, session: "Session"):
-        return self.client.end_endpoint_session(
-            endpoint=self,
-            session=session
-        )
+        return self.client.end_endpoint_session(session=session)
 
     async def session_healthcheck(self, session: "Session"):
         result = await self.client.get_endpoint_session(

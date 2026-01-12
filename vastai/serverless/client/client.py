@@ -238,20 +238,29 @@ class Serverless:
 
     async def end_endpoint_session(
         self,
-        endpoint: Endpoint,
         session: Session
     ):
-        print({"session_id": session.session_id, "session_auth": session.auth_data})
-        session_end_response = await self.queue_endpoint_request(
-            endpoint=endpoint,
-            worker_route="/session/end",
-            worker_payload={"session_id": session.session_id, "session_auth": session.auth_data},
-            session=session
-        )
-        if session_end_response.get("response").get("ended"):
+        try:
+            result = await _make_request(
+                client=self,
+                url=session.url,
+                api_key="",
+                route="/session/end",
+                body={"session_id": session.session_id, "session_auth": session.auth_data},
+                method="POST",
+                retries=1,
+                timeout=600,
+                stream=False,
+            )
+
+            if not result.get("ok"):
+                error_msg = result.get("json", {}).get("error", result.get("text", "Unknown error"))
+                raise Exception(f"Failed to end session: {error_msg}")
+
             return
-        else:
-            raise Exception(f"Failed to end session: {session_end_response.get('response')}")
+
+        except Exception as ex:
+            raise Exception(f"Failed to end session: {ex}") from ex
 
     async def start_endpoint_session(
         self,

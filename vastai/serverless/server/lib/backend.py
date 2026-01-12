@@ -215,9 +215,8 @@ class Backend:
     async def session_end_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
-            payload = data.get("payload", {})
-            session_id = payload.get("session_id")
-            session_auth = payload.get("session_auth")
+            session_id = data.get("session_id")
+            session_auth = data.get("session_auth")
         except json.JSONDecodeError:
             return web.json_response({"error": "invalid JSON"}, status=422)
 
