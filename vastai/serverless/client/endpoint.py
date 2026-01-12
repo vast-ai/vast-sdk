@@ -24,7 +24,12 @@ class Endpoint:
         self.id = id
         self.api_key = api_key
 
+<<<<<<< HEAD
     def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True, stream: bool = False, session: "Session" = None):
+=======
+    def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True, stream: bool = False, timeout: float = None):
+        """Forward requests to the parent client."""
+>>>>>>> update-connection
         return self.client.queue_endpoint_request(
             endpoint=self,
             worker_route=route,
@@ -33,6 +38,7 @@ class Endpoint:
             cost=cost,
             retry=retry,
             stream=stream,
+<<<<<<< HEAD
             session=session
         )
 
@@ -64,6 +70,9 @@ class Endpoint:
             lifetime=lifetime,
             on_close_route=on_close_route,
             on_close_payload=on_close_payload
+=======
+            timeout=timeout
+>>>>>>> update-connection
         )
 
     def get_workers(self):
@@ -87,7 +96,11 @@ class Endpoint:
                 },
                 method="POST",
                 timeout=10.0,
+<<<<<<< HEAD
                 retries=5,
+=======
+                retries=1,
+>>>>>>> update-connection
                 stream=False,
             )
         except Exception as ex:
@@ -97,8 +110,12 @@ class Endpoint:
             raise RuntimeError(f"Failed to route endpoint: HTTP {result.get('status')} - {result.get('text','')[:512]}")
 
         return RouteResponse(result.get("json") or {})
+<<<<<<< HEAD
 
 
+=======
+    
+>>>>>>> update-connection
 class RouteResponse:
     status: str
     body: dict

@@ -136,6 +136,10 @@ class Serverless:
 
         return self._ssl_context
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> update-connection
     async def get_endpoint(self, name="") -> Endpoint:
         endpoints = await self.get_endpoints()
         for e in endpoints:
@@ -282,7 +286,7 @@ class Serverless:
         session: Session = None,
         serverless_request: Optional[ServerlessRequest] = None,
         cost: int = 100,
-        max_wait_time: Optional[float] = None,
+        timeout: Optional[float] = None,
         retry: bool = True,
         max_retries: int = None,
         stream: bool = False
@@ -294,12 +298,14 @@ class Serverless:
         async def task(request: ServerlessRequest):
             request_idx: int = 0
             total_attempts = 0
+            start_time = time.time()
             try:
                 while True:
                     total_attempts += 1
                     request.status = "Queued"
                     worker_url = ""
                     auth_data = {}
+<<<<<<< HEAD
                     session_id = None
 
                     if session is None:
@@ -336,16 +342,61 @@ class Serverless:
 
                         worker_url = route.get_url()
                         auth_data = route.body
+=======
+
+                    # Check total elapsed time
+                    if timeout is not None and (time.time() - start_time) >= timeout:
+                        raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker")
+
+                    if request_idx == 0:
+                        self.logger.debug(f"Sending initial route call for request_idx {request_idx}")
+                    else:
+                        self.logger.debug(f"Sending retry route call for request_idx {request_idx}")
+
+                    route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
+
+                    request_idx = route.request_idx
+                    if request_idx:
+                        self.logger.debug(f"Got request index {request_idx}")
+>>>>>>> update-connection
                     else:
                         if session.url is not None:
                             worker_url = session.url
                             auth_data = session.auth_data
                             session_id = session.session_id
 
+<<<<<<< HEAD
                     payload = worker_payload
                     worker_request_body = {
                         "auth_data": auth_data,
                         "session_id": session_id,
+=======
+                    poll_interval = 1
+                    poll_elapsed = 0
+                    attempt = 0
+                    while route.status != "READY":
+                        request.status = "Polling"
+
+                        # Check total elapsed time
+                        if timeout is not None and (time.time() - start_time) >= timeout:
+                            raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker to become ready")
+
+                        await asyncio.sleep(poll_interval)
+                        poll_elapsed += poll_interval
+
+                        route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
+                        request_idx = route.request_idx or request_idx
+
+                        attempt += 1
+                        poll_interval = random.uniform(0.1, min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval))
+                        self.logger.debug(f"Polling route, attempt {attempt}")
+
+                    worker_url = route.get_url()
+                    auth_data = route.body
+                    payload = worker_payload
+                    worker_request_body = {
+                        "auth_data": auth_data,
+>>>>>>> update-connection
                         "payload": payload
                     }
 
@@ -364,7 +415,11 @@ class Serverless:
                             body=worker_request_body,
                             method="POST",
                             retries=1,  # avoid stacking retries with the outer loop
+<<<<<<< HEAD
                             timeout=30,
+=======
+                            timeout=600,
+>>>>>>> update-connection
                             stream=stream
                         )
                     except Exception as ex:
@@ -375,6 +430,13 @@ class Serverless:
 
                     if not result.get("ok"):
                         if retry and result.get("retryable") and (max_retries is None or total_attempts < max_retries):
+<<<<<<< HEAD
+=======
+                            # Check if we have time left before retrying
+                            if timeout is not None and (time.time() - start_time) >= timeout:
+                                raise asyncio.TimeoutError(f"Request timed out after {time.time() - start_time:.1f}s")
+
+>>>>>>> update-connection
                             request.status = "Retrying"
                             await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
                             continue
@@ -387,7 +449,13 @@ class Serverless:
 
                         response = {
                             "response": result.get("json") if result.get("json") is not None else {"error": result.get("text", "")},
+<<<<<<< HEAD
                             "result": result,
+=======
+                            "ok": result.get("ok"),
+                            "status": result.get("status"),
+                            "text" : result.get("text"),
+>>>>>>> update-connection
                             "latency": (request.complete_time - request.start_time) if request.start_time else None,
                             "url": worker_url,
                             "request_idx": request_idx,
@@ -406,7 +474,13 @@ class Serverless:
 
                     response = {
                         "response": worker_response,
+<<<<<<< HEAD
                         "result": result,
+=======
+                        "ok" : result.get("ok"),
+                        "status" : result.get("status"),
+                        "text" : result.get("text"),
+>>>>>>> update-connection
                         "latency": request.complete_time - request.start_time,
                         "url": worker_url,
                         "request_idx": request_idx,
@@ -421,6 +495,7 @@ class Serverless:
             except Exception as ex:
                 request.status = "Errored"
                 self.logger.error(f"Request errored: {ex}")
+                request.set_exception(ex)
                 return
 
         bg_task = asyncio.create_task(task(serverless_request))

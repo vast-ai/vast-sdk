@@ -14,8 +14,17 @@ async def main():
             "temperature" : 0.7
         }
         
-        response = await endpoint.request("/v1/completions", payload, cost=MAX_TOKENS)
-        print(response["response"]["choices"][0]["text"])
+        try:
+            result = await endpoint.request("/v1/completions", payload, cost=MAX_TOKENS)
+            if result["ok"]:
+                # Success path
+                print(result["response"]["choices"][0]["text"])
+            else:
+                # Request failed (HTTP error)
+                print(f"Request failed. Status={result.get('status')}, Msg={result.get('text')}")
+        except Exception as ex:
+            # Exception raised (transport error, invalid JSON, etc.)
+            print(f"Request failed with exception: {ex}")
 
 if __name__ == "__main__":
     asyncio.run(main())

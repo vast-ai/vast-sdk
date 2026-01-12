@@ -3,7 +3,11 @@ import aiohttp
 import asyncio
 import random
 import json
+<<<<<<< HEAD
 from typing import AsyncIterator, Dict, Optional, Union, Any
+=======
+from typing import AsyncIterator, Dict, Optional, Any
+>>>>>>> update-connection
 
 _JITTER_CAP_SECONDS = 5.0
 
