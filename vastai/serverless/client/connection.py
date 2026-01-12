@@ -198,6 +198,10 @@ async def _make_request(
                 last_result["stream"] = _stream_iter()
                 return last_result
 
+            except asyncio.TimeoutError as ex:
+                if attempt == retries:
+                    raise TimeoutError(f"Request to {full_url} timed out after {timeout}s") from ex
+                await asyncio.sleep(_backoff_delay(attempt))
             except Exception as ex:
                 if attempt == retries:
                     raise ex
@@ -257,6 +261,10 @@ async def _make_request(
 
                 return result
 
+        except asyncio.TimeoutError as ex:
+            if attempt == retries:
+                raise TimeoutError(f"Request to {full_url} timed out after {timeout}s") from ex
+            await asyncio.sleep(_backoff_delay(attempt))
         except Exception as ex:
             if attempt == retries:
                 raise ex

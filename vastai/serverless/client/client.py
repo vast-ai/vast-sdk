@@ -241,6 +241,7 @@ class Serverless:
         session: Session
     ):
         try:
+            self.logger.debug(f"Attempting to end session {session.session_id} at {session.url}")
             result = await _make_request(
                 client=self,
                 url=session.url,
@@ -249,7 +250,7 @@ class Serverless:
                 body={"session_id": session.session_id, "session_auth": session.auth_data},
                 method="POST",
                 retries=1,
-                timeout=600,
+                timeout=15,
                 stream=False,
             )
 
@@ -257,9 +258,11 @@ class Serverless:
                 error_msg = result.get("json", {}).get("error", result.get("text", "Unknown error"))
                 raise Exception(f"Failed to end session: {error_msg}")
 
+            self.logger.debug(f"Successfully ended session {session.session_id}")
             return
 
         except Exception as ex:
+            self.logger.error(f"Error ending session {session.session_id}: {ex}")
             raise Exception(f"Failed to end session: {ex}") from ex
 
     async def start_endpoint_session(

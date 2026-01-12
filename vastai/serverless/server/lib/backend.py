@@ -185,18 +185,15 @@ class Backend:
                 return False
 
             # Cancel all in-flight request handler tasks
-            cancel_tasks = []
             for req in list(session.requests):
-                if hasattr(req, 'task') and req.task and not req.task.done():
-                    req.task.cancel()
-                    cancel_tasks.append(req.task)
-
+                try:
+                    tr = getattr(req, "transport", None)
+                    if tr is not None and not tr.is_closing():
+                        tr.close()
+                except Exception:
+                    pass
             session.requests.clear()
             request_metrics = self.session_metrics.pop(session_id, None)
-
-        # Wait for all cancelled tasks to finish (outside the lock)
-        if cancel_tasks:
-            await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
         # Run the on_close callback
         try:
