@@ -241,10 +241,11 @@ class Serverless:
         endpoint: Endpoint,
         session: Session
     ):
+        print({"session_id": session.session_id, "session_auth": session.auth_data})
         session_end_response = await self.queue_endpoint_request(
             endpoint=endpoint,
             worker_route="/session/end",
-            worker_payload={"session_id": session.session_id},
+            worker_payload={"session_id": session.session_id, "session_auth": session.auth_data},
             session=session
         )
         if session_end_response.get("response").get("ended"):
@@ -302,6 +303,7 @@ class Serverless:
                     request.status = "Queued"
                     worker_url = ""
                     auth_data = {}
+                    session_id = None
 
                     # Check total elapsed time
                     if timeout is not None and (time.time() - start_time) >= timeout:
