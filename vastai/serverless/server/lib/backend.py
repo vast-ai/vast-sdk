@@ -462,6 +462,16 @@ class Backend:
         
         finally:
             try:
+                # Remove request from session if present
+                if session is not None and session_id is not None:
+                    async with self._sessions_lock:
+                        s = self.sessions.get(session_id)
+                        if s is not None:
+                            try:
+                                s.requests.remove(request)
+                            except ValueError:
+                                pass
+
                 if not handler.allow_parallel_requests:
                     advance_queue_after_completion(event)
 
