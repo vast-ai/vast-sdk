@@ -310,6 +310,8 @@ class Backend:
         self._total_pubkey_fetch_errors = 0
         self._pubkey = self._fetch_pubkey()
         self.__start_healthcheck: bool = False
+        self.__healthcheck_ready: asyncio.Event = asyncio.Event()
+        self.__healthcheck_succeeded: bool = False
 
     @property
     def pubkey(self) -> Optional[RSA.RsaKey]:
@@ -511,12 +513,17 @@ class Backend:
 
                     if status == 200:
                         log.debug("Healthcheck successful")
-                    elif status == 503:
+                        if not self.__healthcheck_succeeded:
+                            self.__healthcheck_succeeded = True
+                            self.__healthcheck_ready.set()
+                            log.debug("First healthcheck succeeded - model is ready")
+                    else:
                         msg = f"Healthcheck failed with status: {status}"
                         log.debug(msg)
-                        self.backend_errored(msg)
-                    else:
-                        log.debug(f"Healthcheck endpoint not ready: {status}")
+                        # Only report error if we've already had a successful healthcheck
+                        # (i.e., model was working but now is broken)
+                        if self.__healthcheck_succeeded:
+                            self.backend_errored(msg)
 
             except CancelledError:
                 log.debug("Healthcheck task cancelled; exiting loop")
@@ -524,7 +531,10 @@ class Backend:
 
             except Exception as e:
                 log.debug(f"Healthcheck failed with exception: {e}")
-                self.backend_errored(str(e))
+                # Only report connection errors AFTER the first successful healthcheck
+                # During startup, connection failures are expected
+                if self.__healthcheck_succeeded:
+                    self.backend_errored(str(e))
 
     async def _start_tracking(self) -> None:
         await gather(
@@ -678,12 +688,24 @@ class Backend:
                         log.debug(
                             f"Got log line indicating model is loaded: {log_line}"
                         )
-                        # some backends need a few seconds after logging successful startup before
-                        # they can begin accepting requests
-                        # await sleep(5)
                         try:
                             max_throughput = await run_benchmark()
                             self.__start_healthcheck = True
+
+                            # Wait for the first successful healthcheck before marking model as loaded
+                            if self.healthcheck_url:
+                                log.debug("Benchmark succeeded, waiting for healthcheck to confirm model is ready...")
+                                try:
+                                    await asyncio.wait_for(self.__healthcheck_ready.wait(), timeout=300.0)
+                                    log.debug("Healthcheck confirmed - marking model as loaded")
+                                except asyncio.TimeoutError:
+                                    raise Exception("Timed out waiting for healthcheck after benchmark (waited 300s)")
+                            else:
+                                # No healthcheck endpoint defined, wait 10 seconds as fallback
+                                log.debug("No healthcheck endpoint defined, waiting 10 seconds before marking model as loaded...")
+                                await asyncio.sleep(10)
+                                log.debug("Wait complete - marking model as loaded")
+
                             self.metrics._model_loaded(
                                 max_throughput=max_throughput,
                             )
