@@ -3,10 +3,10 @@ from vastai import Serverless
 import random
 
 async def main():
-    async with Serverless(instance="local", debug=True) as client:
+    async with Serverless(instance="alpha", debug=True) as client:
         endpoint = await client.get_endpoint(name="my-comfy-endpoint")
         session = await endpoint.session(cost=100, lifetime=30)
-        payload = {
+        payload = lambda : {
             "input": {
                 "modifier": "Text2Image",
                 "modifications": {
@@ -25,12 +25,32 @@ async def main():
                 }
             }
         }
-        
-        response = await session.request("/generate", payload)
+        # This test allows us to test:
+        # - Session creation
+        # - Session async request handlign
+        # - Closing sessions with webhooks
+        # - Error handling for requests on closed sessions
+        # The expected result is to see the first request succeed,
+        # and the second request fail due to the closed session.
+        try:
+            response = await session.request("/generate", payload())
+            if not response.get("ok"):
+                print(f"Request failed: {response.get('text')}")
+            else:
+                print("Request succeeded")
+        except Exception as ex:
+            print(f"Request failed: {ex}")
 
-        # Get the file from the path on the local machine using SCP or SFTP
-        # or configure S3 to upload to cloud storage.
-        print(response["response"])
+        await asyncio.sleep(5)
+        try:
+            response = await session.request("/generate", payload())
+            if not response.get("ok"):
+                print(f"Request failed: {response.get('text')}")
+            else:
+                print("Request succeeded")
+        except Exception as ex:
+            print(f"Request failed: {ex}")
+            
 
 if __name__ == "__main__":
     asyncio.run(main())

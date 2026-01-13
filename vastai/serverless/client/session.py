@@ -64,7 +64,7 @@ class Session:
             self.open = False
         return
 
-    async def request(
+    def request(
         self,
         route,
         payload,
@@ -77,16 +77,21 @@ class Session:
         if not self.open:
             raise ValueError("Cannot make request on closed session.")
 
-        result = await self.endpoint.request(
-            route=route,
-            payload=payload,
-            serverless_request=serverless_request,
-            cost=cost,
-            retry=retry,
-            stream=stream,
-            session=self,
-        )
-        if result.get("status") == 410:
-            self.open = False
-            raise ValueError("Cannot make request on closed session.")
-        return result
+        async def _wrapped_request():
+            result = await self.endpoint.request(
+                route=route,
+                payload=payload,
+                serverless_request=serverless_request,
+                cost=cost,
+                retry=retry,
+                stream=stream,
+                session=self,
+            )
+
+            if result.get("status") == 410:
+                self.open = False
+                raise ValueError("Cannot make request on closed session.")
+
+            return result
+
+        return _wrapped_request()
