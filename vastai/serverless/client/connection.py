@@ -244,6 +244,11 @@ async def _make_request(
                         result["json"] = await resp.json(content_type=None)
                     except Exception:
                         raise Exception(f"Invalid JSON from {full_url}:\n{text}")
+
+                    # Debug: log the exact response
+                    if hasattr(client, 'logger'):
+                        client.logger.debug(f"_make_request response from {route}: {result}")
+
                     return result
 
                 # Non-2xx: best-effort JSON parse (do not raise)
@@ -258,6 +263,10 @@ async def _make_request(
                     last_result = result
                     await asyncio.sleep(_backoff_delay(attempt))
                     continue
+
+                # Debug: log the exact response for non-2xx
+                if hasattr(client, 'logger'):
+                    client.logger.debug(f"_make_request response from {route}: {result}")
 
                 return result
 

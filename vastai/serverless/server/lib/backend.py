@@ -67,6 +67,7 @@ class Backend:
     version = VERSION
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
     queue: deque = dataclasses.field(default_factory=deque, repr=False)
+    _queue_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock, repr=False)
     unsecured: bool = dataclasses.field(
         default_factory=lambda: bool(strtobool(os.environ.get("UNSECURED", "false"))),
     )
@@ -384,19 +385,20 @@ class Backend:
                 session.expiration += session.lifetime
                 session.requests.append(request)
         
-        def advance_queue_after_completion(event: asyncio.Event):
+        async def advance_queue_after_completion(event: asyncio.Event):
             """Pop current head and wake next waiter, if any."""
-            # If this event is current head, wake next waiter
-            if self.queue and self.queue[0] is event:
-                self.queue.popleft()
-                if self.queue:
-                    self.queue[0].set()
-            else:
-                # Else, remove it from the queue
-                try:
-                    self.queue.remove(event)
-                except ValueError:
-                    pass
+            async with self._queue_lock:
+                # If this event is current head, wake next waiter
+                if self.queue and self.queue[0] is event:
+                    self.queue.popleft()
+                    if self.queue:
+                        self.queue[0].set()
+                else:
+                    # Else, remove it from the queue
+                    try:
+                        self.queue.remove(event)
+                    except ValueError:
+                        pass
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
@@ -415,10 +417,21 @@ class Backend:
         if self.__check_signature(auth_data) is False:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=401)
-        
-        if handler.max_queue_time is not None and self.metrics.model_metrics.wait_time > handler.max_queue_time:
-            self.metrics._request_reject(request_metrics)
-            return web.Response(status=429)
+
+        # Check queue time with lock to prevent race conditions on concurrent requests
+        if handler.max_queue_time is not None:
+            async with self._queue_lock:
+                # Calculate wait time including current queue depth for non-parallel handlers
+                wait_time = self.metrics.model_metrics.wait_time
+                if not handler.allow_parallel_requests and len(self.queue) > 0:
+                    # Estimate additional wait time based on queue depth
+                    # Each queued request will need the current work to complete
+                    queue_wait_estimate = len(self.queue) * (self.metrics.model_metrics.cur_load / max(self.metrics.model_metrics.max_throughput, 0.00001))
+                    wait_time += queue_wait_estimate
+
+                if wait_time > handler.max_queue_time:
+                    self.metrics._request_reject(request_metrics)
+                    return web.Response(status=429)
 
         work_task = None
 
@@ -432,11 +445,12 @@ class Backend:
 
             # FIFO-queue branch
             else:
-                # Insert a Event into the queue for this request
+                # Insert a Event into the queue for this request (with lock)
                 # Event.set() == our request is up next
-                self.queue.append(event)
-                if self.queue and self.queue[0] is event:
-                    event.set()
+                async with self._queue_lock:
+                    self.queue.append(event)
+                    if self.queue and self.queue[0] is event:
+                        event.set()
 
                 # Wait for our turn - CancelledError raised if client disconnects
                 await event.wait()
@@ -472,7 +486,7 @@ class Backend:
                                 pass
 
                 if not handler.allow_parallel_requests:
-                    advance_queue_after_completion(event)
+                    await advance_queue_after_completion(event)
 
                 self.metrics._request_end(request_metrics)
 
