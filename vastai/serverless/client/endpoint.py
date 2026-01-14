@@ -38,7 +38,6 @@ class Endpoint:
 
     def close_session(self, session: "Session"):
         return self.client.end_endpoint_session(
-            endpoint=self,
             session=session
         )
 
