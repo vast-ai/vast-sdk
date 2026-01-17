@@ -782,42 +782,12 @@ class Backend:
                 if f is not None:
                     await f.aclose()
 
-        # Wait for log file to exist and stabilize before starting to tail
-        # This prevents race conditions with log rotation at startup
-        log.debug(f"Waiting for log file {self.model_log_file} to exist...")
-        initial_inode = None
-        stable_count = 0
-
+        # Wait for log file to exist before starting to tail
         while True:
             if os.path.isfile(self.model_log_file):
-                try:
-                    stat_info = os.stat(self.model_log_file)
-                    current_inode = stat_info.st_ino
-
-                    if initial_inode is None:
-                        # First time we've seen the file
-                        log.debug(f"Log file appeared with inode {current_inode}")
-                        initial_inode = current_inode
-                        stable_count = 1
-                    elif initial_inode == current_inode:
-                        # Same inode, file is stable
-                        stable_count += 1
-                        if stable_count >= 3:
-                            # File has been stable for 3 checks (3 seconds), start tailing
-                            log.debug(f"Log file stable, starting tail")
-                            return await tail_log()
-                    else:
-                        # Inode changed, file was rotated, reset
-                        log.debug(f"Log file inode changed from {initial_inode} to {current_inode} during startup, waiting for stability...")
-                        initial_inode = current_inode
-                        stable_count = 1
-
-                except FileNotFoundError:
-                    # File disappeared, reset
-                    initial_inode = None
-                    stable_count = 0
-
-            await sleep(1)
+                return await tail_log()
+            else:
+                await sleep(1)
       
 
 
