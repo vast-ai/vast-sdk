@@ -734,19 +734,90 @@ class Backend:
                         log.debug(f"Info from model logs: {log_line}")
 
         async def tail_log():
+            """
+            Tail a log file with proper rotation handling.
+            Tracks inode to detect when file is rotated and reopens accordingly.
+            """
             log.debug(f"tailing file: {self.model_log_file}")
-            async with await open_file(self.model_log_file, encoding='utf-8', errors='ignore') as f:
+
+            current_inode = None
+            f = None
+
+            try:
                 while True:
+                    # Check if file exists and get its inode
+                    try:
+                        stat_info = os.stat(self.model_log_file)
+                        file_inode = stat_info.st_ino
+                    except FileNotFoundError:
+                        # File doesn't exist, wait and retry
+                        if f is not None:
+                            await f.aclose()
+                            f = None
+                            current_inode = None
+                        log.debug(f"Log file {self.model_log_file} not found, waiting...")
+                        await asyncio.sleep(1)
+                        continue
+
+                    # If inode changed (file was rotated) or we don't have a file handle, (re)open
+                    if current_inode != file_inode:
+                        if f is not None:
+                            log.debug(f"Log file rotation detected (inode changed from {current_inode} to {file_inode}), reopening...")
+                            await f.aclose()
+                        else:
+                            log.debug(f"Opening log file (inode: {file_inode})")
+
+                        f = await open_file(self.model_log_file, encoding='utf-8', errors='ignore')
+                        current_inode = file_inode
+
+                    # Read a line
                     line = await f.readline()
                     if line:
                         await handle_log_line(line.rstrip())
                     else:
+                        # No data available, sleep briefly
                         await asyncio.sleep(LOG_POLL_INTERVAL)
+
+            finally:
+                if f is not None:
+                    await f.aclose()
+
+        # Wait for log file to exist and stabilize before starting to tail
+        # This prevents race conditions with log rotation at startup
+        log.debug(f"Waiting for log file {self.model_log_file} to exist...")
+        initial_inode = None
+        stable_count = 0
+
         while True:
-            if os.path.isfile(self.model_log_file) is True:
-                return await tail_log()
-            else:
-                await sleep(1)
+            if os.path.isfile(self.model_log_file):
+                try:
+                    stat_info = os.stat(self.model_log_file)
+                    current_inode = stat_info.st_ino
+
+                    if initial_inode is None:
+                        # First time we've seen the file
+                        log.debug(f"Log file appeared with inode {current_inode}")
+                        initial_inode = current_inode
+                        stable_count = 1
+                    elif initial_inode == current_inode:
+                        # Same inode, file is stable
+                        stable_count += 1
+                        if stable_count >= 3:
+                            # File has been stable for 3 checks (3 seconds), start tailing
+                            log.debug(f"Log file stable, starting tail")
+                            return await tail_log()
+                    else:
+                        # Inode changed, file was rotated, reset
+                        log.debug(f"Log file inode changed from {initial_inode} to {current_inode} during startup, waiting for stability...")
+                        initial_inode = current_inode
+                        stable_count = 1
+
+                except FileNotFoundError:
+                    # File disappeared, reset
+                    initial_inode = None
+                    stable_count = 0
+
+            await sleep(1)
       
 
 
