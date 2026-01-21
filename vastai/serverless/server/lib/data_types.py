@@ -10,6 +10,7 @@ import random
 import json
 import psutil
 import os
+import asyncio
 
 """
 type variable representing an incoming payload to pyworker that will used to calculate load and will then
@@ -101,7 +102,10 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
     concurrency: int = 10
     benchmark_runs: int = 8
     allow_parallel_requests: bool = False
-    max_queue_time: float = 30.0
+    max_queue_time: float = None
+    is_remote_dispatch: bool = False
+    remote_dispatch_function: Callable = None
+    do_warmup_benchmark: bool = True
 
     @property
     @abstractmethod
@@ -135,12 +139,20 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
         """
         pass
 
+    @abstractmethod
+    async def call_remote_dispatch_function(self, params: dict):
+        """
+        define a remote dispatch function for this endpoint, return the result
+        """
+        pass
+
     @classmethod
     def get_data_from_request(
         cls, req_data: Dict[str, Any]
     ) -> Tuple[AuthData, ApiPayload_T]:
         errors = {}
         auth_data: Optional[AuthData] = None
+        session_id: Optional[str] = None
         payload: Optional[ApiPayload_T] = None
         try:
             if "auth_data" in req_data:
@@ -157,10 +169,14 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
                 errors["payload"] = "field missing"
         except JsonDataException as e:
             errors["payload"] = e.message
+
+        if "session_id" in req_data:
+            session_id = req_data["session_id"]
+
         if errors:
             raise JsonDataException(errors)
         if auth_data and payload:
-            return (auth_data, payload)
+            return (auth_data, payload, session_id)
         else:
             raise Exception("error deserializing request data")
 
@@ -210,6 +226,7 @@ class RequestMetrics:
     workload: float
     status: str
     success: bool = False
+    is_session: bool = False
 
 @dataclass
 class BenchmarkResult:
@@ -262,7 +279,7 @@ class ModelMetrics:
     def wait_time(self) -> float:
         if (len(self.requests_working) == 0):
             return 0.0
-        return sum([request.workload for request in self.requests_working.values()]) / max(self.max_throughput, 0.00001)
+        return sum([request.workload for request in self.requests_working.values() if not request.is_session]) / max(self.max_throughput, 0.00001)
     
     @property
     def cur_load(self) -> float:
@@ -326,3 +343,16 @@ class LogAction(Enum):
     ModelLoaded = 1
     ModelError = 2
     Info = 3
+
+@dataclass
+class Session:
+    session_id: str
+    lifetime: float # extends TTL per-request
+    auth_data: dict
+    expiration: float  # epoch seconds
+    on_close_route: str
+    on_close_payload: dict
+    requests: list[web.Request] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+
+
