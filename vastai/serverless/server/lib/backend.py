@@ -261,7 +261,8 @@ class Backend:
             request_idx= auth_data.get("request_idx"),
             reqnum= auth_data.get("reqnum"),
             workload= auth_data.get("cost"),
-            status="SessionActive"
+            status="SessionActive",
+            is_session=True
         )
 
         async with self._sessions_lock:
@@ -421,15 +422,7 @@ class Backend:
         # Check queue time with lock to prevent race conditions on concurrent requests
         if handler.max_queue_time is not None:
             async with self._queue_lock:
-                # Calculate wait time including current queue depth for non-parallel handlers
-                wait_time = self.metrics.model_metrics.wait_time
-                if not handler.allow_parallel_requests and len(self.queue) > 0:
-                    # Estimate additional wait time based on queue depth
-                    # Each queued request will need the current work to complete
-                    queue_wait_estimate = len(self.queue) * (self.metrics.model_metrics.cur_load / max(self.metrics.model_metrics.max_throughput, 0.00001))
-                    wait_time += queue_wait_estimate
-
-                if wait_time > handler.max_queue_time:
+                if self.metrics.model_metrics.wait_time > handler.max_queue_time:
                     self.metrics._request_reject(request_metrics)
                     return web.Response(status=429)
 

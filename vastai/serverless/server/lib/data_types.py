@@ -226,6 +226,7 @@ class RequestMetrics:
     workload: float
     status: str
     success: bool = False
+    is_session: bool = False
 
 @dataclass
 class BenchmarkResult:
@@ -278,7 +279,7 @@ class ModelMetrics:
     def wait_time(self) -> float:
         if (len(self.requests_working) == 0):
             return 0.0
-        return sum([request.workload for request in self.requests_working.values()]) / max(self.max_throughput, 0.00001)
+        return sum([request.workload for request in self.requests_working.values() if not request.is_session]) / max(self.max_throughput, 0.00001)
     
     @property
     def cur_load(self) -> float:
