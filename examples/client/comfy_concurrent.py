@@ -157,7 +157,7 @@ async def generate(endpoint, idx, state, http_port, use_session):
                 await asyncio.sleep(0.5)
             await session.close()
         else:
-            await endpoint.request("/generate", payload, cost=100)
+            await endpoint.request("/generate/sync", payload, cost=100)
 
         t_end = time.monotonic()
         async with state.lock:
@@ -356,6 +356,27 @@ def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def _mark_warmup(
+    ax,
+    warmup_start_s: Optional[float],
+    warmup_end_s: Optional[float],
+) -> None:
+    if warmup_start_s is None:
+        return
+
+    ax.axvline(warmup_start_s, linestyle="--", linewidth=1, color="blue", label="warmup start")
+
+    if warmup_end_s is not None and warmup_end_s > warmup_start_s:
+        ax.axvline(warmup_end_s, linestyle="--", linewidth=1, color="blue", label="measurement start")
+        ax.axvspan(
+            warmup_start_s,
+            warmup_end_s,
+            alpha=0.12,
+            facecolor="lightblue",
+            label="warmup window",
+        )
+
+
 def _mark_cooldown(
     ax,
     cooldown_start_s: Optional[float],
@@ -381,6 +402,8 @@ def plot_request_counts(
     outdir: str,
     t: List[float],
     counts: Dict[str, List[int]],
+    warmup_start_s: Optional[float] = None,
+    warmup_end_s: Optional[float] = None,
     cooldown_start_s: Optional[float] = None,
     cooldown_end_s: Optional[float] = None,
 ) -> str:
@@ -390,6 +413,7 @@ def plot_request_counts(
     ax.plot(t, counts[STATUS_DONE], label=STATUS_DONE)
     ax.plot(t, counts[STATUS_FAILED], label=STATUS_FAILED)
 
+    _mark_warmup(ax, warmup_start_s, warmup_end_s)
     _mark_cooldown(ax, cooldown_start_s, cooldown_end_s)
 
     ax.set_xlabel("Seconds since start")
@@ -407,6 +431,8 @@ def plot_request_timeline(
     outdir: str,
     snapshots: List[np.ndarray],
     interval_s: float,
+    warmup_start_s: Optional[float] = None,
+    warmup_end_s: Optional[float] = None,
     cooldown_start_s: Optional[float] = None,
     cooldown_end_s: Optional[float] = None,
 ) -> str:
@@ -424,6 +450,15 @@ def plot_request_timeline(
     ax.set_title("Per-request status timeline (0.1s sampling)")
     cbar = fig.colorbar(ax.images[0], ticks=[0, 1, 2, 3])
     cbar.ax.set_yticklabels([CODE_TO_STATUS[i] for i in [0, 1, 2, 3]])
+
+    if warmup_start_s is not None:
+        x0 = int(round(warmup_start_s / interval_s))
+        ax.axvline(x0, linestyle="--", linewidth=1, color="blue")
+        if warmup_end_s is not None and warmup_end_s > warmup_start_s:
+            x1 = int(round(warmup_end_s / interval_s))
+            ax.axvline(x1, linestyle="--", linewidth=1, color="blue")
+            ax.axvspan(x0, x1, alpha=0.10, color="blue")
+        ax.text(x0 + 1, -0.5, "warmup", va="bottom", ha="left", color="blue")
 
     if cooldown_start_s is not None:
         x0 = int(round(cooldown_start_s / interval_s))
@@ -468,22 +503,29 @@ def plot_worker_counts(
     outdir: str,
     t: List[float],
     samples: List[Dict[str, int]],
+    warmup_start_s: Optional[float] = None,
+    warmup_end_s: Optional[float] = None,
     cooldown_start_s: Optional[float] = None,
     cooldown_end_s: Optional[float] = None,
 ) -> str:
-    # Consistent color mapping for worker statuses
+    # Official ObservedState enum color mapping
     STATUS_COLORS = {
-        "idle": "#2ca02c",           # green
-        "stopped": "#404040",         # dark grey
-        "stopping": "#ff7f0e",        # orange
-        "starting": "#ffd700",        # yellow/gold
-        "running": "#1f77b4",         # blue
-        "loading": "#9467bd",         # purple
-        "error": "#d62728",           # red
-        "stop_queued": "#ff6b6b",     # light red
+        "unknown": "#bcbd22",         # olive
+        "pending": "#9e9e9e",         # light grey
         "creating": "#17becf",        # cyan
+        "created": "#1f8c9f",         # teal
+        "loading": "#9467bd",         # purple
+        "model_loading": "#b47fdb",   # light purple
+        "idle": "#2ca02c",            # green (ready to work)
+        "stop_queued": "#ff6b6b",     # light red
+        "stopping": "#ff7f0e",        # orange
+        "stopped": "#404040",         # dark grey
+        "starting": "#ffd700",        # yellow/gold
+        "rebooting": "#ff8c00",       # dark orange
+        "destroying": "#8b0000",      # dark red
         "unavail": "#7f7f7f",         # medium grey
-        "UNKNOWN": "#bcbd22",         # olive
+        "error": "#d62728",           # red
+        "offline": "#2f2f2f",         # very dark grey
         "OTHER": "#8c564b",           # brown
     }
 
@@ -515,6 +557,7 @@ def plot_worker_counts(
         color = STATUS_COLORS.get(k.lower(), STATUS_COLORS.get(k, None))
         ax.plot(t, ys, label=k, color=color, linewidth=2)
 
+    _mark_warmup(ax, warmup_start_s, warmup_end_s)
     _mark_cooldown(ax, cooldown_start_s, cooldown_end_s)
 
     ax.set_xlabel("Seconds since start")
@@ -533,12 +576,15 @@ def plot_workers_total_and_reqs(
     t: List[float],
     totals: List[int],
     reqs_sum: List[int],
+    warmup_start_s: Optional[float] = None,
+    warmup_end_s: Optional[float] = None,
     cooldown_start_s: Optional[float] = None,
     cooldown_end_s: Optional[float] = None,
 ) -> Tuple[str, str]:
     fig, ax = plt.subplots()
     ax.plot(t, totals, label="total_workers")
 
+    _mark_warmup(ax, warmup_start_s, warmup_end_s)
     _mark_cooldown(ax, cooldown_start_s, cooldown_end_s)
 
     ax.set_xlabel("Seconds since start")
@@ -552,6 +598,7 @@ def plot_workers_total_and_reqs(
     fig, ax = plt.subplots()
     ax.plot(t, reqs_sum, label="sum(reqs_working)")
 
+    _mark_warmup(ax, warmup_start_s, warmup_end_s)
     _mark_cooldown(ax, cooldown_start_s, cooldown_end_s)
 
     ax.set_xlabel("Seconds since start")
@@ -573,6 +620,7 @@ async def main(
     interval_s: float,
     outdir: str,
     endpoint_name: str,
+    warmup_s: float,
     cooldown_s: float,
     http_port: int,
     use_session: bool,
@@ -615,6 +663,8 @@ async def main(
     except NotImplementedError:
         pass
 
+    warmup_start_s: Optional[float] = None
+    warmup_end_s: Optional[float] = None
     cooldown_start_s: Optional[float] = None
     cooldown_end_s: Optional[float] = None
 
@@ -622,6 +672,37 @@ async def main(
 
     async with Serverless(debug=True, instance=auto_instance) as client:
         endpoint = await client.get_endpoint(name=endpoint_name)
+
+        # Warmup period: observe worker state before measurement
+        if warmup_s > 0:
+            warmup_start_s = 0.0
+            warmup_end_s = float(warmup_s)
+
+            print(f"Starting warmup period of {warmup_s:.1f}s to observe worker state...")
+
+            # Start worker sampling during warmup (no requests yet)
+            warmup_done_evt = asyncio.Event()
+            warmup_sampler = asyncio.create_task(
+                sample_workers(
+                    endpoint,
+                    warmup_done_evt,
+                    interval_s,
+                    w_time,
+                    w_counts,
+                    w_totals,
+                    w_reqs_working_sum,
+                    t0,
+                )
+            )
+
+            # Wait for warmup duration
+            await asyncio.sleep(warmup_s)
+
+            # Stop warmup sampling
+            warmup_done_evt.set()
+            await warmup_sampler
+
+            print(f"Warmup complete. Starting measurement phase...")
 
         req_tasks = [
             asyncio.create_task(generate(endpoint, idx, state, http_port, use_session))
@@ -734,11 +815,11 @@ async def main(
     ok_durations_np = np.array(ok_durations, dtype=float)
 
     # Plots (will run even if interrupted)
-    p_req_counts = plot_request_counts(outdir, req_time, req_counts, cooldown_start_s, cooldown_end_s)
-    p_req_timeline = plot_request_timeline(outdir, req_matrix_snapshots, interval_s, cooldown_start_s, cooldown_end_s)
-    p_workers_by_status = plot_worker_counts(outdir, w_time, w_counts, cooldown_start_s, cooldown_end_s)
+    p_req_counts = plot_request_counts(outdir, req_time, req_counts, warmup_start_s, warmup_end_s, cooldown_start_s, cooldown_end_s)
+    p_req_timeline = plot_request_timeline(outdir, req_matrix_snapshots, interval_s, warmup_start_s, warmup_end_s, cooldown_start_s, cooldown_end_s)
+    p_workers_by_status = plot_worker_counts(outdir, w_time, w_counts, warmup_start_s, warmup_end_s, cooldown_start_s, cooldown_end_s)
     p_workers_total, p_workers_reqs = plot_workers_total_and_reqs(
-        outdir, w_time, w_totals, w_reqs_working_sum, cooldown_start_s, cooldown_end_s
+        outdir, w_time, w_totals, w_reqs_working_sum, warmup_start_s, warmup_end_s, cooldown_start_s, cooldown_end_s
     )
 
     p_dist, stats = plot_completion_distribution(outdir, ok_durations_np)
@@ -752,6 +833,11 @@ async def main(
 
     print("\nFinal request status counts:")
     print(Counter(statuses_final))
+
+    if warmup_start_s is not None and warmup_end_s is not None:
+        print("\nWarmup window (seconds since start):")
+        print(f" - start: {warmup_start_s:.3f}s")
+        print(f" - end  : {warmup_end_s:.3f}s")
 
     if cooldown_start_s is not None and cooldown_end_s is not None:
         print("\nCooldown window (seconds since start):")
@@ -795,6 +881,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--auto-instance", type=str, default="prod")
     parser.add_argument(
+        "--warmup",
+        type=float,
+        default=10.0,
+        help="Warmup duration to observe worker state before measurement (seconds)",
+    )
+    parser.add_argument(
         "--cooldown",
         type=float,
         default=60.0,
@@ -811,6 +903,7 @@ if __name__ == "__main__":
                     args.interval,
                     args.outdir,
                     args.endpoint_name,
+                    args.warmup,
                     args.cooldown,
                     args.http_port,
                     args.use_session,

@@ -19,7 +19,7 @@ async def main():
             }
         }
         try:
-            result = await endpoint.request("/generate/sync", payload, timeout=0.0)
+            result = await endpoint.request("/generate/sync", payload)
             if result["ok"]:
                 print(result["response"]["output"][0]["local_path"])
             else:
