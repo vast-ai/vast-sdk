@@ -123,13 +123,13 @@ async def generate(endpoint, idx, state, http_port, use_session):
                     "steps": 10,
                     "seed": random.randint(1, 1000000),
                 },
-                "webhook": {
-                    "url": f"http://localhost:{http_port}/session/end",
-                    "extra_params": {
-                        "session_id": session.session_id,
-                        "session_auth": session.auth_data,
-                    },
-                },
+                #"webhook": {
+                #    "url": f"http://localhost:{http_port}/session/end",
+                #    "extra_params": {
+                #        "session_id": session.session_id,
+                #        "session_auth": session.auth_data,
+                #    },
+                #},
             }
         }
     else:
@@ -152,9 +152,9 @@ async def generate(endpoint, idx, state, http_port, use_session):
 
     try:
         if use_session:
-            await session.request("/generate", payload)
-            while await session.is_open():
-                await asyncio.sleep(0.5)
+            await session.request("/generate/sync", payload)
+            #while await session.is_open():
+            #    await asyncio.sleep(0.5)
             await session.close()
         else:
             await endpoint.request("/generate/sync", payload, cost=100)
