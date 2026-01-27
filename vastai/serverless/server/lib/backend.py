@@ -32,7 +32,7 @@ from .data_types import (
     JsonDataException,
     RequestMetrics,
     BenchmarkResult,
-    Session
+    Session,
 )
 
 VERSION = "1.1.0"
@@ -290,7 +290,8 @@ class Backend:
                 expiration=expiration,
                 auth_data=auth_data,
                 on_close_route=on_close_route,
-                on_close_payload=on_close_payload
+                on_close_payload=on_close_payload,
+                request_idx=session_request_metrics.request_idx
             )
             self.sessions[session_id] = session
             self.session_metrics[session_id] = session_request_metrics
@@ -385,6 +386,10 @@ class Backend:
                     return web.json_response(dict(error="invalid session"), status=410)
                 session.expiration += session.lifetime
                 session.requests.append(request)
+                session.session_reqnum += 1
+                request_metrics.session = session
+                request_metrics.session_reqnum = session.session_reqnum
+                
         
         async def advance_queue_after_completion(event: asyncio.Event):
             """Pop current head and wake next waiter, if any."""
@@ -428,7 +433,7 @@ class Backend:
 
         work_task = None
 
-        self.metrics._request_start(request_metrics, session)
+        self.metrics._request_start(request_metrics)
 
         try:
             if handler.allow_parallel_requests:
@@ -449,8 +454,10 @@ class Backend:
                 await event.wait()
 
                 # We are the next-up request in the queue
-                if session is not None:
+                if request_metrics.session is not None:
                     log.debug(f"Starting work on request {request_metrics.reqnum}")
+                else:
+                    log.debug(f"Starting work on request {request_metrics.session_reqnum} in session {request_metrics.session.request_idx}")
 
                 # Execute the work task
                 work_task = create_task(make_request())

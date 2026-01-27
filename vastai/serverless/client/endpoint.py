@@ -48,20 +48,22 @@ class Endpoint:
         )
         return result is not None
 
-    def get_session(self, session_id: int, session_auth: dict):
+    def get_session(self, session_id: int, session_auth: dict, timeout: float = 10):
         return self.client.get_endpoint_session(
             endpoint=self,
             session_id=session_id,
-            session_auth=session_auth
+            session_auth=session_auth,
+            timeout=timeout
         )
 
-    def session(self, cost: int = 100, lifetime: float = 60, on_close_route: str = None, on_close_payload: dict = None) -> "Session":
+    def session(self, cost: int = 100, lifetime: float = 60, on_close_route: str = None, on_close_payload: dict = None, timeout: float = None) -> "Session":
         return self.client.start_endpoint_session(
             endpoint=self,
             cost=cost,
             lifetime=lifetime,
             on_close_route=on_close_route,
-            on_close_payload=on_close_payload
+            on_close_payload=on_close_payload,
+            timeout=timeout
         )
 
     def get_workers(self):
