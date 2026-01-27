@@ -158,6 +158,9 @@ async def generate(endpoint, idx, state, http_port, use_session):
             await session.close()
         else:
             await endpoint.request("/generate/sync", payload, cost=100)
+            result = await endpoint.request("/generate/sync", payload)
+            if not result["ok"]:
+                raise Exception(f"{result.get('status')}, Msg={result.get('text')}")
 
         t_end = time.monotonic()
         async with state.lock:
@@ -508,54 +511,39 @@ def plot_worker_counts(
     cooldown_start_s: Optional[float] = None,
     cooldown_end_s: Optional[float] = None,
 ) -> str:
-    # Official ObservedState enum color mapping
-    STATUS_COLORS = {
-        "unknown": "#bcbd22",         # olive
-        "pending": "#9e9e9e",         # light grey
-        "creating": "#17becf",        # cyan
-        "created": "#1f8c9f",         # teal
-        "loading": "#9467bd",         # purple
-        "model_loading": "#b47fdb",   # light purple
-        "idle": "#2ca02c",            # green (ready to work)
-        "stop_queued": "#ff6b6b",     # light red
-        "stopping": "#ff7f0e",        # orange
-        "stopped": "#404040",         # dark grey
-        "starting": "#ffd700",        # yellow/gold
-        "rebooting": "#ff8c00",       # dark orange
-        "destroying": "#8b0000",      # dark red
-        "unavail": "#7f7f7f",         # medium grey
-        "error": "#d62728",           # red
-        "offline": "#2f2f2f",         # very dark grey
-        "OTHER": "#8c564b",           # brown
-    }
+    """
+    Plot worker counts grouped by operational state:
+    - stopped: workers in 'stopped' state
+    - ready: workers in 'idle' or 'stop_queued' states
+    - loading: all other states
+    """
+    # Initialize series for the three groups
+    stopped_counts = []
+    ready_counts = []
+    loading_counts = []
 
-    all_statuses = Counter()
-    for s in samples:
-        all_statuses.update(s)
+    for sample in samples:
+        stopped = 0
+        ready = 0
+        loading = 0
 
-    top = [k for k, _ in all_statuses.most_common(10)]
-    series: Dict[str, List[int]] = {k: [] for k in top}
-    series["OTHER"] = []
-
-    for s in samples:
-        other = 0
-        for k, v in s.items():
-            if k in series:
-                series[k].append(int(v))
+        for status, count in sample.items():
+            status_lower = status.lower()
+            if status_lower in ("stopped", "stopping"):
+                stopped += count
+            elif status_lower in ("idle"):
+                ready += count
             else:
-                other += int(v)
-        series["OTHER"].append(other)
-        for k in top:
-            if len(series[k]) < len(series["OTHER"]):
-                series[k].append(0)
+                loading += count
+
+        stopped_counts.append(stopped)
+        ready_counts.append(ready)
+        loading_counts.append(loading)
 
     fig, ax = plt.subplots()
-    for k, ys in series.items():
-        if k == "OTHER" and sum(ys) == 0:
-            continue
-        # Use status-specific color if available, otherwise use default
-        color = STATUS_COLORS.get(k.lower(), STATUS_COLORS.get(k, None))
-        ax.plot(t, ys, label=k, color=color, linewidth=2)
+    ax.plot(t, ready_counts, label="Ready", color="#2ca02c", linewidth=2)
+    ax.plot(t, loading_counts, label="Loading", color="#9467bd", linewidth=2)
+    ax.plot(t, stopped_counts, label="Stopped", color="#404040", linewidth=2)
 
     _mark_warmup(ax, warmup_start_s, warmup_end_s)
     _mark_cooldown(ax, cooldown_start_s, cooldown_end_s)
@@ -913,3 +901,4 @@ if __name__ == "__main__":
         )
     except KeyboardInterrupt:
         raise SystemExit(130)
+Z

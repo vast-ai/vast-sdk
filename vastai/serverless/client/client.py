@@ -55,14 +55,19 @@ class Serverless:
         match instance:
             case "prod":
                 self.autoscaler_url = "https://run.vast.ai"
+                self.vast_web_url   = "https://console.vast.ai"
             case "alpha":
                 self.autoscaler_url = "https://run-alpha.vast.ai"
+                self.vast_web_url   = "https://alpha.vast.ai"
             case "candidate":
                 self.autoscaler_url = "https://run-candidate.vast.ai"
+                self.vast_web_url   = "https://candidate.vast.ai"
             case "local":
                 self.autoscaler_url = "http://localhost:8080"
+                self.vast_web_url   = "https://alpha.vast.ai"
             case _:
                 self.autoscaler_url = "https://run.vast.ai"
+                self.vast_web_url   = "https://console.vast.ai"
 
         self.latencies = collections.deque(maxlen=50)
         self.debug = debug
@@ -148,7 +153,7 @@ class Serverless:
         try:
             result = await _make_request(
                 client=self,
-                url=self.VAST_WEB_URL,
+                url=self.vast_web_url,
                 route="/api/v0/endptjobs/",
                 api_key=self.api_key,
                 params={"client_id": "me"}
