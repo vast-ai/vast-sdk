@@ -424,6 +424,17 @@ class Serverless:
                             timeout=worker_timeout,
                             stream=stream
                         )
+                    except (aiohttp.ClientConnectorError, aiohttp.ServerDisconnectedError) as ex:
+                        # Worker is gone
+                        if session is not None:
+                            # Session is bound to this worker - can't re-route
+                            self.logger.error(f"Session worker unavailable ({type(ex).__name__})")
+                            session.open = False
+                            raise ConnectionError(f"Session worker unavailable: {ex}") from ex
+                        # No session - reset request_idx to force a fresh route
+                        self.logger.warning(f"Worker unavailable ({type(ex).__name__}), re-routing to new worker")
+                        request.status = "Retrying"
+                        continue
                     except Exception as ex:
                         self.logger.error(f"Worker request failed: {ex}")
                         request.status = "Retrying"
