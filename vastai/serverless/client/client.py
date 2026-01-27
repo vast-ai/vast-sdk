@@ -204,7 +204,8 @@ class Serverless:
         self,
         endpoint,
         session_id: int,
-        session_auth: str
+        session_auth: str,
+        timeout: float = 10.0
     ):
         try:
             result = await _make_request(
@@ -215,35 +216,41 @@ class Serverless:
                 body={"session_id": session_id, "session_auth": session_auth},
                 method="POST",
                 retries=1,
-                timeout=600,
+                timeout=timeout,
                 stream=False,
             )
 
             if not result.get("ok"):
-                self.logger.info(
-                    f"get_session returned HTTP {result.get('status')}: {result.get('text','')[:256]}"
-                )
-                return None
+                error_msg = f"Error on /session/get: {result.get('json', {}).get('error', result.get('text', 'Unknown error'))}"
+                raise Exception(error_msg)
 
             worker_response = result.get("json") or {}
+
+            auth_data = worker_response.get("auth_data")
+            if auth_data is None:
+                raise Exception("Missing auth_data in response")
 
             session = Session(
                 endpoint=endpoint,
                 session_id=session_id,
                 lifetime=worker_response.get("lifetime"),
                 expiration=worker_response.get("expiration"),
-                auth_data=worker_response.get("auth_data"),
-                url=worker_response.get("auth_data").get("url")
+                auth_data=auth_data,
+                url=auth_data.get("url")
             )
             return session
 
+        except asyncio.TimeoutError:
+            raise
         except Exception as ex:
-            self.logger.info(f"Got error message from get_session: {ex}")
-            return None
+            error_msg = f"Failed to get session {session_id}: {ex}"
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
 
     async def end_endpoint_session(
         self,
-        session: Session
+        session: Session,
+        timeout: float = 10.0
     ):
         try:
             self.logger.debug(f"Attempting to end session {session.session_id} at {session.url}")
@@ -255,20 +262,23 @@ class Serverless:
                 body={"session_id": session.session_id, "session_auth": session.auth_data},
                 method="POST",
                 retries=1,
-                timeout=15,
+                timeout=timeout,
                 stream=False,
             )
 
             if not result.get("ok"):
-                error_msg = result.get("json", {}).get("error", result.get("text", "Unknown error"))
-                raise Exception(f"Failed to end session: {error_msg}")
+                error_msg = f"Error on /session/end: {result.get('json', {}).get('error', result.get('text', 'Unknown error'))}"
+                raise Exception(error_msg)
 
             self.logger.debug(f"Successfully ended session {session.session_id}")
             return
 
+        except asyncio.TimeoutError:
+            raise
         except Exception as ex:
-            self.logger.error(f"Error ending session {session.session_id}: {ex}")
-            raise Exception(f"Failed to end session: {ex}") from ex
+            error_msg = f"Failed to end session {session.session_id}: {ex}"
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
 
     async def start_endpoint_session(
         self,
@@ -276,22 +286,42 @@ class Serverless:
         cost: int = 100,
         lifetime: float = 60,
         on_close_route: str = None,
-        on_close_payload: dict = None
+        on_close_payload: dict = None,
+        timeout: float = None
     ) -> Session:
-        session_start_response = await self.queue_endpoint_request(
-            endpoint=endpoint,
-            worker_route="/session/create",
-            worker_payload={"lifetime": lifetime, "on_close_route" : on_close_route, "on_close_payload" : on_close_payload },
-            cost=cost,
-        )
-        session_id = session_start_response.get("response").get("session_id")
-        expiration = session_start_response.get("response").get("expiration")
-        url = session_start_response.get("url")
-        auth_data = session_start_response.get("auth_data")
-        if session_id:
+        try:
+            session_start_response = await self.queue_endpoint_request(
+                endpoint=endpoint,
+                worker_route="/session/create",
+                worker_payload={"lifetime": lifetime, "on_close_route" : on_close_route, "on_close_payload" : on_close_payload },
+                cost=cost,
+                timeout=timeout,
+                worker_timeout=10.0
+            )
+            if not session_start_response.get("ok"):
+                error_msg = f"Error on /session/create: {session_start_response.get('json', {}).get('error', session_start_response.get('text', 'Unknown error'))}"
+                raise Exception(error_msg)
+            response = session_start_response.get("response")
+            if response is None:
+                raise Exception(f"No response from /session/create. Status {response.get('status')}")
+            session_id = session_start_response.get("response").get("session_id")
+            if session_id is None:
+                raise Exception("Missing session id")
+            expiration = session_start_response.get("response").get("expiration")
+            url = session_start_response.get("url")
+            if url is None:
+                raise Exception("Missing URL")
+            auth_data = session_start_response.get("auth_data")
+            if auth_data is None:
+                raise Exception("Missing auth data")
             return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, expiration=expiration, url=url, auth_data=auth_data)
-        else:
-            raise Exception(f"Failed to create session: {session_start_response['response']}")
+        except asyncio.TimeoutError:
+            raise
+        except Exception as ex:
+            error_msg = f"Failed to create session: {ex}"
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+
 
     def queue_endpoint_request(
         self,
@@ -302,6 +332,7 @@ class Serverless:
         serverless_request: Optional[ServerlessRequest] = None,
         cost: int = 100,
         timeout: Optional[float] = None,
+        worker_timeout: Optional[float] = 600,
         retry: bool = True,
         max_retries: int = None,
         stream: bool = False
@@ -390,7 +421,7 @@ class Serverless:
                             body=worker_request_body,
                             method="POST",
                             retries=1,  # avoid stacking retries with the outer loop
-                            timeout=600,
+                            timeout=worker_timeout,
                             stream=stream
                         )
                     except Exception as ex:

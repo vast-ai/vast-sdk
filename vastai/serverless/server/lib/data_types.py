@@ -11,6 +11,7 @@ import json
 import psutil
 import os
 import asyncio
+from data_types import Session
 
 """
 type variable representing an incoming payload to pyworker that will used to calculate load and will then
@@ -227,6 +228,8 @@ class RequestMetrics:
     status: str
     success: bool = False
     is_session: bool = False
+    session: Session = None
+    session_reqnum: Optional[int] = None
 
 @dataclass
 class BenchmarkResult:
@@ -354,5 +357,7 @@ class Session:
     on_close_payload: dict
     requests: list[web.Request] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
+    request_idx: int = 0 # Request idx associated with this session
+    session_reqnum: int = 0 # Internal per-session request count
 
 

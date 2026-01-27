@@ -8,7 +8,7 @@ from functools import cache
 import asyncio
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, ClientResponseError
 
-from .data_types import WorkerStatusData, SystemMetrics, ModelMetrics, RequestMetrics, Session
+from .data_types import WorkerStatusData, SystemMetrics, ModelMetrics, RequestMetrics
 from typing import Awaitable, NoReturn, List
 
 METRICS_UPDATE_INTERVAL = 1
@@ -54,26 +54,35 @@ class Metrics:
             await self._session.close()
             self._session = None
 
-    def _request_start(self, request: RequestMetrics, session: Session = None) -> None:
+    def _request_id(self, request: RequestMetrics) -> str:
+        """Return a formatted identifier for logging based on request type."""
+        if request.is_session:
+            return f"session {request.request_idx}"
+        elif request.session:
+            return f"request {request.session_reqnum} in session {request.session.request_idx}"
+        else:
+            return f"request {request.request_idx}"
+
+    def _request_start(self, request: RequestMetrics) -> None:
         """
         this function is called prior to forwarding a request to a model API.
         """
-        log.debug(f"Starting request {request.reqnum}")
+        log.debug(f"Starting {self._request_id(request)}")
         request.status = "Started"
         self.model_metrics.workload_pending += request.workload
         self.model_metrics.workload_received += request.workload
-        if session is None:
+        if not request.session:
             self.model_metrics.requests_recieved.add(request.reqnum)
             self.model_metrics.requests_working[request.reqnum] = request
         self.update_pending = True
 
-    def _request_end(self, request: RequestMetrics, session: Session = None) -> None:
+    def _request_end(self, request: RequestMetrics) -> None:
         """
         this function is called after handling of a request ends, regardless of the outcome
         """
-        log.debug(f"Ending request {request.reqnum}")
+        log.debug(f"Ending {self._request_id(request)}")
         self.model_metrics.workload_pending -= request.workload
-        if session is None:
+        if not request.session:
             self.model_metrics.requests_working.pop(request.reqnum, None)
             self.model_metrics.requests_deleting.append(request)
         self.last_request_served = time.time()
@@ -82,7 +91,7 @@ class Metrics:
         """
         this function is called after a response from model API is received and forwarded.
         """
-        log.debug(f"Request {request.reqnum} succeeded")
+        log.debug(f"{self._request_id(request)} succeeded")
         self.model_metrics.workload_served += request.workload
         request.status = "Success"
         request.success = True
@@ -92,7 +101,7 @@ class Metrics:
         """
         this function is called if model API returns an error
         """
-        log.error(f"Request {request.reqnum} errored: {message}")
+        log.error(f"{self._request_id(request)} errored: {message}")
         self.model_metrics.workload_errored += request.workload
         request.status = "Error"
         request.success = False
@@ -102,17 +111,18 @@ class Metrics:
         """
         this function is called if client drops connection before model API has responded
         """
-        log.debug(f"Canceling request {request.reqnum}")
+        log.debug(f"Canceling {self._request_id(request)}")
         self.model_metrics.workload_cancelled += request.workload
         request.success = True
         request.status = "Cancelled"
     
-    def _request_reject(self, request: RequestMetrics, session: Session = None):
+    def _request_reject(self, request: RequestMetrics) -> None:
         """
         this function is called if the current wait time for the model is above max_queue_time
         """
+        log.debug(f"Rejecting {self._request_id(request)}")
         self.model_metrics.workload_rejected += request.workload
-        if session is None:
+        if not request.session:
             self.model_metrics.requests_recieved.add(request.reqnum)
             self.model_metrics.requests_deleting.append(request)
         request.success = False
