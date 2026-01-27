@@ -180,6 +180,32 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
         else:
             raise Exception("error deserializing request data")
 
+@dataclass
+class Session:
+    session_id: str
+    lifetime: float # extends TTL per-request
+    auth_data: dict
+    expiration: float  # epoch seconds
+    on_close_route: str
+    on_close_payload: dict
+    requests: list[web.Request] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+    request_idx: int = 0 # Request idx associated with this session
+    session_reqnum: int = 0 # Internal per-session request count
+
+
+@dataclass
+class RequestMetrics:
+    """Tracks metrics for an active request."""
+    request_idx: int
+    reqnum: int
+    workload: float
+    status: str
+    success: bool = False
+    is_session: bool = False
+    session: Session = None
+    session_reqnum: Optional[int] = None
+
 
 @dataclass
 class SystemMetrics:
@@ -334,28 +360,3 @@ class LogAction(Enum):
     ModelError = 2
     Info = 3
 
-@dataclass
-class Session:
-    session_id: str
-    lifetime: float # extends TTL per-request
-    auth_data: dict
-    expiration: float  # epoch seconds
-    on_close_route: str
-    on_close_payload: dict
-    requests: list[web.Request] = field(default_factory=list)
-    created_at: float = field(default_factory=time.time)
-    request_idx: int = 0 # Request idx associated with this session
-    session_reqnum: int = 0 # Internal per-session request count
-
-
-@dataclass
-class RequestMetrics:
-    """Tracks metrics for an active request."""
-    request_idx: int
-    reqnum: int
-    workload: float
-    status: str
-    success: bool = False
-    is_session: bool = False
-    session: Session = None
-    session_reqnum: Optional[int] = None
