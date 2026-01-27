@@ -57,11 +57,11 @@ class Metrics:
     def _request_id(self, request: RequestMetrics) -> str:
         """Return a formatted identifier for logging based on request type."""
         if request.is_session:
-            return f"session {request.request_idx}"
+            return f"Session {request.request_idx}"
         elif request.session:
-            return f"request {request.session_reqnum} in session {request.session.request_idx}"
+            return f"Request {request.session_reqnum} in Session {request.session.request_idx}"
         else:
-            return f"request {request.request_idx}"
+            return f"Request {request.request_idx}"
 
     def _request_start(self, request: RequestMetrics) -> None:
         """
