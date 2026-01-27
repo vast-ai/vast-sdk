@@ -11,7 +11,6 @@ import json
 import psutil
 import os
 import asyncio
-from data_types import Session
 
 """
 type variable representing an incoming payload to pyworker that will used to calculate load and will then
@@ -220,18 +219,6 @@ class SystemMetrics:
 
 
 @dataclass
-class RequestMetrics:
-    """Tracks metrics for an active request."""
-    request_idx: int
-    reqnum: int
-    workload: float
-    status: str
-    success: bool = False
-    is_session: bool = False
-    session: Session = None
-    session_reqnum: Optional[int] = None
-
-@dataclass
 class BenchmarkResult:
     request_idx: int
     workload: float
@@ -361,3 +348,14 @@ class Session:
     session_reqnum: int = 0 # Internal per-session request count
 
 
+@dataclass
+class RequestMetrics:
+    """Tracks metrics for an active request."""
+    request_idx: int
+    reqnum: int
+    workload: float
+    status: str
+    success: bool = False
+    is_session: bool = False
+    session: Session = None
+    session_reqnum: Optional[int] = None
