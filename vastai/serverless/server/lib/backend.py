@@ -454,7 +454,7 @@ class Backend:
                 await event.wait()
 
                 # We are the next-up request in the queue
-                if request_metrics.session is not None:
+                if request_metrics.session is None:
                     log.debug(f"Starting work on request {request_metrics.reqnum}")
                 else:
                     log.debug(f"Starting work on request {request_metrics.session_reqnum} in session {request_metrics.session.request_idx}")
