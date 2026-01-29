@@ -1,4 +1,4 @@
-from vastai.serverless.remote.endpoint import Endpoint, benchmark, remote
+from vastai.serverless.remote.deployment import Deployment, benchmark, remote
 import os
 import random
 import nltk
@@ -92,7 +92,7 @@ async def llm_chat(prompt: str, max_tokens: int = 1024):
     return resp.json() 
 
 
-endpoint = Endpoint(
+deployment = Deployment(
     name="qwendpoint",
     image_name="vastai/vllm:@vastai-automatic-tag",
     max_workers=5,
@@ -112,6 +112,6 @@ endpoint = Endpoint(
     model_backend_error_logs=["RuntimeError: Engine"],
     model_log_file="/var/log/portal/vllm.log"
 )
-endpoint.on_start("entrypoint.sh &")
+deployment.on_start("entrypoint.sh &")
 
-endpoint.ready()
+deployment.ready()

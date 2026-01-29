@@ -1,4 +1,4 @@
-from vastai.serverless.remote.endpoint import *
+from vastai.serverless.remote.deployment import *
 
 @benchmark(
     endpoint_name="pytorch",
@@ -12,10 +12,10 @@ async def matmul(a,b):
     c_t = a_t @ b_t
     return c_t.to('cpu').tolist()
 
-ep = Endpoint(
+deployment = Deployment(
     'pytorch',
     image_name='pytorch/pytorch',
     search_params="compute_cap<1200 num_gpus=1"
 )
-ep.ready()
+deployment.ready()
 

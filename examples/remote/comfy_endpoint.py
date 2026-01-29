@@ -1,4 +1,4 @@
-from vastai.serverless.remote.endpoint import Endpoint, benchmark, remote
+from vastai.serverless.remote.deployment import Deployment, benchmark, remote
 import random
 import requests
 import sys
@@ -67,7 +67,7 @@ async def generate_image(prompt: str):
         return {"error": str(e)}
 
 
-endpoint = Endpoint(
+deployment = Deployment(
     name="comfy_endpoint",
     image_name="vastai/comfy:@vastai-automatic-tag",
     max_workers=5,
@@ -90,6 +90,6 @@ endpoint = Endpoint(
     model_backend_error_logs= ["MetadataIncompleteBuffer", "Value not in list: ", "[ERROR] Provisioning Script failed"],
     model_log_file="/var/log/portal/comfyui.log"
 )
-endpoint.on_start("entrypoint.sh &")
+deployment.on_start("entrypoint.sh &")
 
-endpoint.ready()
+deployment.ready()

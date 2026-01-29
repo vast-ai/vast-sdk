@@ -33,7 +33,7 @@ def main():
         os.execvp("python3", cmd)
 
     # For all other modes, set env var and run via runpy
-    os.environ["VAST_REMOTE_DISPATCH_MODE"] = mode
+    os.environ["VAST_DEPLOYMENT_MODE"] = mode
     if debug:
         os.environ["VAST_DEBUG"] = "1"
 

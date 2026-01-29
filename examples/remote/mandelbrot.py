@@ -1,4 +1,4 @@
-from vastai.serverless.remote.endpoint import *
+from vastai.serverless.remote.deployment import *
 import base64
 
 
@@ -82,12 +82,12 @@ async def render_mandelbrot(width: int = 1024, height: int = 768, max_iter: int 
         "device_used": device_used,
     }
 
-fractal_ep = Endpoint(
+deployment = Deployment(
     name="mandelbrot_pytorch",
     image_name="pytorch/pytorch",
     search_params="compute_cap<1200 num_gpus=1",
     autoscaler_instance="alpha"
 )
-fractal_ep.uv_pip_install(["Pillow"])
+deployment.uv_pip_install(["Pillow"])
 
-fractal_ep.ready()
+deployment.ready()

@@ -9,7 +9,7 @@ import sys
 import time
 import logging
 
-from vastai.serverless.remote.serialization import serialize,deserialize
+from vastai.serverless.remote.serialization import serialize, deserialize
 
 from typing import Optional
 from anyio import Path
@@ -18,12 +18,12 @@ from vastai.serverless.remote.worker_group import WorkerGroup
 from vastai.serverless.remote.template import Template
 
 
-mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
+mode = os.getenv("VAST_DEPLOYMENT_MODE", "client")
 debug = os.getenv("VAST_DEBUG", "") == "1"
 
 
 def _setup_logger(name: str) -> logging.Logger:
-    """Setup a logger with the same pattern as the Serverless client."""
+    """Setup a logger."""
     logger = logging.getLogger(name)
 
     if not logger.handlers:
@@ -43,7 +43,7 @@ def _setup_logger(name: str) -> logging.Logger:
 
     return logger
 
-REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME = {}
+REMOTE_FUNCTIONS_BY_ENDPOINT_NAME = {}
 
 BENCHMARK_CONFIG_BY_ENDPOINT_NAME = {}
 
@@ -105,8 +105,8 @@ def remote(endpoint_name: str):
             return async_wrapper
         elif get_mode() == "serve":
             # Register this function under the configured endpoint so that
-            # Endpoint.ready() in serve mode can expose it via Worker.
-            funcs_for_endpoint = REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME.setdefault(
+            # Deployment.ready() in serve mode can expose it via Worker.
+            funcs_for_endpoint = REMOTE_FUNCTIONS_BY_ENDPOINT_NAME.setdefault(
                 endpoint_name, {}
             )
 
@@ -191,7 +191,7 @@ def benchmark(
 
     return decorator
 
-class Endpoint:
+class Deployment:
     def __init__(
         self,
         name: str,
@@ -205,15 +205,16 @@ class Endpoint:
         image_name: str = "vastai/base-image:@vastai-automatic-tag",
         env_vars: dict = {},
         search_params: str = "",
-        disk_space: int = 128,
+        disk_space: int = 32,
         model_log_file: str = "/var/log/remote/debug.log",
-        model_backend_load_logs: str = ["Remote Dispatch ready"],
-        model_backend_error_logs: str = ["Remote Dispatch error"],
+        model_backend_load_logs: str = ["Deployment ready"],
+        model_backend_error_logs: str = ["Deployment error"],
         model_healthcheck_endpoint: str = "health",
         autoscaler_instance: str = "",
+        on_start: str = "",
     ):
         # --- Logging ---
-        self.logger = _setup_logger("Endpoint")
+        self.logger = _setup_logger("Deployment")
 
         # --- Endpoint Configuration ---
         self.name = name
@@ -233,11 +234,15 @@ class Endpoint:
         self.env_vars = env_vars
         self.search_params = search_params
         self.disk_space = disk_space
+
+        # User onstart script should run after the system onstart
+        self.user_onstart = on_start
         self.__onstart_cmd = ""
+
         self.__pip_packages_requested = False
 
         # --- Worker Configuration ---
-        self.remote_dispatch_functions = REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME.get(name, {})
+        self.remote_functions = REMOTE_FUNCTIONS_BY_ENDPOINT_NAME.get(name, {})
         benchmark_cfg = BENCHMARK_CONFIG_BY_ENDPOINT_NAME.get(name)
         if benchmark_cfg:
             self.benchmark_function_name = benchmark_cfg["function_name"]
@@ -265,7 +270,7 @@ class Endpoint:
     def on_start(self, cmd: str):
         self.__onstart_cmd += f"{cmd}\n"
 
-    def env_vars(self, vars: dict[str, str]):
+    def set_env_vars(self, vars: dict[str, str]):
         self.env_vars.update(vars)
 
     def __upload_deploy_script(self):
@@ -276,6 +281,7 @@ class Endpoint:
         with open(deploy_script, 'r') as deploy_script_file:
             blob_id = requests.post(vast_upload_url, headers = {'Authorization': f'Bearer {vast_upload_auth_token}'}, data = deploy_script_file.read()).text
         return vast_download_url_base.rstrip('/') + '/' + blob_id
+    
     def __install_remote_worker_script(self):
         worker_script_download_url = self.__upload_deploy_script()
         self.apt_get(["wget"])
@@ -286,12 +292,11 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
 
     def ready(self):
 
-
         if (mode := get_mode()) == "deploy":
             vast_api_key = os.environ.get("VAST_API_KEY")
             if not vast_api_key:
                 raise ValueError("VAST_API_KEY environment variable is not set")
-            self.logger.info(f"Starting deployment for endpoint '{self.name}'")
+            self.logger.info(f"Deploying '{self.name}'")
             self.logger.debug(f"Deployment config: image={self.image_name}, min_workers={self.min_workers}, max_workers={self.max_workers}")
             print("Deploying...")
 
@@ -344,7 +349,6 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
             worker_group.check_worker_group_status()
 
             self.logger.info(f"Deployment complete for endpoint '{self.name}'")
-            print("Deployment Ready!")
 
 
         elif mode == "serve":
@@ -352,7 +356,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
 
             remote_function_handlers : list[HandlerConfig] = []
 
-            for remote_func_name, remote_func in self.remote_dispatch_functions.items():
+            for remote_func_name, remote_func in self.remote_functions.items():
                 benchmark_config: BenchmarkConfig = None
                 if remote_func_name == self.benchmark_function_name:
                     if len(self.benchmark_dataset) > 0:
@@ -370,8 +374,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
 
                 remote_func_handler = HandlerConfig(
                     route=f"/remote/{remote_func_name}",
-                    is_remote_dispatch=True,
-                    remote_dispatch_function=remote_func,
+                    remote_function=remote_func,
                     allow_parallel_requests=False,
                     benchmark_config=benchmark_config,
                     max_queue_time=30.0
@@ -389,7 +392,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                 )
             )
 
-            # Build the worker handling our remote dispatch functions
+            # Build the worker handling our remote functions
             remote_worker = Worker(remote_worker_config)
 
             async def main():
@@ -406,7 +409,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
 
                 # Append instead of overwrite
                 async with aiofiles.open(model_log, "a") as f:
-                    await f.write("Remote Dispatch ready\n")
+                    await f.write("Deployment ready\n")
 
                 # Start background task(s)
                 if self.background_task:
@@ -425,7 +428,7 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
             vast_api_key = os.environ.get("VAST_API_KEY")
             if not vast_api_key:
                 raise ValueError("VAST_API_KEY environment variable is not set")
-            self.logger.info(f"Starting teardown for endpoint '{self.name}'")
+            self.logger.info(f"Starting teardown for deployment '{self.name}'")
 
             self.logger.debug("Tearing down endpoint group...")
             endpoint_group = EndpointGroup(
@@ -440,6 +443,5 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
             ).teardown_template()
             self.logger.debug("Template teardown complete")
 
-            self.logger.info(f"Teardown complete for endpoint '{self.name}'")
-            print("Remote Dispatch Endpoint Teardown Complete")
+            self.logger.info(f"Teardown complete for deployment '{self.name}'")
 
