@@ -1,8 +1,21 @@
 from typing import Optional
+import logging
 import requests
 import os
 import json
 import urllib.parse
+
+
+debug = os.getenv("VAST_DEBUG", "") == "1"
+log = logging.getLogger("Template")
+
+if debug and not any(isinstance(h, logging.StreamHandler) for h in log.handlers):
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(asctime)s] %(name)s - %(levelname)s - %(message)s'))
+    handler.setLevel(logging.DEBUG)
+    log.addHandler(handler)
+    log.setLevel(logging.DEBUG)
+    log.propagate = False
 
 
 class Template:
@@ -41,14 +54,22 @@ class Template:
 
             request_body["env"] = env_vars_string
 
+            log.debug(f"POST {self.WEBSERVER_URL}/api/v0/template/")
+            log.debug(f"Request body: {request_body}")
+
             response = requests.post(
                 url=f"{self.WEBSERVER_URL}/api/v0/template/",
                 json=request_body,
                 headers=headers,
             )
+            log.debug(f"Response status: {response.status_code}")
+            log.debug(f"Response body: {response.text}")
 
-            return response.json()["template"]["id"]
+            result = response.json()["template"]["id"]
+            log.debug(f"Template created with ID: {result}")
+            return result
         except Exception as ex:
+            log.error(f"Failed to create template: {ex}")
             raise RuntimeError(f"Failed to create template: {ex}")
 
     def teardown_template(self):
@@ -63,16 +84,28 @@ class Template:
             }
             encoded_params = urllib.parse.urlencode(params)
             url = f"{self.WEBSERVER_URL}/api/v0/template/?{encoded_params}"
+
+            log.debug(f"GET {url}")
             response = requests.get(url=url, headers=headers)
+            log.debug(f"Response status: {response.status_code}")
             response.raise_for_status()
 
             template_id_to_delete = None
             for template in response.json()["templates"]:
                 if "-endpoint" in template["name"]:
                     template_id_to_delete = template["id"]
+                    log.debug(f"Found template to delete: {template['name']} (ID: {template_id_to_delete})")
                     break
 
+            if template_id_to_delete is None:
+                log.warning("No template with '-endpoint' suffix found to delete")
+                return
+
+            log.debug(f"DELETE {self.WEBSERVER_URL}/api/v0/template/ with template_id={template_id_to_delete}")
             response = requests.delete(url=f"{self.WEBSERVER_URL}/api/v0/template/", headers=headers, json={"template_id": template_id_to_delete})
+            log.debug(f"Response status: {response.status_code}")
             response.raise_for_status()
+            log.debug(f"Template {template_id_to_delete} deleted successfully")
         except Exception as ex:
+            log.error(f"Failed to teardown template: {ex}")
             raise RuntimeError(f"Failed to teardown template: {ex}")

@@ -7,12 +7,24 @@ import subprocess
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: vast [deploy|serve|run|down] <script> [script-args...]", file=sys.stderr)
+        print("Usage: vast [deploy|serve|run|down] [--debug] <script> [script-args...]", file=sys.stderr)
         sys.exit(1)
 
     mode = sys.argv[1]
-    script_path = sys.argv[2]
-    script_args = sys.argv[3:]
+    remaining_args = sys.argv[2:]
+
+    # Check for --debug flag
+    debug = False
+    if "--debug" in remaining_args:
+        debug = True
+        remaining_args.remove("--debug")
+
+    if not remaining_args:
+        print("Usage: vast [deploy|serve|run|down] [--debug] <script> [script-args...]", file=sys.stderr)
+        sys.exit(1)
+
+    script_path = remaining_args[0]
+    script_args = remaining_args[1:]
 
     # For `run`, bypass runpy and just call python3
     if mode == "run":
@@ -22,6 +34,8 @@ def main():
 
     # For all other modes, set env var and run via runpy
     os.environ["VAST_REMOTE_DISPATCH_MODE"] = mode
+    if debug:
+        os.environ["VAST_DEBUG"] = "1"
 
     # Rebuild sys.argv for the script we're about to run
     sys.argv = [script_path] + script_args

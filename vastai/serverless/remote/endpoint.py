@@ -7,6 +7,7 @@ import requests
 import aiofiles
 import sys
 import time
+import logging
 
 from vastai.serverless.remote.serialization import serialize,deserialize
 
@@ -18,6 +19,29 @@ from vastai.serverless.remote.template import Template
 
 
 mode = os.getenv("VAST_REMOTE_DISPATCH_MODE", "client")
+debug = os.getenv("VAST_DEBUG", "") == "1"
+
+
+def _setup_logger(name: str) -> logging.Logger:
+    """Setup a logger with the same pattern as the Serverless client."""
+    logger = logging.getLogger(name)
+
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
+
+    if debug:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        handler.setLevel(logging.DEBUG)
+
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+    else:
+        logger.propagate = True
+
+    return logger
 
 REMOTE_DISPATCH_FUNCTIONS_BY_ENDPOINT_NAME = {}
 
@@ -185,8 +209,12 @@ class Endpoint:
         model_log_file: str = "/var/log/remote/debug.log",
         model_backend_load_logs: str = ["Remote Dispatch ready"],
         model_backend_error_logs: str = ["Remote Dispatch error"],
-        model_healthcheck_endpoint: str = "health"
+        model_healthcheck_endpoint: str = "health",
+        autoscaler_instance: str = "",
     ):
+        # --- Logging ---
+        self.logger = _setup_logger("Endpoint")
+
         # --- Endpoint Configuration ---
         self.name = name
         self.endpoint_group_id = endpoint_group_id
@@ -196,6 +224,9 @@ class Endpoint:
         self.min_load = min_load
         self.min_cold_load = min_cold_load
         self.target_util = target_util
+        self.autoscaler_instance = autoscaler_instance
+
+        self.logger.debug(f"Endpoint initialized: name={name}, autoscaler_instance={autoscaler_instance or 'default'}")
 
         # --- Template Configuration ---
         self.image_name = image_name
@@ -260,10 +291,15 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
             vast_api_key = os.environ.get("VAST_API_KEY")
             if not vast_api_key:
                 raise ValueError("VAST_API_KEY environment variable is not set")
+            self.logger.info(f"Starting deployment for endpoint '{self.name}'")
+            self.logger.debug(f"Deployment config: image={self.image_name}, min_workers={self.min_workers}, max_workers={self.max_workers}")
             print("Deploying...")
+
+            self.logger.debug("Uploading deploy script...")
             self.__install_remote_worker_script()
+            self.logger.debug("Deploy script uploaded successfully")
 
-
+            self.logger.debug(f"Creating template with image '{self.image_name}'...")
             template = Template(
                 vast_api_key,
                 self.image_name,
@@ -273,7 +309,9 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                 onstart_cmd=self.__onstart_cmd,
             )
             template_id = template.create_template()
+            self.logger.info(f"Template created with ID: {template_id}")
 
+            self.logger.debug(f"Creating endpoint group '{self.name}'...")
             endpoint_group = EndpointGroup(
                 vast_api_key,
                 self.name,
@@ -283,9 +321,12 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                 self.min_load,
                 self.min_cold_load,
                 self.target_util,
+                self.autoscaler_instance,
             )
             endpoint_group_id = endpoint_group.create_endpoint_group()
+            self.logger.info(f"Endpoint group created with ID: {endpoint_group_id}")
 
+            self.logger.debug(f"Creating worker group for endpoint ID {endpoint_group_id}...")
             worker_group = WorkerGroup(
                 vast_api_key,
                 self.cold_mult,
@@ -295,12 +336,14 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                 self.search_params,
                 self.target_util,
                 template_id,
+                self.autoscaler_instance,
             )
 
             worker_group.create_worker_group()
-            #INFO: blocks until worker group is ready
+            self.logger.info("Worker group created, waiting for workers to become ready...")
             worker_group.check_worker_group_status()
 
+            self.logger.info(f"Deployment complete for endpoint '{self.name}'")
             print("Deployment Ready!")
 
 
@@ -382,13 +425,21 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
             vast_api_key = os.environ.get("VAST_API_KEY")
             if not vast_api_key:
                 raise ValueError("VAST_API_KEY environment variable is not set")
+            self.logger.info(f"Starting teardown for endpoint '{self.name}'")
+
+            self.logger.debug("Tearing down endpoint group...")
             endpoint_group = EndpointGroup(
                 vast_api_key,
                 self.name,
             ).teardown_endpoint_group()
+            self.logger.debug("Endpoint group teardown complete")
+
+            self.logger.debug("Tearing down template...")
             template = Template(
                 vast_api_key,
             ).teardown_template()
+            self.logger.debug("Template teardown complete")
 
+            self.logger.info(f"Teardown complete for endpoint '{self.name}'")
             print("Remote Dispatch Endpoint Teardown Complete")
 

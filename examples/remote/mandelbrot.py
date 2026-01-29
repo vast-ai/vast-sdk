@@ -85,7 +85,8 @@ async def render_mandelbrot(width: int = 1024, height: int = 768, max_iter: int 
 fractal_ep = Endpoint(
     name="mandelbrot_pytorch",
     image_name="pytorch/pytorch",
-    search_params="compute_cap<1200 num_gpus=1"
+    search_params="compute_cap<1200 num_gpus=1",
+    autoscaler_instance="alpha"
 )
 fractal_ep.uv_pip_install(["Pillow"])
 

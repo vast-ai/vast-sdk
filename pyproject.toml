@@ -28,7 +28,6 @@ style = "pep440"
 vcs = "git"
 
 [tool.poetry.dependencies]
-<<<<<<< HEAD
 python = ">=3.9"
 jsonschema = ">=3.2"
 xdg = ">=1.0.0"
@@ -44,34 +43,11 @@ aiohttp = ">=3.9.1"
 aiodns = ">=3.6.0" 
 pycares = "=4.11.0"
 anyio = "~4.4"
-=======
-python = ">=3.8"
-jsonschema = ">=3.2"
-xdg = ">=1.0.0"
-borb = "~2.1.25"
-requests = "==2.32.3"
-python-dateutil = "==2.6.1"
-pytz = "*"
-urllib3 = "*"
-pyparsing = "*"
-fastapi = ">=0.110"
-uvicorn = { version = ">=0.24", extras = ["standard"] }
-aiohttp = { version = "==3.10.1", extras = ["speedups"] }
-asyncio = "*"
-anyio = "~4.4"
-lib = "~4.0"
->>>>>>> remote
 nltk = "~3.9"
 psutil = "~6.0"
 pycryptodome = "~3.20"
 transformers = "~4.52"
-<<<<<<< HEAD
 hf_transfer = ">=0.1.9"
-=======
-utils = "==1.0.*"
-hf_transfer = ">=0.1.9"
-aiofiles = ">=23.1"
->>>>>>> remote
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
