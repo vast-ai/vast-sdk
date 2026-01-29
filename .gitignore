@@ -7,3 +7,9 @@ env/
 poetry.lock
 local
 .env
+Dockerfile
+docker-compose.yml
+.dockerignore
+worker.py
+venv/
+*.png

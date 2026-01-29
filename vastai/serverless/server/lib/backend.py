@@ -596,7 +596,6 @@ class Backend:
                 return self._body
 
         return RemoteDispatchClientResponse(result) 
-
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
             return True

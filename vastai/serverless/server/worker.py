@@ -5,6 +5,7 @@ from aiohttp import web, ClientResponse
 import logging
 import json
 import random
+import inspect
 import logging
 from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type
 
@@ -50,6 +51,7 @@ class HandlerConfig:
     request_parser: Optional[RequestPayloadParser] = None
     response_generator: Optional[ClientResponseGenerator] = None
     workload_calculator: Optional[WorkloadCalculator] = None
+    is_remote_dispatch: bool = False
     remote_function: Optional[Callable] = None
 
 

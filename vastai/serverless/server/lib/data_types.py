@@ -138,7 +138,6 @@ class EndpointHandler(ABC, Generic[ApiPayload_T]):
         defines how to convert a model API response to a response to PyWorker client
         """
         pass
-
     @abstractmethod
     async def call_remote_dispatch_function(self, params: dict):
         """
