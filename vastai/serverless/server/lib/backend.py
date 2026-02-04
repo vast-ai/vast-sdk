@@ -2,7 +2,6 @@ import os
 import json
 import time
 import base64
-import subprocess
 import dataclasses
 import logging
 from asyncio import sleep, gather, Semaphore, create_task
@@ -18,7 +17,6 @@ import asyncio
 import string
 import random
 
-import requests
 from Crypto.Signature import pkcs1_15
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
@@ -44,7 +42,7 @@ LOG_POLL_INTERVAL = 0.1
 # Defines waiting interval for session garbage collection
 SESSION_GC_INTERVAL = 5.0
 BENCHMARK_INDICATOR_FILE = ".has_benchmark"
-MAX_PUBKEY_FETCH_ATTEMPTS = 3
+MAX_PUBKEY_FETCH_ATTEMPTS = 5
 
 
 @dataclasses.dataclass
@@ -310,17 +308,12 @@ class Backend:
         self.metrics = Metrics()
         self.metrics._set_version(self.version)
         self.metrics._set_mtoken(self.mtoken)
-        self._total_pubkey_fetch_errors = 0
-        self._pubkey = self._fetch_pubkey()
+        self._pubkey: Optional[RSA.RsaKey] = None
+        self.__pubkey_fetch_complete: asyncio.Event = asyncio.Event()
+        self.__pubkey_failed: bool = False
         self.__start_healthcheck: bool = False
         self.__healthcheck_ready: asyncio.Event = asyncio.Event()
         self.__healthcheck_succeeded: bool = False
-
-    @property
-    def pubkey(self) -> Optional[RSA.RsaKey]:
-        if self._pubkey is None:
-            self._pubkey = self._fetch_pubkey()
-        return self._pubkey
 
     @cached_property
     def session(self):
@@ -345,19 +338,37 @@ class Backend:
         return handler_fn
 
     #######################################Private#######################################
-    def _fetch_pubkey(self):
+    async def _fetch_pubkey(self) -> None:
+        """Fetch the serverless public key with exponential backoff retries."""
         report_addr = self.report_addr.rstrip("/")
-        command = ["curl", "-X", "GET", f"{report_addr}/pubkey/"]
-        try:
-            result = subprocess.check_output(command, universal_newlines=True)
-            log.debug("Serverless Public Key:")
-            log.debug(result)
-            key = RSA.import_key(result)
-            if key is not None:
-                return key
-        except (ValueError , subprocess.CalledProcessError) as e:
-            log.debug(f"Error downloading key: {e}")
-        self.backend_errored("Failed to get Serverless public key")
+        url = f"{report_addr}/pubkey/"
+        timeout = ClientTimeout(total=10)
+
+        for attempt in range(1, MAX_PUBKEY_FETCH_ATTEMPTS + 1):
+            try:
+                async with ClientSession(timeout=timeout) as client:
+                    async with client.get(url) as response:
+                        response.raise_for_status()
+                        text = await response.text()
+                        log.debug("Serverless Public Key:")
+                        log.debug(text)
+                        key = RSA.import_key(text)
+                        if key is not None:
+                            self._pubkey = key
+                            self.__pubkey_fetch_complete.set()
+                            log.debug(f"Successfully fetched pubkey on attempt {attempt}")
+                            return
+            except (ValueError, ClientConnectorError, Exception) as e:
+                log.debug(f"Error downloading key (attempt {attempt}/{MAX_PUBKEY_FETCH_ATTEMPTS}): {e}")
+                if attempt < MAX_PUBKEY_FETCH_ATTEMPTS:
+                    backoff = 2 ** (attempt - 1)  # 1, 2, 4, 8, 16 seconds
+                    log.debug(f"Retrying in {backoff} seconds...")
+                    await asyncio.sleep(backoff)
+
+        log.error(f"Failed to fetch pubkey after {MAX_PUBKEY_FETCH_ATTEMPTS} attempts")
+        self.__pubkey_failed = True
+        self.__pubkey_fetch_complete.set()  # Signal that fetch is complete (even though it failed)
+        self.backend_errored("Failed to get Serverless public key after all retry attempts")
        
 
     async def __handle_request(
@@ -552,7 +563,7 @@ class Backend:
 
     async def _start_tracking(self) -> None:
         await gather(
-            self.__read_logs(), self.metrics._send_metrics_loop(), self.__healthcheck(), self.metrics._send_delete_requests_loop(), self.__session_gc_loop(), 
+            self._fetch_pubkey(), self.__read_logs(), self.metrics._send_metrics_loop(), self.__healthcheck(), self.metrics._send_delete_requests_loop(), self.__session_gc_loop(),
         )
 
     def backend_errored(self, msg: str) -> None:
@@ -601,14 +612,15 @@ class Backend:
         if self.unsecured is True:
             return True
 
-        def verify_signature(message, signature):
-            if self.pubkey is None:
-                log.debug(f"No Public Key!")
-                return False
+        # Reject early if pubkey was never loaded
+        if self._pubkey is None:
+            log.error("Rejecting request: pubkey not loaded")
+            return False
 
+        def verify_signature(message, signature):
             h = SHA256.new(message.encode())
             try:
-                pkcs1_15.new(self.pubkey).verify(h, base64.b64decode(signature))
+                pkcs1_15.new(self._pubkey).verify(h, base64.b64decode(signature))
                 return True
             except (ValueError, TypeError):
                 return False
@@ -720,6 +732,19 @@ class Backend:
                                 await asyncio.sleep(10)
                                 log.debug("Wait complete - marking model as loaded")
 
+                            # Wait for pubkey to be fetched before proceeding (unless unsecured)
+                            if not self.unsecured:
+                                if not self.__pubkey_fetch_complete.is_set():
+                                    log.debug("Waiting for pubkey to be fetched...")
+                                    try:
+                                        await asyncio.wait_for(self.__pubkey_fetch_complete.wait(), timeout=60.0)
+                                    except asyncio.TimeoutError:
+                                        raise Exception("Timed out waiting for pubkey fetch (waited 60s)")
+                                    log.debug("Pubkey fetch complete")
+                                if self.__pubkey_failed:
+                                    raise Exception("Cannot mark model as loaded: pubkey fetch failed")
+
+                            # Mark worker ready!
                             self.metrics._model_loaded(
                                 max_throughput=max_throughput,
                             )
