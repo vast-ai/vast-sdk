@@ -83,6 +83,21 @@ class Backend:
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
     max_sessions: int = dataclasses.field(default=-1)
         
+    async def pyworker_update_handler(self, request: web.Request) -> web.Response:
+        # Verify authorization header matches mtoken
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != self.mtoken:
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        try:
+            async with await open_file("/.force_update", "w") as f:
+                await f.write("")
+        except Exception as e:
+            log.error(f"Failed to write /.force_update: {e}")
+            return web.json_response({"error": f"failed to write file: {e}"}, status=500)
+
+        return web.json_response({"ok": True}, status=200)
+
     async def session_health_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
