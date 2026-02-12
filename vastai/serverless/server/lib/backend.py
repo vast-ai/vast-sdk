@@ -86,7 +86,8 @@ class Backend:
     async def pyworker_update_handler(self, request: web.Request) -> web.Response:
         # Verify authorization header matches mtoken
         auth_header = request.headers.get("Authorization", "")
-        if auth_header != self.mtoken:
+        token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else auth_header
+        if token != self.mtoken:
             return web.json_response({"error": "unauthorized"}, status=401)
 
         try:
