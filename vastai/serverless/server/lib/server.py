@@ -64,7 +64,10 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
         )
 
         log.debug(f"Starting HTTP-only server for /session/end on port {http_port}")
-        await gather(site.start(), http_site.start(), backend._start_tracking())
+        await site.start()
+        await http_site.start()
+        log.debug("HTTP servers started, beginning log tracking")
+        await backend._start_tracking()
 
     except Exception as e:
         err_msg = f"Worker Server failed to launch: {e}"

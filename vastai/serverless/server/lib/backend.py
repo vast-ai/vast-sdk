@@ -324,10 +324,6 @@ class Backend:
         self.metrics = Metrics()
         self.metrics._set_version(self.version)
         self.metrics._set_mtoken(self.mtoken)
-        # REMOVE ME!!! ###################
-        # This is just for testing!
-        log.debug(f"mtoken: {self.mtoken}")
-        ##################################
         self._pubkey: Optional[RSA.RsaKey] = None
         self.__pubkey_fetch_complete: asyncio.Event = asyncio.Event()
         self.__pubkey_failed: bool = False
