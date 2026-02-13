@@ -260,7 +260,7 @@ class Metrics:
                 "\n".join(
                     [
                         "\n" + "#" * 20 + " Worker Status " + "#" * 20,
-                        "\n" + "I'M A OLD VERSION!" + "#" * 18,
+                        "\n" + "I'M A NEW VERSION!" + "#" * 18 + "\n",
                         f"{json.dumps(log_data, indent=2)}",
                         "#" * 55,
                     ]
