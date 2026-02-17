@@ -77,10 +77,10 @@ class Endpoint:
                 client=self.client,
                 url=self.client.autoscaler_url,
                 route="/route/",
-                api_key=self.api_key,
+                api_key=self.client.api_key,
                 body={
                     "endpoint": self.name,
-                    "api_key": self.api_key,
+                    "api_key": self.client.api_key,
                     "cost": cost,
                     "request_idx": req_idx,
                     "replay_timeout": timeout,
