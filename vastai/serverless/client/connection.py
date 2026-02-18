@@ -113,7 +113,6 @@ async def _make_request(
     method = method.upper()
     body = body or {}
     params = {**(params or {})}
-    params["api_key"] = api_key
 
     headers = {"Authorization": f"Bearer {api_key}"}
 

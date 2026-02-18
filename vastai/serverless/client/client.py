@@ -167,7 +167,7 @@ class Serverless:
         response = result.get("json") or {}
         endpoints = []
         for e in response.get("results", []):
-            endpoints.append(Endpoint(client=self, name=e["endpoint_name"], id=e["id"], api_key=e["api_key"]))
+            endpoints.append(Endpoint(client=self, name=e["endpoint_name"], id=e["id"]))
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
 
@@ -180,8 +180,8 @@ class Serverless:
                 client=self,
                 url=self.autoscaler_url,
                 route="/get_endpoint_workers/",
-                api_key="",
-                body={"id": endpoint.id, "api_key": self.api_key},
+                api_key=self.api_key,
+                body={"id": endpoint.id},
                 method="POST",
                 timeout=30.0
             )
@@ -424,7 +424,7 @@ class Serverless:
                             client=self,
                             url=worker_url,
                             route=worker_route,
-                            api_key=endpoint.api_key,
+                            api_key="", # We use auth_data in the body for auth, not API keys
                             body=worker_request_body,
                             method="POST",
                             retries=1,  # avoid stacking retries with the outer loop
