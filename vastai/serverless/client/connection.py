@@ -5,7 +5,7 @@ import random
 import json
 from typing import AsyncIterator, Dict, Optional, Any
 
-_JITTER_CAP_SECONDS = 5.0
+_JITTER_CAP_SECONDS = 30.0
 
 def _retryable(status: int) -> bool:
     return status in (408, 429) or (500 <= status < 600)
