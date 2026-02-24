@@ -2751,7 +2751,10 @@ def create__template(args):
     try:
         rj = r.json()
         if rj["success"]:
-            print(f"New Template: {rj['template']}")
+            if args.raw:
+                return rj['template']
+            else:
+                print(f"New Template: {rj['template']}")
         else:
             print(rj['msg'])
     except requests.exceptions.JSONDecodeError:
@@ -4521,8 +4524,8 @@ def search__templates(args):
         r.raise_for_status()
     elif 'json' in r.headers.get("Content-Type"):
         rows = r.json().get('templates', [])
-        if True: #args.raw:
-            print(json.dumps(rows, indent=1, sort_keys=True))
+        if args.raw:
+            return rows
         else:
             display_table(rows, displayable_fields)
     else:
