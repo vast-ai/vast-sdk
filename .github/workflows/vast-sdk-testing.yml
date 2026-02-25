@@ -18,22 +18,43 @@ concurrency:
   cancel-in-progress: true
 
 
-
-
-
-# --------------------------------------------------------------------------
-#                           Serverless Testing
-# --------------------------------------------------------------------------
 jobs:
-  test:
+  # --------------------------------------------------------------------------
+  #                           Detect Changes
+  # --------------------------------------------------------------------------
+  # Change filter job to detect changes in serverless directory.
+  # We only want to run the serverless tests if the serverless sdk code
+  # or serverless tests have changed.
+  detect-serverless-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      serverless: ${{ steps.filter.outputs.serverless }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            serverless:
+              - 'vastai/serverless/**'
+              - 'tests/serverless/**'
+
+  # --------------------------------------------------------------------------
+  #                           Serverless Testing
+  # --------------------------------------------------------------------------
+  serverless:
+    needs: detect-serverless-changes
+    if: needs.detect-serverless-changes.outputs.serverless == 'true'
     runs-on: ubuntu-latest
 
+    #  Clone repo into the workflow.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # required for poetry-dynamic-versioning on main SDK
-
+          fetch-depth: 0  # Grab full git history for poetry-dynamic-versioning on main SDK
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -47,5 +68,5 @@ jobs:
       - name: Install test dependencies
         run: poetry install -C tests --no-interaction
 
-      - name: Run tests
-        run: poetry run -C tests pytest -vvv -s --tb=short --log-cli-level=INFO
+      - name: Run serverless tests
+        run: poetry run -C tests pytest -vvv -s --tb=short --log-cli-level=INFO serverless
