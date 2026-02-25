@@ -43,7 +43,7 @@ jobs:
   # --------------------------------------------------------------------------
   #                           Serverless Testing
   # --------------------------------------------------------------------------
-  serverless:
+  serverless-testing:
     needs: detect-serverless-changes
     if: needs.detect-serverless-changes.outputs.serverless == 'true'
     runs-on: ubuntu-latest
