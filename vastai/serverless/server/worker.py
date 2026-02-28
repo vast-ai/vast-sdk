@@ -342,21 +342,12 @@ class Worker:
 
     def __init__(self, config: WorkerConfig):
         
-        # Configure logging for the pyworker internals.
-        # Force-override any prior basicConfig (e.g. from vastai CLI code) by
-        # setting the root logger level and adding a handler if none exist.
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)
-        if not root_logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter(
-                fmt="%(asctime)s[%(levelname)-5s] %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            ))
-            root_logger.addHandler(handler)
-        else:
-            for handler in root_logger.handlers:
-                handler.setLevel(logging.DEBUG)
+        # Configure logging for the pyworker internals
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s[%(levelname)-5s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
         
         handler_factory = EndpointHandlerFactory(config)
         

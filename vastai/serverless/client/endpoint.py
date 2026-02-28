@@ -12,7 +12,7 @@ class Endpoint:
     def __repr__(self):
         return f"<Endpoint {self.name} (id={self.id})>"
 
-    def __init__(self, client, name, id):
+    def __init__(self, client, name, id, api_key):
         if client is None:
             raise ValueError("Endpoint cannot be created without client reference")
         if not name:
@@ -22,6 +22,7 @@ class Endpoint:
         self.client = client
         self.name = name
         self.id = id
+        self.api_key = api_key
 
     def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True, stream: bool = False, timeout: float = None, session: "Session" = None):
         return self.client.queue_endpoint_request(
@@ -76,9 +77,10 @@ class Endpoint:
                 client=self.client,
                 url=self.client.autoscaler_url,
                 route="/route/",
-                api_key=self.client.api_key,
+                api_key=self.api_key,
                 body={
                     "endpoint": self.name,
+                    "api_key": self.api_key,
                     "cost": cost,
                     "request_idx": req_idx,
                     "replay_timeout": timeout,

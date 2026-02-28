@@ -749,8 +749,8 @@ class Backend:
                                 max_throughput=max_throughput,
                             )
                         except Exception as e:
-                            log.debug(f"Benchmark failed with error: {e}")
-                            self.backend_errored(f"Benchmark failed with error: {e}")
+                            log.debug(f"Benchmark failed with errror: {e}")
+                            self.backend_errored(f"Benchmark failed with errror: {e}")
                     case LogAction.ModelError if msg in log_line:
                         log.debug(f"Got log line indicating error: {log_line}")
                         self.backend_errored(msg)
