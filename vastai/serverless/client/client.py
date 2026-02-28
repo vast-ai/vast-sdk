@@ -167,7 +167,7 @@ class Serverless:
         response = result.get("json") or {}
         endpoints = []
         for e in response.get("results", []):
-            endpoints.append(Endpoint(client=self, name=e["endpoint_name"], id=e["id"]))
+            endpoints.append(Endpoint(client=self, name=e["endpoint_name"], id=e["id"], api_key=e["api_key"]))
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
 
@@ -175,37 +175,30 @@ class Serverless:
         if not isinstance(endpoint, Endpoint):
             raise ValueError("endpoint must be an Endpoint")
 
-        try:
-            result = await _make_request(
-                client=self,
-                url=self.autoscaler_url,
-                route="/get_endpoint_workers/",
-                api_key=self.api_key,
-                body={"id": endpoint.id},
-                method="POST",
-                timeout=30.0
-            )
-        except Exception as ex:
-            raise RuntimeError(f"Failed to get endpoint workers:\nReason={ex}")
+        url = f"{self.autoscaler_url}/get_endpoint_workers/"
+        payload = {"id": endpoint.id, "api_key": self.api_key}
 
-        if not result.get("ok"):
-            raise RuntimeError(f"get_endpoint_workers failed: HTTP {result.get('status')} - {result.get('text','')}")
+        async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(f"get_endpoint_workers failed: HTTP {resp.status} - {text}")
 
-        data = result.get("json")
+            data = await resp.json(content_type=None)
 
-        # If error message from authenticate_endpoint_apikey_by_id occurs, there is a possibility that
-        # the endpoint's worker instances are not ready to be queried. If an error message occurs,
-        # return an empty list and print the error message to the user. The endpoint get_endpoint_workers
-        # should normally return a list of dictionaries containing worker instance information.
-        if isinstance(data, dict):
-            if 'error_msg' in data.keys():
-                self.logger.warning(f"Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again.")
-                return []
+            # If error message from authenticate_endpoint_apikey_by_id occurs, there is a possibility that
+            # the endpoint's worker instances are not ready to be queried. If an error message occurs,
+            # return an empty list and print the error message to the user. The endpoint get_endpoint_workers
+            # should normally return a list of dictionaries containing worker instance information.
+            if isinstance(data,dict):
+                if 'error_msg' in data.keys():
+                    self.logger.warning(f"Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again.")
+                    return []
 
-        if not isinstance(data, list):
-            raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
+            
+            if not isinstance(data, list):
+                raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
 
-        return [Worker.from_dict(item) for item in data]
+            return [Worker.from_dict(item) for item in data]
 
     async def get_endpoint_session(
         self,
@@ -424,7 +417,7 @@ class Serverless:
                             client=self,
                             url=worker_url,
                             route=worker_route,
-                            api_key="", # We use auth_data in the body for auth, not API keys
+                            api_key=endpoint.api_key,
                             body=worker_request_body,
                             method="POST",
                             retries=1,  # avoid stacking retries with the outer loop
