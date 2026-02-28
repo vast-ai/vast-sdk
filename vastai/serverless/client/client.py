@@ -395,7 +395,7 @@ class Serverless:
                             request_idx = route.request_idx or request_idx
 
                             attempt += 1
-                            poll_interval = random.uniform(0.1, min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval))
+                            poll_interval = random.uniform(0.1, min(2 ** min(attempt, 20) + random.uniform(0, 1), self.max_poll_interval))
                             self.logger.debug(f"Polling route, attempt {attempt}")
 
                         worker_url = route.get_url()
@@ -455,7 +455,7 @@ class Serverless:
                                 raise asyncio.TimeoutError(f"Request timed out after {time.time() - start_time:.1f}s")
 
                             request.status = "Retrying"
-                            await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
+                            await asyncio.sleep(min(2 ** min(total_attempts, 20) + random.uniform(0, 1), self.max_poll_interval))
                             continue
 
                         # Return the raw HTTP result to the caller
