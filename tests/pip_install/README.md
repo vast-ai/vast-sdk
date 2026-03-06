@@ -10,7 +10,7 @@ behavior across all install/uninstall scenarios.
 3. **Both installed, uninstall `vastai-sdk`** — everything still works (no file collision)
 4. **Both installed, uninstall `vastai`** — both imports correctly break
 5. **Only `vastai`, then uninstall** — clean removal, no leftover files
-6. **File ownership** — `vastai_sdk/` files owned exclusively by `vastai`, not `vastai-sdk`
+6. **File ownership** — both `vastai` and `vastai-sdk` claim `vastai_sdk/` files (expected, since the files are identical)
 
 ## Running
 
