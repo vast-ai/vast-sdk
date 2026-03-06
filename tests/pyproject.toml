@@ -13,10 +13,14 @@ python = ">=3.9"
 pytest = "^8.0.0"
 pytest-asyncio = "^0.24.0"
 pytest-cov = "^6.0.0"
-vastai-sdk = { path = "..", develop = true }
+vastai = { path = "..", develop = true }
 
 [tool.pytest.ini_options]
 testpaths = ["."]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "live: tests that hit the real Vast.ai API (require VAST_API_KEY)",
+]
+addopts = "-m 'not live' --tb=short -q"
