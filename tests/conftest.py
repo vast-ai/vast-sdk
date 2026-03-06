@@ -5,6 +5,8 @@ conftest.py for reuse across test files.
 """
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from vastai.serverless.server.worker import (
@@ -97,3 +99,134 @@ def worker_config_with_handler():
         )
 
     return _make
+
+
+# ---------------------------------------------------------------------------
+# Connection (vastai.serverless.client.connection) fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def make_sse_response():
+    """Factory: create mock aiohttp response with SSE/JSONL stream content.
+
+    Returns a callable that accepts an iterable of bytes chunks and returns
+    a mock response whose content.iter_any yields those chunks.
+
+    Use for _iter_sse_json tests.
+    """
+
+    def _make(chunks):
+        async def mock_iter():
+            for c in chunks:
+                yield c
+
+        mock_resp = MagicMock()
+        mock_resp.content.iter_any = mock_iter
+        return mock_resp
+
+    return _make
+
+
+@pytest.fixture
+def make_mock_http_response():
+    """Factory: create mock aiohttp response for async with session.get/post.
+
+    Returns a callable that accepts status, text, json, json_side_effect
+    and returns a mock response configured for use in 'async with' context.
+    Use for _make_request tests.
+    """
+
+    def _make(
+        status: int = 200,
+        text: str = "",
+        json_data=None,
+        json_side_effect=None,
+    ):
+        mock_resp = MagicMock()
+        mock_resp.status = status
+        mock_resp.headers = {}
+        mock_resp.text = AsyncMock(return_value=text)
+        mock_resp.json = AsyncMock(
+            return_value=json_data,
+            side_effect=json_side_effect,
+        )
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=None)
+        return mock_resp
+
+    return _make
+
+
+@pytest.fixture
+def make_mock_make_request_client():
+    """Factory: create mock session and client for _make_request.
+
+    Returns a callable that accepts a mock response and returns
+    (mock_session, mock_client) configured for _make_request.
+    """
+
+    def _make(mock_resp):
+        mock_session = MagicMock()
+        mock_session.get = AsyncMock(return_value=mock_resp)
+        mock_session.post = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client._get_session = AsyncMock(return_value=mock_session)
+        mock_client.get_ssl_context = AsyncMock(return_value=None)
+
+        return mock_session, mock_client
+
+    return _make
+
+
+@pytest.fixture
+def patch_build_kwargs():
+    """Patch _build_kwargs for _make_request tests.
+
+    Yields the mock; tests run with _build_kwargs patched to return
+    standard kwargs (headers, params, timeout).
+    """
+    with patch(
+        "vastai.serverless.client.connection._build_kwargs"
+    ) as mock_build:
+        mock_build.return_value = {
+            "headers": {},
+            "params": {},
+            "timeout": MagicMock(),
+        }
+        yield mock_build
+
+
+@pytest.fixture
+def make_mock_session():
+    """Factory: create mock aiohttp session for _open_once tests.
+
+    Returns a callable that accepts get_returns and post_returns (optional)
+    and returns a mock session with get/post configured.
+    """
+
+    def _make(get_returns=None, post_returns=None):
+        mock_session = MagicMock()
+        mock_session.get = AsyncMock(return_value=get_returns or MagicMock())
+        mock_session.post = AsyncMock(return_value=post_returns or MagicMock())
+        return mock_session
+
+    return _make
+
+
+@pytest.fixture
+def build_kwargs_defaults():
+    """Default kwargs for _build_kwargs tests.
+
+    Returns a dict of common defaults; tests can override as needed.
+    """
+    return {
+        "headers": {},
+        "params": {},
+        "ssl_context": None,
+        "timeout": 30.0,
+        "body": None,
+        "method": "GET",
+        "stream": False,
+    }
