@@ -164,3 +164,4 @@ class TestWorker:
                 Worker(config)
 
         mock_handler.setLevel.assert_called_once_with(logging.DEBUG)
+

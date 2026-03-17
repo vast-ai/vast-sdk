@@ -560,7 +560,7 @@ class TestEndpointHandlerFactoryCreatedPayload:
         handler = factory.get_handler("/")
         with pytest.raises(JsonDataException) as exc_info:
             handler.payload_cls().from_json_msg([1, 2, 3])
-        assert "payload must be a dictionary" in str(exc_info.value.message)
+        assert exc_info.value.message.get("data") == "payload must be a dictionary"
 
     def test_payload_count_workload_default(
         self, worker_config_with_handler
@@ -591,9 +591,9 @@ class TestEndpointHandlerFactoryCreatedPayload:
         Verifies that count_workload uses workload_calculator when provided.
 
         This test verifies by:
-        1. Creating HandlerConfig with workload_calculator that returns 42.0
+        1. Creating HandlerConfig with workload_calculator that returns 7.0 for input
         2. Creating payload and calling count_workload()
-        3. Asserting result == 42.0
+        3. Asserting result == 7.0
 
         Assumptions:
         - workload_calculator(input) is called and its return used
