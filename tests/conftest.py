@@ -17,6 +17,52 @@ from vastai.serverless.server.worker import (
 
 
 # ---------------------------------------------------------------------------
+# Server Worker test helpers (mocks for generate_client_response etc.)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def make_mock_web_request():
+    """Factory: create a mock object for aiohttp web.Request in handler tests."""
+    def _make(spec_request: bool = False):
+        if spec_request:
+            from aiohttp import web
+            return MagicMock(spec=web.Request)
+        return MagicMock()
+    return _make
+
+
+@pytest.fixture
+def make_mock_model_response():
+    """Factory: create a mock model response for generate_client_response tests.
+
+    Returns a callable that accepts content_type, body, status, and optional
+    stream_chunks. If stream_chunks is provided, content.iter_any is an async
+    generator yielding those chunks; otherwise read() returns body.
+    """
+    def _make(
+        content_type: str = "application/json",
+        body: bytes | None = None,
+        status: int = 200,
+        stream_chunks: list[bytes] | None = None,
+    ):
+        mock = MagicMock()
+        mock.content_type = content_type
+        mock.status = status
+        mock.headers = MagicMock()
+        mock.headers.get = MagicMock(return_value=None)
+        if stream_chunks is not None:
+            async def _iter():
+                for c in stream_chunks:
+                    yield c
+            mock.content.iter_any = _iter
+        else:
+            mock.read = AsyncMock(return_value=body or b"")
+        return mock
+    return _make
+
+
+# ---------------------------------------------------------------------------
 # Client Worker (vastai.serverless.client.worker) fixtures
 # ---------------------------------------------------------------------------
 
@@ -92,6 +138,25 @@ def worker_config_with_handler():
         ]
         if extra_handlers:
             handlers.extend(extra_handlers)
+        return WorkerConfig(
+            model_server_url="http://localhost",
+            model_server_port=8000,
+            handlers=handlers,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def worker_config_from_handlers():
+    """Factory fixture: build WorkerConfig from an explicit list of HandlerConfigs.
+
+    Returns a callable that accepts a list of HandlerConfig and returns WorkerConfig
+    with standard model_server_url and model_server_port. Use when tests need custom
+    handler options (request_parser, response_generator, payload_class, etc.).
+    """
+
+    def _make(handlers: list[HandlerConfig]) -> WorkerConfig:
         return WorkerConfig(
             model_server_url="http://localhost",
             model_server_port=8000,
