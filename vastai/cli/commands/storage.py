@@ -19,21 +19,7 @@ from vastai.api import storage as storage_api
 from vastai.api import offers as offers_api
 
 
-def _get_parser():
-    from vastai.cli.main import parser
-    return parser
-
-
-def get_client(args):
-    """Create a VastClient from parsed CLI args."""
-    from vastai.api.client import VastClient
-    return VastClient(
-        api_key=args.api_key,
-        server_url=args.url,
-        retry=args.retry,
-        explain=getattr(args, 'explain', False),
-        curl=getattr(args, 'curl', False),
-    )
+from vastai.cli.utils import get_parser as _get_parser, get_client  # noqa: F401
 
 
 parser = _get_parser()
@@ -83,7 +69,7 @@ parser = _get_parser()
 )
 def copy(args):
     """Transfer data from one instance to another."""
-    from vastai.cli.util import parse_vast_url
+    from vastai.utils import parse_vast_url
     client = get_client(args)
 
     (src_id, src_path) = parse_vast_url(args.src)

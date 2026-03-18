@@ -36,8 +36,8 @@ PYPI_BASE_PATH = "https://pypi.org"
 # INFO - Change to False if you don't want to check for update each run.
 should_check_for_update = False
 
-# Server URL default
-server_url_default = os.getenv("VAST_URL") or "https://console.vast.ai"
+# Server URL default — canonical definition lives in api/client.py
+from vastai.api.client import server_url_default  # noqa: E402, F401
 
 # Sentinel for API key argument default (to distinguish "not provided" from None)
 api_key_guard = object()
@@ -624,7 +624,7 @@ def convert_dates_to_timestamps(args):
             start_date_txt = start_date.isoformat()
             start_timestamp = time.mktime(start_date.timetuple())
         except ValueError as e:
-            print(f"Warning: Invalid start date format! Ignoring end date! \n {str(e)}")
+            print(f"Warning: Invalid start date format! Ignoring start date! \n {str(e)}")
 
     return start_timestamp, end_timestamp
 

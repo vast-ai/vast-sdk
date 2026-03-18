@@ -159,9 +159,12 @@ class VastAI:
             no_default: Skip default filters (verified, rentable, etc.).
         """
         from vastai.api.query import parse_query, offers_fields, offers_alias, offers_mult
+        from vastai.utils import preprocess_search_query, postprocess_search_results
 
-        # Parse string query into dict
+        # Expand georegion/chunked directives before parsing
+        georegion_active, chunked = False, False
         if isinstance(query, str):
+            georegion_active, chunked, query = preprocess_search_query(query)
             query = parse_query(query, {}, offers_fields, offers_alias, offers_mult)
 
         # Parse order string into list
@@ -186,10 +189,15 @@ class VastAI:
         elif isinstance(order, list):
             order_list = order
 
-        return offers.search_offers(
+        results = offers.search_offers(
             self.client, query=query, offer_type=type, order=order_list,
             limit=limit, storage=storage, no_default=no_default, **kwargs,
         )
+
+        if isinstance(results, list):
+            results = postprocess_search_results(results, georegion_active=georegion_active, chunked=chunked)
+
+        return results
 
     def search_templates(self, query: Optional[str] = None) -> list[dict]:
         """Search for templates."""
@@ -232,8 +240,11 @@ class VastAI:
             no_default: Skip default filters (verified, rentable, etc.).
         """
         from vastai.api.query import parse_query, offers_fields, offers_alias, offers_mult
+        from vastai.utils import preprocess_search_query, postprocess_search_results
 
+        georegion_active, chunked = False, False
         if isinstance(query, str):
+            georegion_active, chunked, query = preprocess_search_query(query)
             query = parse_query(query, {}, offers_fields, offers_alias, offers_mult)
 
         order_list = None
@@ -257,10 +268,15 @@ class VastAI:
         elif isinstance(order, list):
             order_list = order
 
-        return offers.search_offers_new(
+        results = offers.search_offers_new(
             self.client, query=query, offer_type=type, order=order_list,
             limit=limit, storage=storage, no_default=no_default, **kwargs,
         )
+
+        if isinstance(results, list):
+            results = postprocess_search_results(results, georegion_active=georegion_active, chunked=chunked)
+
+        return results
 
     def launch_instance(self, gpu_name: str, num_gpus: str, image: str, **kwargs) -> dict:
         """Launch the top instance from search offers matching the given criteria."""
@@ -515,7 +531,7 @@ class VastAI:
             src: Source in vast URL format, e.g. "instance_id:/path" or just "/local/path".
             dst: Destination in vast URL format.
         """
-        from vastai.cli.util import parse_vast_url
+        from vastai.utils import parse_vast_url
         src_id, src_path = parse_vast_url(src)
         dst_id, dst_path = parse_vast_url(dst)
         return storage.copy(self.client, src_id, dst_id, src_path, dst_path)

@@ -260,7 +260,7 @@ def convert_dates_to_timestamps(args):
             start_date_txt = start_date.isoformat()
             start_timestamp = time.mktime(start_date.timetuple())
         except ValueError as e:
-            print(f"Warning: Invalid start date format! Ignoring end date! \n {str(e)}")
+            print(f"Warning: Invalid start date format! Ignoring start date! \n {str(e)}")
 
     return start_timestamp, end_timestamp
 
@@ -298,57 +298,90 @@ def _reverse_mapping(regions):
 _regions_rev = _reverse_mapping(_regions)
 
 
-def expand_georegion_query(query_str):
-    """Pre-process a query string to expand georegion directives.
+def preprocess_search_query(query_str):
+    """Pre-process a query string to expand georegion and chunked directives.
 
     If the query contains ``georegion=true``, any ``geolocation = <REGION_CODE>``
     clause is expanded into ``geolocation in [<country_list>]`` using :data:`_regions`.
 
+    Both ``georegion=true`` and ``chunked=true`` are stripped from the query
+    before it reaches the API.
+
     Returns:
-        A ``(georegion_active, processed_query_str)`` tuple.
+        A ``(georegion_active, chunked_active, processed_query_str)`` tuple.
     """
     if query_str is None:
-        return False, query_str
+        return False, False, query_str
 
-    from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore
+    from pyparsing import Word, alphas, alphanums, one_of, Group, ZeroOrMore
 
     key = Word(alphas + "_", alphanums + "_")
-    operator = oneOf("= in != > < >= <=")
+    operator = one_of("= in != > < >= <=")
     value = Word(alphanums + "_")
     expr = Group(key + operator + value)
     query = ZeroOrMore(expr)
-    parsed = query.parseString(query_str)
+    parsed = query.parse_string(query_str)
 
-    geo = ['georegion', '=', 'true']
-    state = any(geo == list(e) for e in parsed)
+    directives = {'georegion', 'chunked'}
+    state = {}
+    for d in directives:
+        state[d] = any([d, '=', 'true'] == list(e) for e in parsed)
 
-    if not state:
-        return False, query_str
+    if not any(state.values()):
+        return False, False, query_str
 
     parts = []
     for e in parsed:
-        if e[0] == 'georegion':
+        if e[0] in directives:
             continue
-        elif e[0] == 'geolocation' and e[2] in _regions:
+        elif e[0] == 'geolocation' and state['georegion'] and e[2] in _regions:
             parts.append(f'geolocation in [{_regions[e[2]]}]')
         else:
             parts.append(' '.join(e))
 
-    return True, ' '.join(parts)
+    return state['georegion'], state['chunked'], ' '.join(parts)
 
 
-def annotate_georegion_results(results):
-    """Post-process search results to append continent codes to geolocation.
+def postprocess_search_results(results, georegion_active=False, chunked=False):
+    """Post-process search results with datacenter flag, georegion, and chunked filters.
 
-    For each result, the two-letter country suffix of the ``geolocation`` field
-    is looked up in :data:`_regions_rev` and the continent code is appended
-    (e.g. ``"US"`` becomes ``"US, NA"``).
+    Always adds a ``datacenter`` boolean derived from ``hosting_type``.
+    When *georegion_active*, appends continent codes to geolocation.
+    When *chunked*, filters and rounds values for skypilot compatibility.
     """
+    _chunked_cutoffs = {
+        'cpu_ram': 64 * 1024,
+        'cpu_cores': 32,
+        'min_bid': 0,
+    }
+
+    filtered = []
     for res in results:
-        geo = res.get('geolocation', '')
-        if geo:
-            country = geo[-2:]
-            region = _regions_rev.get(country)
-            if region:
-                res['geolocation'] = f'{geo}, {region}'
-    return results
+        res['datacenter'] = (res.get('hosting_type') == 1)
+
+        if georegion_active:
+            geo = res.get('geolocation', '')
+            if geo:
+                country = geo[-2:]
+                region = _regions_rev.get(country)
+                if region:
+                    res['geolocation'] = f'{geo}, {region}'
+
+        if chunked:
+            good = True
+            try:
+                for k, v in _chunked_cutoffs.items():
+                    if res.get(k) is not None and res[k] < v:
+                        good = False
+                    else:
+                        res[k] = v
+            except Exception:
+                good = False
+            if not good:
+                continue
+            res['gpu_ram'] = res.get('gpu_ram', 0) & 0xffffffffff0
+            res['disk_space'] = int(res.get('disk_space', 0)) & 0xffffffffffc0
+
+        filtered.append(res)
+
+    return filtered

@@ -19,7 +19,7 @@ except ImportError:
 _HAS_EMOJI = sys.stdout.encoding and 'utf' in sys.stdout.encoding.lower()
 INFO = "\u2139\ufe0f" if _HAS_EMOJI else "[i]"
 
-from vastai.cli.util import server_url_default  # noqa: E402
+server_url_default = os.getenv("VAST_URL") or "https://console.vast.ai"
 
 
 class VastClient:

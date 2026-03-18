@@ -1,6 +1,17 @@
 """Instance CRUD operations."""
 import time
+import requests
 from vastai.api.client import VastClient
+
+
+def _poll_result_url(result_url, retries=30, delay=0.3):
+    """Poll a result URL until the content is ready."""
+    for _ in range(retries):
+        time.sleep(delay)
+        r = requests.get(result_url)
+        if r.status_code == 200:
+            return r.text
+    raise TimeoutError(f"Result not ready after {retries * delay}s: {result_url}")
 
 
 def _strip_strings(value):
@@ -139,13 +150,19 @@ def change_bid(client: VastClient, id: int, price: float = None) -> dict:
     return r.json()
 
 
-def execute(client: VastClient, id: int, command: str) -> dict:
+def execute(client: VastClient, id: int, command: str) -> str:
+    """Execute a command on an instance and return the output."""
     r = client.put(f"/instances/command/{id}/", json_data={"command": command})
     r.raise_for_status()
-    return r.json()
+    rj = r.json()
+    result_url = rj.get("result_url")
+    if not result_url:
+        return rj
+    return _poll_result_url(result_url)
 
 
-def logs(client: VastClient, instance_id: int, tail=None, filter=None, daemon_logs=False) -> dict:
+def logs(client: VastClient, instance_id: int, tail=None, filter=None, daemon_logs=False) -> str:
+    """Request logs for an instance and return the log text."""
     json_blob = {}
     if filter:
         json_blob['filter'] = filter
@@ -155,7 +172,11 @@ def logs(client: VastClient, instance_id: int, tail=None, filter=None, daemon_lo
         json_blob['daemon_logs'] = 'true'
     r = client.put(f"/instances/request_logs/{instance_id}/", json_data=json_blob)
     r.raise_for_status()
-    return r.json()
+    rj = r.json()
+    result_url = rj.get("result_url")
+    if not result_url:
+        return rj
+    return _poll_result_url(result_url)
 
 
 def update_instance(client: VastClient, id: int, template_id=None, template_hash_id=None,
