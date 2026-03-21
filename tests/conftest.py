@@ -1,11 +1,16 @@
 """Shared pytest fixtures for vast-sdk tests.
 
-One fixture per concept where practical; pyworker ``Metrics`` helpers live in the
+Fixtures follow unit-test-requirements: one fixture per concept, defined in
+conftest.py for reuse across test files. Pyworker ``Metrics`` helpers live in the
 ``# Pyworker server`` section below.
+
+An autouse fixture restores the ``Serverless`` logger after each test so global
+logging state follows RAII and cannot leak between cases.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,12 +18,41 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiohttp import ClientResponseError
 
+from vastai.serverless.client.client import Serverless
+from vastai.serverless.client.endpoint import Endpoint
 from vastai.serverless.server.lib.data_types import RequestMetrics, Session as PyworkerSession
 from vastai.serverless.server.worker import (
     WorkerConfig,
     HandlerConfig,
     BenchmarkConfig,
 )
+
+
+# ---------------------------------------------------------------------------
+# Global RAII (resource cleanup after every test)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _restore_serverless_logger_state():
+    """Snapshot and restore the ``Serverless`` client logger after each test.
+
+    ``Serverless.__init__`` configures ``logging.getLogger("Serverless")``. Leaked
+    handlers or ``propagate=False`` can make later tests call ``time.time()`` via
+    logging and break strict clock mocks.
+    """
+    log = logging.getLogger("Serverless")
+    old_handlers = list(log.handlers)
+    old_level = log.level
+    old_propagate = log.propagate
+    old_disabled = log.disabled
+    yield
+    log.handlers.clear()
+    for h in old_handlers:
+        log.addHandler(h)
+    log.setLevel(old_level)
+    log.propagate = old_propagate
+    log.disabled = old_disabled
 
 
 # ---------------------------------------------------------------------------
@@ -526,3 +560,102 @@ def make_metrics_client_session_instance():
         return inst
 
     return _make
+
+
+# ---------------------------------------------------------------------------
+# Serverless client (vastai.serverless.client.client) fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client() -> Serverless:
+    """Serverless client with a fixed test API key (no aiohttp session)."""
+    return Serverless(api_key="k")
+
+
+@pytest.fixture
+def client_with_session(client: Serverless) -> Serverless:
+    """Serverless client with a mocked open aiohttp session on ``_session``."""
+    mock_sess = MagicMock()
+    mock_sess.closed = False
+    mock_sess.close = AsyncMock()
+    client._session = mock_sess
+    return client
+
+
+@pytest.fixture
+def serverless_master_client() -> Serverless:
+    """Serverless client using api_key ``master`` (autoscaler POST payload tests)."""
+    return Serverless(api_key="master")
+
+
+@pytest.fixture
+def make_serverless_endpoint():
+    """Build an :class:`Endpoint` bound to a :class:`Serverless` client."""
+
+    def _make(
+        sl_client: Serverless,
+        *,
+        name: str = "myep",
+        endpoint_id: int = 5,
+        api_key: str = "ekey",
+    ) -> Endpoint:
+        return Endpoint(sl_client, name, endpoint_id, api_key)
+
+    return _make
+
+
+@pytest.fixture
+def make_route_waiting_mock():
+    """Factory: MagicMock route with status WAITING (polling loop)."""
+
+    def _make(*, request_idx: int = 1, body: dict | None = None) -> MagicMock:
+        waiting = MagicMock()
+        waiting.status = "WAITING"
+        waiting.request_idx = request_idx
+        waiting.body = body if body is not None else {}
+        return waiting
+
+    return _make
+
+
+@pytest.fixture
+def make_route_ready_mock():
+    """Factory: MagicMock route with status READY, ``get_url``, and body."""
+
+    def _make(
+        *,
+        url: str = "https://w/",
+        request_idx: int = 1,
+        body: dict | None = None,
+    ) -> MagicMock:
+        b = {"url": url, **(body or {})}
+        ready = MagicMock()
+        ready.status = "READY"
+        ready.request_idx = request_idx
+        ready.body = b
+        ready.get_url = MagicMock(return_value=url)
+        return ready
+
+    return _make
+
+
+@pytest.fixture
+def patch_serverless_queue_async_stubs():
+    """Patch ``asyncio.sleep`` and ``random.uniform`` on the serverless client module.
+
+    Queue/routing tests use instant sleep and fixed jitter so they stay fast and
+    deterministic. Does not apply when a test replaces ``sleep`` with a custom
+    ``side_effect`` (e.g. cancellation).
+    """
+    with (
+        patch(
+            "vastai.serverless.client.client.asyncio.sleep",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "vastai.serverless.client.client.random.uniform",
+            return_value=0.1,
+        ),
+    ):
+        yield
