@@ -27,7 +27,6 @@ parser = _get_parser()
     argument("-n", "--no-default", action="store_true", help="Disable default query"),
     argument("--new", action="store_true", help="New search exp"),
     argument("--limit", type=int, help=""),
-    argument("--disable-bundling", action="store_true", help="Deprecated"),
     argument("--storage", type=float, default=5.0, help="Amount of storage to use for pricing, in GiB. default=5.0GiB"),
     argument("-o", "--order", type=str, help="Comma-separated list of fields to sort on. postfix field with - to sort desc. ex: -o 'num_gpus,total_flops-'.  default='score-'", default='score-'),
     argument("query", help="Query to search for. default: 'external=false rentable=true verified=true', pass -n to ignore default", nargs="*", default=None),
@@ -87,8 +86,6 @@ def search__offers(args):
         query["allocated_storage"] = args.storage
         if query["type"] == 'interruptible':
             query["type"] = 'bid'
-        if args.disable_bundling:
-            query["disable_bundling"] = True
     except ValueError as e:
         print("Error: ", e)
         return 1

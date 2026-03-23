@@ -237,7 +237,7 @@ def _build_tfa_verification_payload(**kwargs):
     return {k: v for k, v in payload.items() if v is not None}
 
 
-def tfa_activate(client, code, secret, sms=False, phone_number=None, label=None, method_id=None):
+def tfa_activate(client, code, secret, method_type="totp", phone_number=None, label=None, method_id=None):
     """Activate a new 2FA method by verifying the code.
 
     POST /api/v0/tfa/test-submit/
@@ -246,7 +246,7 @@ def tfa_activate(client, code, secret, sms=False, phone_number=None, label=None,
         client: VastClient instance.
         code (str): 6-digit verification code from SMS or Authenticator app.
         secret (str): Secret token from setup process.
-        sms (bool): Use SMS 2FA method instead of TOTP. Default False.
+        method_type (str): 2FA method type ('sms' or 'totp'). Default 'totp'.
         phone_number (str, optional): Phone number for SMS method (E.164 format).
         label (str, optional): Label for the new 2FA method.
         method_id (str, optional): 2FA Method ID if multiple of the same type.
@@ -254,10 +254,9 @@ def tfa_activate(client, code, secret, sms=False, phone_number=None, label=None,
     Returns:
         dict: API response data, may include backup_codes on first activation.
     """
-    tfa_method = "sms" if sms else "totp"
     payload = _build_tfa_verification_payload(
         tfa_method_id=method_id,
-        tfa_method=tfa_method,
+        tfa_method=method_type,
         code=code,
         secret=secret,
         phone_number=phone_number,
@@ -269,7 +268,7 @@ def tfa_activate(client, code, secret, sms=False, phone_number=None, label=None,
     return r.json()
 
 
-def tfa_delete(client, code=None, backup_code=None, sms=False, secret=None,
+def tfa_delete(client, code=None, backup_code=None, method_type=None, secret=None,
                method_id=None, id_to_delete=None):
     """Remove a 2FA method from your account.
 
@@ -279,20 +278,19 @@ def tfa_delete(client, code=None, backup_code=None, sms=False, secret=None,
 
     Args:
         client: VastClient instance.
-        code (str, optional): 2FA code from Authenticator app or SMS.
+        code (str, optional): 2FA code from Authenticator app, SMS, or Email.
         backup_code (str, optional): One-time backup code (alternative to code).
-        sms (bool): Use SMS 2FA method. Default False.
-        secret (str, optional): Secret token (required for SMS authorization).
+        method_type (str, optional): 2FA method type ('email', 'sms', 'totp').
+        secret (str, optional): Secret token (required for SMS or Email).
         method_id (str, optional): 2FA Method ID.
         id_to_delete (int, optional): ID of the 2FA method to delete.
 
     Returns:
         dict: API response data including remaining_methods count.
     """
-    tfa_method = "sms" if sms else "totp"
     payload = _build_tfa_verification_payload(
         tfa_method_id=method_id,
-        tfa_method=tfa_method,
+        tfa_method=method_type,
         code=code,
         backup_code=backup_code,
         secret=secret,
@@ -304,27 +302,26 @@ def tfa_delete(client, code=None, backup_code=None, sms=False, secret=None,
     return r.json()
 
 
-def tfa_login(client, code=None, backup_code=None, sms=False, secret=None, method_id=None):
+def tfa_login(client, code=None, backup_code=None, method_type=None, secret=None, method_id=None):
     """Complete 2FA login by verifying code.
 
     POST /api/v0/tfa/
 
     Args:
         client: VastClient instance.
-        code (str, optional): 2FA code from Authenticator app or SMS.
+        code (str, optional): 2FA code from Authenticator app, SMS, or Email.
         backup_code (str, optional): One-time backup code (alternative to code).
-        sms (bool): Use SMS 2FA method. Default False.
-        secret (str, optional): Secret token (required for SMS).
+        method_type (str, optional): 2FA method type ('email', 'sms', 'totp').
+        secret (str, optional): Secret token (required for SMS or Email).
         method_id (str, optional): 2FA Method ID.
 
     Returns:
         dict: API response data including session_key and
             backup_codes_remaining.
     """
-    tfa_method = "sms" if sms else "totp"
     payload = _build_tfa_verification_payload(
         tfa_method_id=method_id,
-        tfa_method=tfa_method,
+        tfa_method=method_type,
         code=code,
         backup_code=backup_code,
         secret=secret,
@@ -359,7 +356,7 @@ def tfa_resend_sms(client, secret, phone_number=None):
     return r.json()
 
 
-def tfa_regen_codes(client, code=None, backup_code=None, sms=False, secret=None, method_id=None):
+def tfa_regen_codes(client, code=None, backup_code=None, method_type=None, secret=None, method_id=None):
     """Regenerate backup codes for 2FA.
 
     PUT /api/v0/tfa/regen-backup-codes/
@@ -368,19 +365,18 @@ def tfa_regen_codes(client, code=None, backup_code=None, sms=False, secret=None,
 
     Args:
         client: VastClient instance.
-        code (str, optional): 2FA code from Authenticator app or SMS.
+        code (str, optional): 2FA code from Authenticator app, SMS, or Email.
         backup_code (str, optional): One-time backup code (alternative to code).
-        sms (bool): Use SMS 2FA method. Default False.
-        secret (str, optional): Secret token (required for SMS).
+        method_type (str, optional): 2FA method type ('email', 'sms', 'totp').
+        secret (str, optional): Secret token (required for SMS or Email).
         method_id (str, optional): 2FA Method ID.
 
     Returns:
         dict: API response data including new backup_codes list.
     """
-    tfa_method = "sms" if sms else "totp"
     payload = _build_tfa_verification_payload(
         tfa_method_id=method_id,
-        tfa_method=tfa_method,
+        tfa_method=method_type,
         code=code,
         backup_code=backup_code,
         secret=secret,
@@ -475,5 +471,59 @@ def tfa_update(client, method_id, label=None, set_primary=None):
         raise ValueError("Must specify at least one field to update (label or set_primary)")
 
     r = client.put("/api/v0/tfa/update/", json_data=payload)
+    r.raise_for_status()
+    return r.json()
+
+
+def tfa_auth_new(client, code=None, secret=None, backup_code=None,
+                 method_type="email", method_id=None):
+    """Authorize account to add a new 2FA method.
+
+    POST/PUT /api/v0/tfa/authorize-new-method/
+
+    Args:
+        client: VastClient instance.
+        code (str, optional): 2FA verification code.
+        secret (str, optional): Secret token from previous auth step.
+        backup_code (str, optional): One-time backup code.
+        method_type (str): 2FA method type ('email', 'sms', 'totp').
+        method_id (str, optional): Specific method ID to use.
+
+    Returns:
+        dict: API response data.
+    """
+    url = "/api/v0/tfa/authorize-new-method/"
+
+    if secret and code:
+        payload = {"secret": secret, "code": code}
+        r = client.put(url, json_data=payload)
+        r.raise_for_status()
+        return r.json()
+
+    payload = {}
+    if backup_code:
+        payload["backup_code"] = backup_code
+    elif method_id:
+        payload["tfa_method_id"] = method_id
+    elif method_type:
+        payload["tfa_method"] = method_type
+
+    r = client.post(url, json_data=payload)
+    r.raise_for_status()
+    return r.json()
+
+
+def tfa_send_email(client):
+    """Request a 2FA email verification code.
+
+    POST /api/v0/tfa/email/
+
+    Args:
+        client: VastClient instance.
+
+    Returns:
+        dict: API response data including secret token.
+    """
+    r = client.post("/api/v0/tfa/email/", json_data={})
     r.raise_for_status()
     return r.json()

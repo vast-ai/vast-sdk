@@ -27,19 +27,20 @@ def main():
     # registrations on the global parser via _get_parser().
     from vastai.cli.commands import (  # noqa: F401
         instances, offers, machines, teams, keys, endpoints,
-        billing, storage, clusters, auth, misc,
+        billing, storage, auth, misc,
+        # clusters,  # cluster/overlay commands disabled for now
     )
 
     # Wire up tab completers now that command modules are loaded
     set_completers(
         instance_machine_fn=lambda **kw: instances.show__instances(
             type('Args', (), {'api_key': os.getenv('VAST_API_KEY'), 'url': server_url_default,
-                              'retry': 3, 'explain': False, 'curl': False, 'label': None,
+                              'retry': 3, 'explain': False, 'curl': False,
                               'quiet': False, 'raw': False})(),
             {'internal': True, 'field': 'machine_id'}),
         instance_fn=lambda **kw: instances.show__instances(
             type('Args', (), {'api_key': os.getenv('VAST_API_KEY'), 'url': server_url_default,
-                              'retry': 3, 'explain': False, 'curl': False, 'label': None,
+                              'retry': 3, 'explain': False, 'curl': False,
                               'quiet': False, 'raw': False})(),
             {'internal': True, 'field': 'id'}),
     )

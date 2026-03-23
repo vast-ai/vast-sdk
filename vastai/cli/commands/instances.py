@@ -35,7 +35,6 @@ parser = _get_parser()
 
 @parser.command(
     argument("-q", "--quiet", action="store_true", help="only display numeric ids"),
-    argument("--label", help="Filter instances on a particular label", type=str),
     usage="vastai show instances [OPTIONS]",
     help="Display user's current instances",
     epilog=deindent("""
@@ -56,9 +55,6 @@ def show__instances(args, extra_filters=None):
     if extra_filters and extra_filters.get('internal'):
         field = extra_filters.get('field', 'id')
         return [str(r.get(field, '')) for r in rows]
-
-    if args.label:
-        rows = [r for r in rows if r.get("label") == args.label]
 
     if args.quiet:
         for row in rows:

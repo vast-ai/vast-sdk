@@ -26,6 +26,8 @@ parser = _get_parser()
     argument("--cold_workers", help="min number of workers to keep 'cold' (default 5)", type=int, default=5),
     argument("--max_workers", help="max number of workers (default 20)", type=int, default=20),
     argument("--endpoint_name", help="deployment endpoint name", type=str),
+    argument("--max_queue_time", help="maximum seconds requests may be queued on each worker (default 30.0)", type=float),
+    argument("--target_queue_time", help="target seconds for the queue to be cleared (default 10.0)", type=float),
     argument("--auto_instance", help=argparse.SUPPRESS, type=str, default="prod"),
     usage="vastai create endpoint [OPTIONS]",
     help="Create a new endpoint group",
@@ -48,6 +50,7 @@ def create__endpoint(args):
             target_util=args.target_util, cold_mult=args.cold_mult,
             cold_workers=args.cold_workers, max_workers=args.max_workers,
             endpoint_name=args.endpoint_name, auto_instance=args.auto_instance,
+            max_queue_time=args.max_queue_time, target_queue_time=args.target_queue_time,
         )
         print("create endpoint {}".format(result))
     except Exception:
@@ -88,6 +91,8 @@ def show__endpoints(args):
     argument("--cold_workers", help="min number of workers to keep 'cold' (default 5)", type=int),
     argument("--max_workers", help="max number of workers (default 20)", type=int),
     argument("--endpoint_name", help="deployment endpoint name", type=str),
+    argument("--max_queue_time", help="maximum seconds requests may be queued on each worker (default 30.0)", type=float),
+    argument("--target_queue_time", help="target seconds for the queue to be cleared (default 10.0)", type=float),
     usage="vastai update endpoint ID [OPTIONS]",
     help="Update an existing endpoint group",
 )
@@ -101,6 +106,7 @@ def update__endpoint(args):
         cold_workers=args.cold_workers, max_workers=args.max_workers,
         endpoint_name=args.endpoint_name, endpoint_state=args.endpoint_state,
         auto_instance=args.auto_instance,
+        max_queue_time=args.max_queue_time, target_queue_time=args.target_queue_time,
     )
     if args.raw:
         return result
