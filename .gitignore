@@ -5,6 +5,8 @@ env/
 *egg*
 .venv
 poetry.lock
+# Keep tests lock file for reproducible CI
+!tests/poetry.lock
 local
 .env
 Dockerfile
