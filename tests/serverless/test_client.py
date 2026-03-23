@@ -3,17 +3,23 @@
 All HTTP and SSL fetch paths are mocked; no real network calls.
 
 Coverage notes (functionality-oriented):
-- ``__init__``: instance match arms (prod/alpha/local/candidate/default), ``debug`` logging
+- ``ServerlessRequest.then``: stdout on exception path
+- ``__init__``: instance match arms (prod/alpha/local/candidate/default), ``debug`` logging,
+  ``VAST_API_KEY`` (subprocess import), connection/tuning kwargs, preconfigured logger
+- ``_get_session``: ``TCPConnector(limit=connection_limit)``
 - ``get_ssl_context``: non-200 cert response
 - Session helpers: ``/session/get`` and ``/session/end`` success and error paths, ``TimeoutError`` passthrough
 - ``start_endpoint_session``: validation of queue result shape and error wrapping
 - ``queue_endpoint_request``: timeouts, retry branches, session shortcut, transport errors,
-  non-OK worker responses, stream mode, task cancellation
+  non-OK worker responses, stream mode, task cancellation, ``latencies``, session without URL,
+  ``_route`` failure → ``Errored``
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -79,6 +85,19 @@ class TestServerlessRequest:
 
         asyncio.run(_run())
         assert results == []
+
+    def test_then_logs_exception_to_stdout_when_future_fails(self, capsys) -> None:
+        """then() prints the future's exception before skipping the user callback."""
+
+        async def _run() -> None:
+            req = ServerlessRequest()
+            req.then(lambda r: None)
+            req.set_exception(ValueError("then-exc-marker"))
+            await asyncio.sleep(0)
+
+        asyncio.run(_run())
+        captured = capsys.readouterr()
+        assert "then-exc-marker" in captured.out or "ValueError" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +253,48 @@ class TestServerlessInit:
         assert client.debug is False
         assert client.logger.propagate is True
 
+    def test_uses_vast_api_key_from_environment_when_not_passed(self) -> None:
+        """Omitting api_key uses VAST_API_KEY (read when ``client`` module is imported).
+
+        The default ``api_key=os.environ.get(...)`` is bound at class definition time in
+        CPython, so a fresh interpreter is needed to observe env changes.
+        """
+        code = (
+            "import os\n"
+            "os.environ['VAST_API_KEY'] = 'key-from-env-xyz'\n"
+            "from vastai.serverless.client.client import Serverless\n"
+            "c = Serverless()\n"
+            "assert c.api_key == 'key-from-env-xyz', c.api_key\n"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)
+
+    def test_constructor_stores_connection_limit_and_timeouts(self) -> None:
+        """connection_limit, default_request_timeout, and max_poll_interval are kept on the client."""
+        client = Serverless(
+            api_key="k",
+            connection_limit=321,
+            default_request_timeout=999.5,
+            max_poll_interval=3.25,
+        )
+        assert client.connection_limit == 321
+        assert client.default_request_timeout == 999.5
+        assert client.max_poll_interval == 3.25
+
+    def test_skips_null_handler_when_serverless_logger_already_configured(self) -> None:
+        """If the class logger already has handlers, __init__ does not add NullHandler."""
+        log = logging.getLogger("Serverless")
+        existing = logging.StreamHandler()
+        log.addHandler(existing)
+        try:
+            client = Serverless(api_key="k", debug=False)
+            assert existing in client.logger.handlers
+            assert not any(
+                isinstance(h, logging.NullHandler) for h in client.logger.handlers
+            )
+        finally:
+            log.removeHandler(existing)
+
+
 # ---------------------------------------------------------------------------
 # Session lifecycle helpers
 # ---------------------------------------------------------------------------
@@ -372,6 +433,40 @@ class TestServerlessSessionOpen:
         await client.close()
         mock_sess.close.assert_awaited()
 
+    @pytest.mark.asyncio
+    async def test_get_session_passes_connection_limit_to_tcp_connector(self) -> None:
+        """_get_session builds TCPConnector with limit=connection_limit."""
+        limits: list[int] = []
+        mock_connector = MagicMock()
+
+        def _tcp_side_effect(*_a, **kw) -> MagicMock:
+            limits.append(kw["limit"])
+            return mock_connector
+
+        mock_sess = MagicMock()
+        mock_sess.closed = False
+        mock_sess.close = AsyncMock()
+
+        tuned = Serverless(api_key="k", connection_limit=88)
+        with (
+            patch(
+                "vastai.serverless.client.client.aiohttp.TCPConnector",
+                side_effect=_tcp_side_effect,
+            ),
+            patch(
+                "vastai.serverless.client.client.aiohttp.ClientSession",
+                return_value=mock_sess,
+            ),
+            patch.object(
+                Serverless,
+                "get_ssl_context",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await tuned._get_session()
+
+        assert limits == [88]
+
 
 # ---------------------------------------------------------------------------
 # get_ssl_context
@@ -428,7 +523,11 @@ class TestServerlessGetSslContext:
         mock_ctx.load_verify_locations.assert_called_once()
         cafile = mock_ctx.load_verify_locations.call_args.kwargs.get("cafile")
         assert cafile.endswith(".cer")
-        mock_unlink.assert_called_once()
+        # Only one unlink is from our client (the .cer temp). Some Python/ssl builds
+        # also unlink other temps during load_verify_locations — do not require exactly
+        # one os.unlink call on the mock.
+        unlink_targets = [c.args[0] for c in mock_unlink.call_args_list if c.args]
+        assert cafile in unlink_targets
 
     @pytest.mark.asyncio
     async def test_get_ssl_context_raises_when_cert_fetch_status_not_200(
@@ -1300,8 +1399,9 @@ class TestServerlessQueueEndpointRequestBranches:
 
         This test verifies by:
         1. Returning a perpetual WAITING route from _route
-        2. Patching time.time so the first poll iteration sees elapsed time past timeout
-        3. Asserting asyncio.TimeoutError
+        2. Patching time.time so the first *inner* poll iteration sees elapsed time past timeout
+           (accounting for create_time + start_time + outer deadline calls)
+        3. Asserting asyncio.TimeoutError with the poll-loop message
 
         Assumptions:
         - Polling loop checks the same elapsed timeout as the top of the outer loop
@@ -1321,8 +1421,9 @@ class TestServerlessQueueEndpointRequestBranches:
 
         def _fake_time() -> float:
             calls["n"] += 1
-            # start_time + first top-of-loop check share t=0; first poll check jumps past timeout
-            if calls["n"] <= 2:
+            # ServerlessRequest.__init__ calls time.time() for create_time before the task body.
+            # Then: start_time, outer deadline (line ~357), then inner poll deadline (~381).
+            if calls["n"] <= 3:
                 return 0.0
             return 100.0
 
@@ -1342,7 +1443,9 @@ class TestServerlessQueueEndpointRequestBranches:
                 worker_payload={},
                 timeout=10.0,
             )
-            with pytest.raises(asyncio.TimeoutError):
+            with pytest.raises(
+                asyncio.TimeoutError, match="waiting for worker to become ready"
+            ):
                 await fut
 
     @pytest.mark.asyncio
@@ -1696,11 +1799,9 @@ class TestServerlessQueueEndpointRequestBranches:
 
         ready = make_route_ready_mock()
 
-        # time.time() order: start_time, first outer-loop deadline check, retry guard at
-        # line ~447, then one more read inside the TimeoutError message f-string.
-        # An extra leading 0.0 would let the first retry pass the guard and fail on the
-        # *next* outer-loop check with the "waiting for worker" message instead.
-        _clock = iter([0.0, 0.0, 100.0, 100.0])
+        # time.time() order: create_time (ServerlessRequest.__init__), start_time, first
+        # outer-loop deadline (~357), then retry guard (~447), then f-string in TimeoutError.
+        _clock = iter([0.0, 0.0, 0.0, 100.0, 100.0])
 
         def _t() -> float:
             return next(_clock, 1e9)
@@ -1864,6 +1965,9 @@ class TestServerlessQueueEndpointRequestBranches:
             fut.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await fut
+            # Let the background task process cancellation and run the in-task
+            # ``except asyncio.CancelledError`` handler (coverage + deterministic teardown).
+            await asyncio.sleep(0.05)
 
     @pytest.mark.asyncio
     async def test_queue_reuses_provided_serverless_request_instance(
@@ -1941,4 +2045,96 @@ class TestServerlessQueueEndpointRequestBranches:
             result = await fut
 
         assert result["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_queue_success_records_latency_in_client_deque(
+        self,
+        client_with_session,
+        make_serverless_endpoint,
+        make_route_ready_mock,
+        patch_serverless_queue_async_stubs,
+    ) -> None:
+        """Completed worker requests append one sample to ``Serverless.latencies``."""
+        client = client_with_session
+        client.latencies.clear()
+        ep = make_serverless_endpoint(client)
+        ready = make_route_ready_mock()
+
+        with (
+            patch.object(Endpoint, "_route", AsyncMock(return_value=ready)),
+            patch(
+                "vastai.serverless.client.client._make_request",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "json": {"x": 1}},
+            ),
+        ):
+            fut = client.queue_endpoint_request(
+                endpoint=ep,
+                worker_route="/do",
+                worker_payload={},
+            )
+            await fut
+
+        assert len(client.latencies) == 1
+        assert isinstance(client.latencies[0], float)
+        assert client.latencies[0] >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_queue_session_with_url_none_calls_worker_with_empty_url(
+        self,
+        client_with_session,
+        make_serverless_endpoint,
+    ) -> None:
+        """If ``session.url`` is falsy, routing body is skipped and worker URL stays empty."""
+        client = client_with_session
+        ep = make_serverless_endpoint(client)
+
+        mock_session = MagicMock(spec=Session)
+        mock_session.url = None
+        mock_session.auth_data = {"tok": 1}
+        mock_session.session_id = 7
+        mock_session.open = True
+
+        route_mock = AsyncMock()
+        make_req = AsyncMock(return_value={"ok": True, "json": {"done": True}})
+
+        with (
+            patch.object(Endpoint, "_route", route_mock),
+            patch("vastai.serverless.client.client._make_request", make_req),
+        ):
+            fut = client.queue_endpoint_request(
+                endpoint=ep,
+                worker_route="/in",
+                worker_payload={"p": 1},
+                session=mock_session,
+            )
+            await fut
+
+        route_mock.assert_not_called()
+        assert make_req.call_args.kwargs["url"] == ""
+
+    @pytest.mark.asyncio
+    async def test_queue_route_raises_sets_errored_exception_on_future(
+        self,
+        client_with_session,
+        make_serverless_endpoint,
+    ) -> None:
+        """Failures from ``endpoint._route`` outside the worker try block surface on the future."""
+        client = client_with_session
+        ep = make_serverless_endpoint(client)
+
+        with patch.object(
+            Endpoint,
+            "_route",
+            AsyncMock(side_effect=RuntimeError("scheduler unavailable")),
+        ):
+            fut = client.queue_endpoint_request(
+                endpoint=ep,
+                worker_route="/do",
+                worker_payload={},
+            )
+            with pytest.raises(RuntimeError, match="scheduler unavailable"):
+                await fut
+
+        assert fut.status == "Errored"
 
