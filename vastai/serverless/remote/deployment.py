@@ -19,7 +19,7 @@ from typing import Optional
 from anyio import Path
 
 
-API_URL = os.getenv("VAST_API_URL", "https://console.vast.ai")
+API_URL = os.getenv("VAST_API_BASE", "https://console.vast.ai")
 
 mode = os.getenv("VAST_DEPLOYMENT_MODE", "client")
 debug = os.getenv("VAST_DEBUG", "") == "1"
@@ -205,6 +205,7 @@ class Deployment:
         model_backend_load_logs: list = ["Deployment ready"],
         model_backend_error_logs: list = ["Deployment error"],
         model_healthcheck_endpoint: str = "health",
+        secrets: list[str] = [],
     ):
         self.logger = _setup_logger("Deployment")
 
@@ -236,8 +237,8 @@ class Deployment:
         self.__onstart_cmd = ""
         self.__pip_packages_requested = False
 
-        # --- Secrets (bundled in tar, not stored in DB) ---
-        self.__secrets = {}
+        # --- Secrets (list of env var names, resolved from os.environ at deploy time) ---
+        self.secrets = list(secrets)
 
         # --- Worker configuration ---
         self.remote_functions = REMOTE_FUNCTIONS_BY_ENDPOINT_NAME.get(name, {})
@@ -284,10 +285,10 @@ class Deployment:
     def set_env_vars(self, vars: dict[str, str]):
         self.env_vars.update(vars)
 
-    def set_secrets(self, vars: dict[str, str]):
-        """Set secret environment variables. These are bundled in the tar.gz
-        upload only (not stored in the DB env field). Sourced at runtime on workers."""
-        self.__secrets.update(vars)
+    def set_secrets(self, keys: list[str]):
+        """Set secret env var names. Values are resolved from os.environ at deploy time
+        and bundled in the tar.gz only (not stored in DB)."""
+        self.secrets.extend(keys)
 
     # --- Deploy ---
 
@@ -310,11 +311,18 @@ class Deployment:
                 onstart_content = f"#!/bin/bash\nset -e\n{self.__onstart_cmd}"
                 _add_string_to_tar(tar, onstart_content, arcname="on_start.sh")
 
-            # 3. .secrets (if any secret env vars were specified)
-            if self.__secrets:
-                secrets_lines = [f"export {k}={shlex.quote(v)}" for k, v in self.__secrets.items()]
-                secrets_content = "\n".join(secrets_lines) + "\n"
-                _add_string_to_tar(tar, secrets_content, arcname=".secrets")
+            # 3. .secrets (resolve key names from current os.environ)
+            if self.secrets:
+                secrets_lines = []
+                for key in self.secrets:
+                    val = os.environ.get(key)
+                    if val is None:
+                        self.logger.warning(f"Secret '{key}' not found in environment, skipping")
+                        continue
+                    secrets_lines.append(f"export {key}={shlex.quote(val)}")
+                if secrets_lines:
+                    secrets_content = "\n".join(secrets_lines) + "\n"
+                    _add_string_to_tar(tar, secrets_content, arcname=".secrets")
 
         payload = buf.getvalue()
         file_hash = hashlib.sha256(payload).hexdigest()
@@ -408,8 +416,12 @@ class Deployment:
     # --- Serve (worker side) ---
 
     def ready(self):
-        """In serve mode, start the Worker server. In client mode, no-op."""
+        """In serve mode, start the Worker server. In client mode, deploy automatically."""
         current_mode = get_mode()
+
+        if current_mode == "client":
+            self.deploy()
+            return
 
         if current_mode == "serve":
             from vastai import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig, LogActionConfig
@@ -474,6 +486,3 @@ class Deployment:
                     await remote_worker.run_async()
 
             asyncio.run(main())
-
-        elif current_mode == "client":
-            pass
