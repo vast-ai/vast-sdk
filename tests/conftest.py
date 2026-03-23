@@ -5,6 +5,7 @@ conftest.py for reuse across test files.
 """
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -227,14 +228,28 @@ def make_mock_http_response():
 def make_mock_make_request_client():
     """Factory: create mock session and client for _make_request.
 
-    Returns a callable that accepts a mock response and returns
-    (mock_session, mock_client) configured for _make_request.
+    Returns a callable ``(mock_session, mock_client)`` configured for _make_request.
+
+    - ``make_mock_make_request_client(mock_resp)`` — ``session.get`` returns ``mock_resp``.
+    - ``make_mock_make_request_client(get_side_effect=...)`` — ``session.get`` uses
+      ``AsyncMock(side_effect=...)`` (exception, list of responses, etc.).
+    - ``make_mock_make_request_client(post_return=resp)`` — ``session.post`` returns
+      ``resp``; ``session.get`` is a bare ``AsyncMock()`` (unused).
     """
 
-    def _make(mock_resp):
+    def _make(mock_resp=None, *, get_side_effect=None, post_return=None):
         mock_session = MagicMock()
-        mock_session.get = AsyncMock(return_value=mock_resp)
-        mock_session.post = AsyncMock()
+        if get_side_effect is not None:
+            mock_session.get = AsyncMock(side_effect=get_side_effect)
+        elif post_return is not None:
+            mock_session.get = AsyncMock()
+        else:
+            mock_session.get = AsyncMock(return_value=mock_resp)
+
+        if post_return is not None:
+            mock_session.post = AsyncMock(return_value=post_return)
+        else:
+            mock_session.post = AsyncMock()
 
         mock_client = MagicMock()
         mock_client._get_session = AsyncMock(return_value=mock_session)
@@ -295,3 +310,88 @@ def build_kwargs_defaults():
         "method": "GET",
         "stream": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Pyworker server (vastai.serverless.server.lib.metrics) fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clear_get_url_cache():
+    """Clear functools.cache on get_url() before and after each test.
+
+    Use via ``pytestmark = pytest.mark.usefixtures("clear_get_url_cache")`` on
+    modules that patch os.environ for URL tests.
+    """
+    from vastai.serverless.server.lib.metrics import get_url
+
+    get_url.cache_clear()
+    yield
+    get_url.cache_clear()
+
+
+@pytest.fixture
+def make_pyworker_metrics():
+    """Factory: build Metrics with explicit id/report_addr/url (no CONTAINER_ID env)."""
+
+    def _make(**kwargs):
+        from vastai.serverless.server.lib.metrics import Metrics
+
+        defaults = dict(
+            id=1,
+            report_addr=["http://report.test"],
+            url="http://worker.test:9000",
+        )
+        defaults.update(kwargs)
+        return Metrics(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def aiohttp_sync_post_session_ok():
+    """Factory: ``() -> (mock_session, mock_response)`` for ``async with session.post``.
+
+    Mimics aiohttp: ``post()`` returns a synchronous object whose ``__aenter__`` is async.
+    """
+
+    def _make():
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_ctx)
+        return mock_session, mock_resp
+
+    return _make
+
+
+@pytest.fixture
+def aiohttp_post_context_timeout():
+    """Factory: async context manager mock whose ``__aenter__`` raises TimeoutError."""
+
+    def _make():
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        return mock_ctx
+
+    return _make
+
+
+@pytest.fixture
+def aiohttp_post_context_ok_pair():
+    """Factory: ``() -> (context_manager_mock, response_mock)`` for successful POST."""
+
+    def _make():
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        return mock_ctx, mock_resp
+
+    return _make
