@@ -126,11 +126,8 @@ def delete__endpoint(args):
         print({"client_id": "me", "endptjob_id": args.id})
 
     client = get_client(args)
-    try:
-        result = endpoints_api.delete_endpoint(client, id=id)
-        print("delete endpoint {}".format(result))
-    except Exception:
-        print("The response is not valid JSON or an error occurred.")
+    result = endpoints_api.delete_endpoint(client, id=id)
+    print("delete endpoint {}".format(result))
 
 
 @parser.command(
@@ -278,11 +275,8 @@ def delete__workergroup(args):
         print({"client_id": "me", "autojob_id": args.id})
 
     client = get_client(args)
-    try:
-        result = endpoints_api.delete_workergroup(client, id=id)
-        print("workergroup delete {}".format(result))
-    except Exception:
-        print("The response is not valid JSON or an error occurred.")
+    result = endpoints_api.delete_workergroup(client, id=id)
+    print("workergroup delete {}".format(result))
 
 
 @parser.command(

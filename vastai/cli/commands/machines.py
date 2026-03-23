@@ -62,7 +62,7 @@ def show__machines(args):
     client = get_client(args)
     rows = machines_api.show_machines(client)
     if args.raw:
-        return rows
+        return {"machines": rows}
     else:
         if args.quiet:
             ids = [f"{row['id']}" for row in rows]
