@@ -219,9 +219,9 @@ class EndpointHandlerFactory:
                 """The endpoint is the same as the route"""
                 return self._route
 
-            async def call_remote_dispatch_function(self, params: dict):
+            async def call_remote_function(self, params: dict):
                 """
-                define a remote dispatch function for this endpoint, return the result
+                define a remote function for this endpoint, return the result
                 """
                 if self.remote_dispatch_function is None:
                     raise RuntimeError(f"remote_function is not configured for route {self._route}")
