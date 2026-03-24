@@ -985,8 +985,6 @@ class TestMakeRequest:
             text="{}",
             json_data={},
         )
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=None)
 
         mock_session, mock_client = make_mock_make_request_client(
             post_return=mock_resp,

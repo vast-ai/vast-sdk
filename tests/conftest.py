@@ -18,8 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiohttp import ClientResponseError
 
-from vastai.serverless.client.client import Serverless
+from vastai.serverless.client.client import Serverless, ServerlessRequest
 from vastai.serverless.client.endpoint import Endpoint
+from vastai.serverless.client.session import Session
 from vastai.serverless.server.lib.data_types import RequestMetrics, Session as PyworkerSession
 from vastai.serverless.server.worker import (
     WorkerConfig,
@@ -639,6 +640,57 @@ def make_route_ready_mock():
         return ready
 
     return _make
+
+
+@pytest.fixture
+def make_completed_serverless_request():
+    """Factory: build a resolved :class:`ServerlessRequest` (call from async tests only).
+
+    Pass either ``result=`` for ``set_result`` or ``exception=`` for ``set_exception``.
+    """
+
+    def _make(
+        *,
+        result: dict | None = None,
+        exception: BaseException | None = None,
+    ) -> ServerlessRequest:
+        if (result is None) == (exception is None):
+            raise ValueError("Exactly one of result= or exception= must be given")
+        req = ServerlessRequest()
+        if exception is not None:
+            req.set_exception(exception)
+        else:
+            req.set_result(result)
+        return req
+
+    return _make
+
+
+@pytest.fixture
+def make_mock_endpoint_session():
+    """Factory: ``MagicMock(spec=Session)`` with common attrs for session HTTP tests."""
+
+    def _make(
+        *,
+        session_id: int = 1,
+        url: str | None = "https://worker/u",
+        auth_data: dict | None = None,
+        open_: bool = True,
+    ) -> MagicMock:
+        m = MagicMock(spec=Session)
+        m.session_id = session_id
+        m.url = url
+        m.auth_data = {} if auth_data is None else auth_data
+        m.open = open_
+        return m
+
+    return _make
+
+
+@pytest.fixture
+def default_start_endpoint_session_ep(client, make_serverless_endpoint):
+    """Shared :class:`Endpoint` for ``start_endpoint_session`` tests."""
+    return make_serverless_endpoint(client, name="ep", endpoint_id=3, api_key="ek")
 
 
 @pytest.fixture
