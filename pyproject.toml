@@ -3,7 +3,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-name = "vastai"
+name = "vastai-sdk"
 version = "0.0.0"
 description = "SDK for Vast.ai GPU Cloud Service"
 readme = "README.md"
@@ -46,27 +46,9 @@ psutil = "~6.0"
 pycryptodome = "~3.20"
 transformers = "~4.52"
 hf_transfer = ">=0.1.9"
-argcomplete = ">=2.0"
-curlify = ">=2.2"
-rich = ">=13.0"
-cryptography = ">=41.0"
-gitpython = ">=3.1"
-toml = ">=0.10"
-qrcode = ">=7.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
-pytest-mock = "^3.12"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = [
-    "live: tests that hit the real Vast.ai API (require VAST_API_KEY)",
-]
-addopts = "-m 'not live' --tb=short -q"
-
-[tool.poetry.scripts]
-vastai = "vastai.cli.main:main"
 
 [tool.poetry.urls]
 Homepage = "https://vast.ai"

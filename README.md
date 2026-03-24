@@ -1,68 +1,33 @@
-# Vast.ai Python SDK & CLI
-[![PyPI version](https://badge.fury.io/py/vastai.svg)](https://badge.fury.io/py/vastai)
+# Vast.ai Python SDK
+[![PyPI version](https://badge.fury.io/py/vastai-sdk.svg)](https://badge.fury.io/py/vastai-sdk)
 
-The official Vast.ai Python package — provides both the CLI and SDK for managing Vast.ai GPU cloud resources, plus a serverless client for endpoint inference.
+The official Vast.ai SDK pip package.
 
 ## Install
-
 ```bash
-pip install vastai
+pip install vastai-sdk
 ```
+## Examples
 
-> **Note:** `pip install vastai-sdk` also works and installs the same package. Both package names are supported for backward compatibility.
+NOTE: Ensure your Vast.ai API key is set in your working environment as `VAST_API_KEY`. Alternatively, you may pass the API key in as a parameter to either client.
 
-## Quickstart
+### Using the VastAI CLI client
 
-1. Get your API key from [https://cloud.vast.ai/manage-keys/](https://cloud.vast.ai/manage-keys/)
-
-2. Set your API key:
-```bash
-vastai set api-key YOUR_API_KEY
-```
-
-3. Test a search:
-```bash
-vastai search offers --limit 3
-```
-You should see a short list of available GPU offers.
-
-## CLI Usage
-
-The `vastai` command provides full access to the Vast.ai platform from your terminal:
-
-```bash
-vastai search offers 'gpu_name=RTX_4090 num_gpus>=4'
-vastai create instance 12345 --image pytorch/pytorch --disk 32 --ssh --direct
-vastai show instances
-vastai stop instance 12345
-vastai destroy instance 12345
-```
-
-Run `vastai --help` for a full list of commands. You can also use `--help` on any subcommand:
-
-```bash
-vastai search offers --help
-vastai create instance --help
-```
-
-## SDK Usage
-
+1. Create the client
 ```python
 from vastai import VastAI
-
-vast = VastAI()  # uses VAST_API_KEY env var, or pass api_key="..."
-
-vast.search_offers(query='gpu_name=RTX_4090 num_gpus>=4')
-vast.show_instances()
-vast.start_instance(id=12345)
-vast.stop_instance(id=12345)
+vastai = VastAI() # or, VastAI("YOUR_API_KEY")
+```
+2. Run commands
+```python
+vastai.search_offers()
+```
+3. Get help
+```python
+help(v.create_instances)
 ```
 
-Use `help(vast.search_offers)` to view documentation for any method.
-
-> **Migrating from `vastai-sdk`?** The old import still works: `from vastai_sdk import VastAI`
-
-## Using the Serverless Client
+### Using the Serverless client
 
 1. Create the client
 ```python
@@ -89,22 +54,4 @@ text = response["response"]["choices"][0]["text"]
 print(text)
 ```
 
-Find more examples in the `examples/` directory.
-
-## Tab Completion
-
-Tab completion is supported in Bash and Zsh via [argcomplete](https://github.com/kislyuk/argcomplete) (installed automatically). To enable it:
-
-```bash
-activate-global-python-argcomplete
-```
-
-Or for a single session:
-
-```bash
-eval "$(register-python-argcomplete vastai)"
-```
-
-## Contributing
-
-This [repository](https://github.com/vast-ai/vast-sdk) is open source. If you find a bug, please [open an issue](https://github.com/vast-ai/vast-sdk/issues). PRs are welcome.
+Find more examples in the `examples` directory
