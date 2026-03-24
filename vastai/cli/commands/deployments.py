@@ -91,10 +91,7 @@ def show__deployment(args):
     result = deployments_api.show_deployment(client, id=args.id)
     if args.raw:
         return result
-    if args.quiet:
-        print(result.get("id", ""))
-    else:
-        display_table([result], deployment_detail_fields)
+    display_table([result], deployment_detail_fields)
 
 
 # ---------------------------------------------------------------------------
