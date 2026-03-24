@@ -19,9 +19,6 @@ packages = [
   { include = "vastai_sdk" }
 ]
 
-[tool.poetry.scripts]
-vast = "vastai.serverless.cli:main"
-
 [tool.poetry-dynamic-versioning]
 enable = true
 style = "pep440"
