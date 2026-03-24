@@ -5,6 +5,7 @@ conftest.py for reuse across test files.
 """
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +15,82 @@ from vastai.serverless.server.worker import (
     HandlerConfig,
     BenchmarkConfig,
 )
+
+
+# ---------------------------------------------------------------------------
+# CLI fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def cli_parser():
+    """Import all command modules and return the fully-populated parser."""
+    from vastai.cli.main import parser
+    from vastai.cli.commands import (  # noqa: F401
+        instances, offers, machines, teams, keys, endpoints,
+        billing, storage, clusters, auth, misc, deployments,
+    )
+    from vastai.cli.util import server_url_default, api_key_guard
+    parser.add_argument("--url", help="Server REST API URL", default=server_url_default)
+    parser.add_argument("--retry", help="Retry limit", default=3)
+    parser.add_argument("--explain", action="store_true", help="Verbose")
+    parser.add_argument("--raw", action="store_true", help="Raw json")
+    parser.add_argument("--full", action="store_true", help="Full output")
+    parser.add_argument("--curl", action="store_true", help="Curl equiv")
+    parser.add_argument("--api-key", help="API Key", type=str, required=False, default=api_key_guard)
+    parser.add_argument("--no-color", action="store_true", help="Disable color")
+    return parser
+
+
+@pytest.fixture
+def parse_argv(cli_parser):
+    """Return a callable that parses an argv list into an args namespace."""
+    def _parse(argv):
+        args = cli_parser.parse_args(argv)
+        # Resolve api_key_guard to None for tests
+        from vastai.cli.util import api_key_guard
+        if args.api_key is api_key_guard:
+            args.api_key = "test-api-key"
+        if not hasattr(args, 'url'):
+            args.url = "https://console.vast.ai"
+        if not hasattr(args, 'retry'):
+            args.retry = 3
+        if not hasattr(args, 'explain'):
+            args.explain = False
+        if not hasattr(args, 'raw'):
+            args.raw = False
+        if not hasattr(args, 'full'):
+            args.full = False
+        if not hasattr(args, 'curl'):
+            args.curl = False
+        if not hasattr(args, 'no_color'):
+            args.no_color = False
+        if not hasattr(args, 'quiet'):
+            args.quiet = False
+        return args
+    return _parse
+
+
+# ---------------------------------------------------------------------------
+# Mock HTTP response factory (CLI tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_response():
+    """Factory for mock requests.Response objects."""
+    def _make(status_code=200, json_data=None, headers=None):
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json.return_value = json_data if json_data is not None else {}
+        resp.headers = headers or {"Content-Type": "application/json"}
+        if 400 <= status_code < 600:
+            from requests.exceptions import HTTPError
+            resp.raise_for_status.side_effect = HTTPError(response=resp)
+        else:
+            resp.raise_for_status.return_value = None
+        return resp
+    return _make
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +137,82 @@ def make_mock_model_response():
             mock.read = AsyncMock(return_value=body or b"")
         return mock
     return _make
+
+
+# ---------------------------------------------------------------------------
+# Mock VastClient (CLI tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_client(mock_response):
+    """A MagicMock VastClient whose get/post/put/delete return 200 by default."""
+    client = MagicMock()
+    default_resp = mock_response(200, {})
+    client.get.return_value = default_resp
+    client.post.return_value = default_resp
+    client.put.return_value = default_resp
+    client.delete.return_value = default_resp
+    client.api_key = "test-api-key"
+    client.server_url = "https://console.vast.ai"
+    client.retry = 3
+    client.explain = False
+    client.curl = False
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Patch get_client across all CLI command modules
+# ---------------------------------------------------------------------------
+
+COMMAND_MODULES = [
+    "vastai.cli.commands.billing",
+    "vastai.cli.commands.auth",
+    "vastai.cli.commands.offers",
+    "vastai.cli.commands.instances",
+    "vastai.cli.commands.machines",
+    "vastai.cli.commands.keys",
+    "vastai.cli.commands.endpoints",
+    "vastai.cli.commands.storage",
+    "vastai.cli.commands.teams",
+    "vastai.cli.commands.clusters",
+    "vastai.cli.commands.misc",
+    "vastai.cli.commands.deployments",
+]
+
+
+@pytest.fixture
+def patch_get_client(mock_client):
+    """Patch get_client in all command modules to return mock_client."""
+    patches = []
+    for mod in COMMAND_MODULES:
+        p = patch(f"{mod}.get_client", return_value=mock_client)
+        patches.append(p)
+        p.start()
+    yield mock_client
+    for p in patches:
+        p.stop()
+
+
+# ---------------------------------------------------------------------------
+# Live test fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def api_key():
+    """Read VAST_API_KEY from environment; skip if missing."""
+    key = os.environ.get("VAST_API_KEY")
+    if not key:
+        pytest.skip("VAST_API_KEY not set")
+    return key
+
+
+@pytest.fixture(scope="session")
+def live_client(api_key):
+    """Real VastClient for live tests."""
+    from vastai.api.client import VastClient
+    return VastClient(api_key=api_key)
 
 
 # ---------------------------------------------------------------------------
