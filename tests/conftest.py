@@ -1376,3 +1376,64 @@ def session_on_mock_endpoint(make_mock_endpoint_for_session, make_client_session
     """Single mock endpoint and :class:`Session` bound to it (configure ``ep`` attrs in tests as needed)."""
     ep = make_mock_endpoint_for_session()
     return ep, make_client_session(endpoint=ep)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for test_client_session.py (Endpoint/Session on mock client)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def make_endpoint(mock_serverless_client):
+    """Factory: create Endpoint bound to mock_serverless_client."""
+
+    def _make(name="test-endpoint", id=1, api_key="ep-api-key"):
+        return Endpoint(
+            client=mock_serverless_client,
+            name=name,
+            id=id,
+            api_key=api_key,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def sample_endpoint(make_endpoint):
+    """A ready-to-use Endpoint instance with default values."""
+    return make_endpoint()
+
+
+@pytest.fixture
+def make_session(sample_endpoint):
+    """Factory: create Session bound to sample_endpoint."""
+
+    def _make(
+        session_id="sess-123",
+        lifetime=60.0,
+        expiration="2026-12-31T00:00:00Z",
+        url="https://worker1.vast.ai",
+        auth_data=None,
+        on_close_route=None,
+        on_close_payload=None,
+    ):
+        if auth_data is None:
+            auth_data = {"url": "https://worker1.vast.ai", "signature": "abc"}
+        return Session(
+            endpoint=sample_endpoint,
+            session_id=session_id,
+            lifetime=lifetime,
+            expiration=expiration,
+            url=url,
+            auth_data=auth_data,
+            on_close_route=on_close_route,
+            on_close_payload=on_close_payload,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def sample_session(make_session):
+    """A ready-to-use Session instance with default values."""
+    return make_session()
