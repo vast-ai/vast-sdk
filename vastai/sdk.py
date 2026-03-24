@@ -6,7 +6,7 @@ import os
 from typing import Dict, List, Optional
 
 from vastai.api.client import VastClient
-from vastai.api import instances, offers, machines, teams, keys, endpoints, billing, storage, clusters, auth
+from vastai.api import instances, offers, machines, teams, keys, endpoints, billing, storage, clusters, auth, deployments
 
 
 # Default API key file location (matches legacy CLI behavior)
@@ -133,6 +133,22 @@ class VastAI:
     def take_snapshot(self, instance_id, **kwargs) -> dict:
         """Take a container snapshot and push to a registry."""
         return instances.take_snapshot(self.client, instance_id, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Deployment methods
+    # ------------------------------------------------------------------
+
+    def show_deployments(self) -> list[dict]:
+        """Return all deployments for the authenticated user."""
+        return deployments.show_deployments(self.client)
+
+    def show_deployment(self, id: int) -> dict:
+        """Return details of a single deployment."""
+        return deployments.show_deployment(self.client, id)
+
+    def delete_deployment(self, id: int) -> dict:
+        """Delete a deployment."""
+        return deployments.delete_deployment(self.client, id)
 
     # ------------------------------------------------------------------
     # Offer / search methods

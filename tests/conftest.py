@@ -28,7 +28,7 @@ def cli_parser():
     from vastai.cli.main import parser
     from vastai.cli.commands import (  # noqa: F401
         instances, offers, machines, teams, keys, endpoints,
-        billing, storage, clusters, auth, misc,
+        billing, storage, clusters, auth, misc, deployments,
     )
     from vastai.cli.util import server_url_default, api_key_guard
     parser.add_argument("--url", help="Server REST API URL", default=server_url_default)
@@ -65,6 +65,8 @@ def parse_argv(cli_parser):
             args.curl = False
         if not hasattr(args, 'no_color'):
             args.no_color = False
+        if not hasattr(args, 'quiet'):
+            args.quiet = False
         return args
     return _parse
 
@@ -129,6 +131,7 @@ COMMAND_MODULES = [
     "vastai.cli.commands.teams",
     "vastai.cli.commands.clusters",
     "vastai.cli.commands.misc",
+    "vastai.cli.commands.deployments",
 ]
 
 
