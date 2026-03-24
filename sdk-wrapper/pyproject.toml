@@ -25,7 +25,7 @@ vcs = "git"
 
 [tool.poetry.dependencies]
 python = ">=3.9"
-vastai = ">=0.1.0"
+vastai = ">=1.0.0.dev2"
 
 [tool.poetry.urls]
 Homepage = "https://vast.ai"
