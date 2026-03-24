@@ -663,7 +663,7 @@ def make_metrics_client_session_instance():
 
 
 # ---------------------------------------------------------------------------
-# Serverless client (vastai.serverless.client.client) fixtures
+# Serverless client (Serverless, Endpoint, Session) fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -698,6 +698,34 @@ def make_serverless_endpoint():
         api_key: str = "ekey",
     ) -> Endpoint:
         return Endpoint(sl_client, name, endpoint_id, api_key)
+
+    return _make
+
+
+@pytest.fixture
+def mock_serverless_client():
+    """Minimal mock Serverless-like client for Endpoint delegation tests."""
+    c = MagicMock()
+    c.is_open = MagicMock(return_value=True)
+    c.autoscaler_url = "https://run.vast.ai"
+    c.queue_endpoint_request = MagicMock(return_value="queued")
+    c.end_endpoint_session = AsyncMock(return_value=None)
+    c.get_endpoint_session = AsyncMock(return_value=MagicMock())
+    c.start_endpoint_session = MagicMock(return_value="started")
+    c.get_endpoint_workers = AsyncMock(return_value=[])
+    return c
+
+
+@pytest.fixture
+def make_mock_endpoint_for_session():
+    """Factory: new MagicMock endpoint with session_healthcheck, close_session, request."""
+
+    def _make() -> MagicMock:
+        ep = MagicMock()
+        ep.session_healthcheck = AsyncMock(return_value=True)
+        ep.close_session = AsyncMock(return_value=None)
+        ep.request = AsyncMock(return_value={"status": 200, "body": "ok"})
+        return ep
 
     return _make
 
@@ -846,3 +874,32 @@ def patch_serverless_queue_async_stubs():
         ),
     ):
         yield
+
+
+@pytest.fixture
+def make_client_session(make_mock_endpoint_for_session):
+    """Factory: build Session with default mock endpoint and typical test defaults."""
+
+    def _make(
+        endpoint=None,
+        *,
+        session_id: str = "sess-1",
+        lifetime: float = 60.0,
+        expiration: str = "2099-01-01T00:00:00Z",
+        url: str = "https://worker.example/session",
+        auth_data: dict | None = None,
+        **kwargs,
+    ):
+        ep = endpoint if endpoint is not None else make_mock_endpoint_for_session()
+        ad = auth_data if auth_data is not None else {"token": "t"}
+        return Session(
+            endpoint=ep,
+            session_id=session_id,
+            lifetime=lifetime,
+            expiration=expiration,
+            url=url,
+            auth_data=ad,
+            **kwargs,
+        )
+
+    return _make
