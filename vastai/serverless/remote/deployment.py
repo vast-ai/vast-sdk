@@ -105,9 +105,7 @@ def remote(endpoint_name: str):
                 bound_args.apply_defaults()
 
                 payload = {
-                    "input": {
-                        k: serialize(v, func_mod) for k, v in bound_args.arguments.items()
-                    }
+                    k: serialize(v, func_mod) for k, v in bound_args.arguments.items()
                 }
 
                 print("Payload: ", payload)
@@ -356,7 +354,7 @@ class Deployment:
         }
 
         # Search params — merge user params with sensible defaults
-        default_search = "verified=true rentable=true"
+        default_search = "verified=true rentable=true static_ip=true"
         if self.search_params:
             body["search_params"] = f"{default_search} {self.search_params}"
         else:
