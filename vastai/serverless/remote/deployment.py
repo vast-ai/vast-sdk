@@ -44,6 +44,7 @@ def _setup_logger(name: str) -> logging.Logger:
 
 REMOTE_FUNCTIONS_BY_ENDPOINT_NAME = {}
 BENCHMARK_CONFIG_BY_ENDPOINT_NAME = {}
+ENDPOINT_NAME_MAP = {}  # maps user endpoint_name -> actual API endpoint name (set by deploy())
 
 
 def get_mode():
@@ -113,7 +114,8 @@ def remote(endpoint_name: str):
 
                 async with Serverless() as client:
                     snapshot_time = time.time()
-                    endpoint = await client.get_endpoint(name=endpoint_name)
+                    resolved_name = ENDPOINT_NAME_MAP.get(endpoint_name, endpoint_name)
+                    endpoint = await client.get_endpoint(name=resolved_name)
                     response = await endpoint.request(f"/remote/{func_name}", payload)
                     time_elapsed = time.time() - snapshot_time
                     print(f"Time elapsed: {time_elapsed} seconds")
@@ -353,9 +355,12 @@ class Deployment:
             "max_workers": self.max_workers,
         }
 
-        # Optional fields
+        # Search params — merge user params with sensible defaults
+        default_search = "verified=true rentable=true"
         if self.search_params:
-            body["search_params"] = self.search_params
+            body["search_params"] = f"{default_search} {self.search_params}"
+        else:
+            body["search_params"] = default_search
         if self.env_vars:
             body["env"] = self._build_env_string()
         if self.ttl is not None:
@@ -394,6 +399,10 @@ class Deployment:
         self.deployment_id = result["deployment_id"]
         self.endpoint_id = result["endpoint_id"]
         action = result.get("action", "unknown")
+
+        # Register the API endpoint name so @remote wrappers can find it
+        api_endpoint_name = f"deployment-{self.name}-{self.tag}"
+        ENDPOINT_NAME_MAP[self.name] = api_endpoint_name
         self.logger.info(f"Deployment {action}: id={self.deployment_id}, endpoint={self.endpoint_id}")
 
         # Upload to S3 if the API returned a presigned upload URL (new version)
@@ -410,8 +419,64 @@ class Deployment:
         if result.get("evicted_versions"):
             self.logger.info(f"Evicted old versions: {result['evicted_versions']}")
 
-        print(f"Deployed '{self.name}' (action={action}, id={self.deployment_id})")
+        # On soft_update, trigger a rolling worker update via the autoscaler
+        if action == "soft_update":
+            self._trigger_worker_update(api_key)
+
+        action_msgs = {
+            "created": f"Created new deployment '{self.name}' (id={self.deployment_id})",
+            "soft_update": f"Updated deployment '{self.name}' code (id={self.deployment_id}), worker update initiated",
+            "autoscale_update": f"Updated deployment '{self.name}' scaling config (id={self.deployment_id})",
+            "exists": f"Deployment '{self.name}' unchanged (id={self.deployment_id})",
+        }
+        print(action_msgs.get(action, f"Deployed '{self.name}' (action={action}, id={self.deployment_id})"))
         return result
+
+    def _trigger_worker_update(self, api_key):
+        """Trigger a rolling worker update via the autoscaler's /update_workers/ endpoint."""
+        AUTOSCALER_URL = os.getenv("VAST_AUTOSCALER_URL", "https://run.vast.ai")
+
+        # Look up workergroup_id and endpoint api_key from the webserver
+        autojobs_resp = requests.get(
+            f"{API_URL}/api/v0/autojobs/",
+            params={"api_key": api_key, "client_id": "me"},
+        )
+        autojobs_resp.raise_for_status()
+        autojobs = autojobs_resp.json().get("results", [])
+
+        workergroup = None
+        for aj in autojobs:
+            if aj.get("endpoint_id") == self.endpoint_id:
+                workergroup = aj
+                break
+
+        if not workergroup:
+            self.logger.warning(f"No workergroup found for endpoint {self.endpoint_id}, skipping worker update")
+            return
+
+        workergroup_id = workergroup["id"]
+        endpoint_api_key = workergroup.get("api_key", api_key)
+
+        self.logger.info(f"Triggering worker update for workergroup {workergroup_id}...")
+        update_resp = requests.post(
+            f"{AUTOSCALER_URL}/update_workers/",
+            json={
+                "workergroup_id": workergroup_id,
+                "api_key": endpoint_api_key,
+            },
+            headers={"Authorization": f"Bearer {endpoint_api_key}"},
+        )
+
+        if update_resp.ok:
+            update_result = update_resp.json()
+            if update_result.get("success"):
+                workers_count = update_result.get("workers_to_update", 0)
+                self.logger.info(f"Worker update initiated: {workers_count} workers to update")
+                print(f"Rolling update initiated for {workers_count} workers")
+            else:
+                self.logger.warning(f"Worker update response: {update_result}")
+        else:
+            self.logger.warning(f"Failed to trigger worker update: HTTP {update_resp.status_code}")
 
     # --- Serve (worker side) ---
 
