@@ -34,6 +34,13 @@ from vastai.serverless.server.worker import (
 )
 
 
+def _attach_mock_aiohttp_session(sl: Serverless) -> None:
+    """Put an open mocked aiohttp-backed session on ``sl._session`` (in-place)."""
+    mock_sess = MagicMock()
+    mock_sess.closed = False
+    mock_sess.close = AsyncMock()
+    sl._session = mock_sess
+
 
 # ---------------------------------------------------------------------------
 # Global RAII (resource cleanup after every test)
@@ -567,10 +574,7 @@ def client() -> Serverless:
 @pytest.fixture
 def client_with_session(client: Serverless) -> Serverless:
     """Serverless client with a mocked open aiohttp session on ``_session``."""
-    mock_sess = MagicMock()
-    mock_sess.closed = False
-    mock_sess.close = AsyncMock()
-    client._session = mock_sess
+    _attach_mock_aiohttp_session(client)
     return client
 
 
@@ -678,8 +682,14 @@ def default_start_endpoint_session_ep(client, make_serverless_endpoint):
 
 
 @pytest.fixture
-def make_test_endpoint(client, client_with_session, make_serverless_endpoint):
-    """Single factory for test :class:`Endpoint` instances (optional open aiohttp session)."""
+def make_test_endpoint(client, make_serverless_endpoint):
+    """Factory for test :class:`Endpoint` instances.
+
+    Do not depend on ``client_with_session``: that fixture mutates the shared
+    ``client`` in place. ``open_session=True`` uses a **new** ``Serverless`` with
+    its own mock aiohttp session so ``open_session=False`` keeps ``client`` without
+    ``_session`` (unless another fixture or test attaches one).
+    """
 
     def _make(
         *,
@@ -688,7 +698,11 @@ def make_test_endpoint(client, client_with_session, make_serverless_endpoint):
         endpoint_id: int = 1,
         api_key: str = "ek",
     ) -> Endpoint:
-        sl = client_with_session if open_session else client
+        if open_session:
+            sl = Serverless(api_key="k")
+            _attach_mock_aiohttp_session(sl)
+        else:
+            sl = client
         return make_serverless_endpoint(
             sl, name=name, endpoint_id=endpoint_id, api_key=api_key
         )

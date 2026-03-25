@@ -234,6 +234,27 @@ class TestEndpointRoute:
         assert call_kw["body"]["replay_timeout"] == 30.0
 
 
+class TestMakeTestEndpointClientIsolation:
+    """Regression: ``make_test_endpoint`` must not pull in ``client_with_session`` (mutates ``client``)."""
+
+    def test_default_leaves_shared_client_without_aiohttp_session(
+        self, client, make_test_endpoint
+    ) -> None:
+        assert client._session is None
+        ep = make_test_endpoint()
+        assert ep.client is client
+        assert client._session is None
+
+    def test_open_session_binds_a_fresh_serverless_instance(
+        self, client, make_test_endpoint
+    ) -> None:
+        ep = make_test_endpoint(open_session=True)
+        assert ep.client is not client
+        assert client._session is None
+        assert ep.client._session is not None
+        assert ep.client.is_open() is True
+
+
 class TestRouteResponse:
     def test_repr_shows_status(self) -> None:
         rr = RouteResponse({"url": "https://x"})
