@@ -1,14 +1,19 @@
 """Shared pytest fixtures for vast-sdk tests.
 
-Fixtures follow unit-test-requirements: one fixture per concept, defined in
-conftest.py for reuse across test files.
+One fixture per concept where practical; pyworker ``Metrics`` helpers live in the
+``# Pyworker server`` section below.
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import ClientResponseError
 
+from vastai.serverless.server.lib.data_types import RequestMetrics, Session as PyworkerSession
 from vastai.serverless.server.worker import (
     WorkerConfig,
     HandlerConfig,
@@ -227,14 +232,28 @@ def make_mock_http_response():
 def make_mock_make_request_client():
     """Factory: create mock session and client for _make_request.
 
-    Returns a callable that accepts a mock response and returns
-    (mock_session, mock_client) configured for _make_request.
+    Returns a callable ``(mock_session, mock_client)`` configured for _make_request.
+
+    - ``make_mock_make_request_client(mock_resp)`` — ``session.get`` returns ``mock_resp``.
+    - ``make_mock_make_request_client(get_side_effect=...)`` — ``session.get`` uses
+      ``AsyncMock(side_effect=...)`` (exception, list of responses, etc.).
+    - ``make_mock_make_request_client(post_return=resp)`` — ``session.post`` returns
+      ``resp``; ``session.get`` is a bare ``AsyncMock()`` (unused).
     """
 
-    def _make(mock_resp):
+    def _make(mock_resp=None, *, get_side_effect=None, post_return=None):
         mock_session = MagicMock()
-        mock_session.get = AsyncMock(return_value=mock_resp)
-        mock_session.post = AsyncMock()
+        if get_side_effect is not None:
+            mock_session.get = AsyncMock(side_effect=get_side_effect)
+        elif post_return is not None:
+            mock_session.get = AsyncMock()
+        else:
+            mock_session.get = AsyncMock(return_value=mock_resp)
+
+        if post_return is not None:
+            mock_session.post = AsyncMock(return_value=post_return)
+        else:
+            mock_session.post = AsyncMock()
 
         mock_client = MagicMock()
         mock_client._get_session = AsyncMock(return_value=mock_session)
@@ -295,3 +314,215 @@ def build_kwargs_defaults():
         "method": "GET",
         "stream": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Pyworker server (vastai.serverless.server.lib.metrics) fixtures
+# ---------------------------------------------------------------------------
+
+
+def _metrics_post_ok_context_and_response() -> tuple[MagicMock, MagicMock]:
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    return mock_ctx, mock_resp
+
+
+@pytest.fixture
+def clear_get_url_cache():
+    """Clear functools.cache on get_url() before and after each test.
+
+    Use via ``pytestmark = pytest.mark.usefixtures("clear_get_url_cache")`` on
+    modules that patch os.environ for URL tests.
+    """
+    from vastai.serverless.server.lib.metrics import get_url
+
+    get_url.cache_clear()
+    yield
+    get_url.cache_clear()
+
+
+@pytest.fixture
+def make_pyworker_metrics():
+    """Factory: build Metrics with explicit id/report_addr/url (no CONTAINER_ID env)."""
+
+    def _make(**kwargs):
+        from vastai.serverless.server.lib.metrics import Metrics
+
+        defaults = dict(
+            id=1,
+            report_addr=["http://report.test"],
+            url="http://worker.test:9000",
+        )
+        defaults.update(kwargs)
+        return Metrics(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def make_pyworker_session():
+    """Factory: ``PyworkerSession`` for metrics tests (server ``Session``, not aiohttp)."""
+
+    def _make(**kwargs):
+        defaults = dict(
+            session_id="s1",
+            lifetime=0.0,
+            auth_data={},
+            expiration=0.0,
+            on_close_route="",
+            on_close_payload={},
+            request_idx=1,
+        )
+        defaults.update(kwargs)
+        return PyworkerSession(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def make_pyworker_request_metrics():
+    """Factory: ``RequestMetrics`` with defaults; override fields per test."""
+
+    def _make(**kwargs):
+        defaults = dict(
+            request_idx=1,
+            reqnum=1,
+            workload=1.0,
+            status="",
+            success=False,
+            is_session=False,
+            session=None,
+            session_reqnum=None,
+        )
+        defaults.update(kwargs)
+        return RequestMetrics(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def make_metrics_aiohttp_post():
+    """Single factory for aiohttp-style ``session.post`` / async context mocks in metrics tests.
+
+    - ``session_ok()`` → ``(mock_session, mock_response)``
+    - ``context_ok()`` → ``(context_manager, response)``
+    - ``context_timeout()`` → context whose ``__aenter__`` raises ``asyncio.TimeoutError``
+    - ``context_client_error(status=500)`` → context; ``raise_for_status`` raises ``ClientResponseError``
+    - ``context_enter_raises(exc)`` → context whose ``__aenter__`` raises ``exc``
+    """
+
+    def session_ok():
+        mock_ctx, mock_resp = _metrics_post_ok_context_and_response()
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_ctx)
+        return mock_session, mock_resp
+
+    def context_ok():
+        return _metrics_post_ok_context_and_response()
+
+    def context_timeout():
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        return mock_ctx
+
+    def context_client_error(*, status: int = 500):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock(
+            side_effect=ClientResponseError(
+                request_info=MagicMock(),
+                history=(),
+                status=status,
+            )
+        )
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        return mock_ctx
+
+    def context_enter_raises(exc: BaseException):
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(side_effect=exc)
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        return mock_ctx
+
+    return SimpleNamespace(
+        session_ok=session_ok,
+        context_ok=context_ok,
+        context_timeout=context_timeout,
+        context_client_error=context_client_error,
+        context_enter_raises=context_enter_raises,
+    )
+
+
+@pytest.fixture
+def metrics_worker_status_context():
+    """Patch ``Metrics.http``, disk usage, and optionally ``asyncio.sleep`` for ``__send_metrics_and_reset``."""
+
+    @contextmanager
+    def _cm(m, mock_session, *, disk_gb: float = 1.0, mock_asyncio_sleep: bool = False):
+        with patch.object(m, "http", new_callable=AsyncMock, return_value=mock_session):
+            with patch(
+                "vastai.serverless.server.lib.data_types.SystemMetrics.get_disk_usage_GB",
+                return_value=disk_gb,
+            ):
+                if mock_asyncio_sleep:
+                    with patch(
+                        "vastai.serverless.server.lib.metrics.asyncio.sleep",
+                        new_callable=AsyncMock,
+                    ):
+                        yield
+                else:
+                    yield
+
+    return _cm
+
+
+@pytest.fixture
+def metrics_delete_send_context():
+    """Patch ``Metrics.http`` and ``asyncio.sleep`` for ``__send_delete_requests_and_reset``."""
+
+    @contextmanager
+    def _cm(m, mock_session):
+        with patch.object(m, "http", new_callable=AsyncMock, return_value=mock_session):
+            with patch(
+                "vastai.serverless.server.lib.metrics.asyncio.sleep",
+                new_callable=AsyncMock,
+            ):
+                yield
+
+    return _cm
+
+
+@pytest.fixture
+def patch_pyworker_metrics_loop():
+    """Patch ``time``, ``_Metrics__send_metrics_and_reset``, and ``metrics.sleep`` for ``_send_metrics_loop`` tests."""
+
+    @contextmanager
+    def _cm(m, mock_send, *, time_return: float):
+        with patch("vastai.serverless.server.lib.metrics.time") as mock_time:
+            mock_time.time.return_value = time_return
+            with patch.object(m, "_Metrics__send_metrics_and_reset", mock_send):
+                with patch(
+                    "vastai.serverless.server.lib.metrics.sleep",
+                    new_callable=AsyncMock,
+                ):
+                    yield mock_time
+
+    return _cm
+
+
+@pytest.fixture
+def make_metrics_client_session_instance():
+    """Factory: MagicMock standing in for ``aiohttp.ClientSession`` in metrics ``http()`` tests."""
+
+    def _make(*, close_async: bool = False):
+        inst = MagicMock()
+        if close_async:
+            inst.close = AsyncMock()
+        return inst
+
+    return _make

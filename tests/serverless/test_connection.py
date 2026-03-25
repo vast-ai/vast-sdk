@@ -708,13 +708,7 @@ class TestMakeRequest:
         mock_resp.headers = {}
         mock_resp.release = MagicMock()
 
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(return_value=mock_resp)
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
+        _, mock_client = make_mock_make_request_client(mock_resp)
 
         result = await _make_request(
             client=mock_client,
@@ -822,13 +816,9 @@ class TestMakeRequest:
         Assumptions:
         - Timeout on final attempt propagates as TimeoutError
         """
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(side_effect=asyncio.TimeoutError())
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
+        _, mock_client = make_mock_make_request_client(
+            get_side_effect=asyncio.TimeoutError(),
+        )
 
         with pytest.raises(TimeoutError, match="timed out after"):
             await _make_request(
@@ -857,13 +847,9 @@ class TestMakeRequest:
         Assumptions:
         - Stream path TimeoutError on final attempt propagates
         """
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(side_effect=asyncio.TimeoutError())
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
+        _, mock_client = make_mock_make_request_client(
+            get_side_effect=asyncio.TimeoutError(),
+        )
 
         with pytest.raises(TimeoutError, match="timed out after"):
             await _make_request(
@@ -928,13 +914,9 @@ class TestMakeRequest:
         Assumptions:
         - Generic exception on final attempt propagates
         """
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(side_effect=ConnectionError("refused"))
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
+        _, mock_client = make_mock_make_request_client(
+            get_side_effect=ConnectionError("refused"),
+        )
 
         with pytest.raises(ConnectionError, match="refused"):
             await _make_request(
@@ -1006,13 +988,9 @@ class TestMakeRequest:
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=None)
 
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock()
-        mock_session.post = AsyncMock(return_value=mock_resp)
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
+        mock_session, mock_client = make_mock_make_request_client(
+            post_return=mock_resp,
+        )
 
         with patch("vastai.serverless.client.connection._build_kwargs") as mock_build:
             mock_build.return_value = {
@@ -1092,15 +1070,9 @@ class TestMakeRequest:
         mock_resp_404 = make_mock_http_response(status=404, text="Not Found")
         mock_resp_404.release = MagicMock()
 
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(
-            side_effect=[mock_resp_503, mock_resp_404]
+        mock_session, mock_client = make_mock_make_request_client(
+            get_side_effect=[mock_resp_503, mock_resp_404],
         )
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
 
         with patch(
             "vastai.serverless.client.connection.asyncio.sleep",
@@ -1143,15 +1115,9 @@ class TestMakeRequest:
             json_data={"ok": True},
         )
 
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(
-            side_effect=[asyncio.TimeoutError(), mock_resp]
+        mock_session, mock_client = make_mock_make_request_client(
+            get_side_effect=[asyncio.TimeoutError(), mock_resp],
         )
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
 
         with patch(
             "vastai.serverless.client.connection.asyncio.sleep",
@@ -1193,15 +1159,9 @@ class TestMakeRequest:
             json_data={"ok": True},
         )
 
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(
-            side_effect=[ConnectionError("reset"), mock_resp]
+        mock_session, mock_client = make_mock_make_request_client(
+            get_side_effect=[ConnectionError("reset"), mock_resp],
         )
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
 
         with patch(
             "vastai.serverless.client.connection.asyncio.sleep",
@@ -1235,13 +1195,9 @@ class TestMakeRequest:
         Assumptions:
         - Exception on final attempt is re-raised
         """
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(side_effect=ConnectionError("fail"))
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
+        _, mock_client = make_mock_make_request_client(
+            get_side_effect=ConnectionError("fail"),
+        )
 
         with patch(
             "vastai.serverless.client.connection.asyncio.sleep",
@@ -1313,15 +1269,9 @@ class TestMakeRequest:
         mock_resp_429 = make_mock_http_response(status=429, text="Too Many")
         mock_resp_400 = make_mock_http_response(status=400, text="Bad")
 
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(
-            side_effect=[mock_resp_429, mock_resp_400]
+        mock_session, mock_client = make_mock_make_request_client(
+            get_side_effect=[mock_resp_429, mock_resp_400],
         )
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
 
         with patch(
             "vastai.serverless.client.connection.asyncio.sleep",
@@ -1355,13 +1305,9 @@ class TestMakeRequest:
         Assumptions:
         - Exception triggers sleep and retry; last attempt raises
         """
-        mock_session = MagicMock()
-        mock_session.get = AsyncMock(side_effect=OSError("network"))
-        mock_session.post = AsyncMock()
-
-        mock_client = MagicMock()
-        mock_client._get_session = AsyncMock(return_value=mock_session)
-        mock_client.get_ssl_context = AsyncMock(return_value=None)
+        _, mock_client = make_mock_make_request_client(
+            get_side_effect=OSError("network"),
+        )
 
         with patch(
             "vastai.serverless.client.connection.asyncio.sleep",
