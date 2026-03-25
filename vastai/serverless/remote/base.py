@@ -100,6 +100,11 @@ class Deployment_(Generic[ModeDeployment], ABC):
     P = ParamSpec("P")
 
     @abstractmethod
-    def remote(  # TODO -> add benchmark kwargs
-        self: ModeDeployment, f: Callable[P, Awaitable[Any]]
-    ) -> Callable[P, Awaitable[Any]]: ...
+    def remote(
+        self: ModeDeployment,
+        f: Callable[P, Awaitable[Any]] | None = None,
+        *,
+        benchmark_dataset: list[dict] | None = None,
+        benchmark_generator: Callable[[], dict] | None = None,
+        benchmark_runs: int = 10,
+    ) -> Callable[P, Awaitable[Any]] | Callable[[Callable[P, Awaitable[Any]]], Callable[P, Awaitable[Any]]]: ...

@@ -1,5 +1,6 @@
 from base import Config, Deployment_
-from ..server.worker import Worker
+from ..server.worker import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig
+from .serialization import deserialize, serialize_ok, serialize_err
 from typing import (
     ParamSpec,
     Type,
@@ -56,14 +57,77 @@ class Deployment(Deployment_["Deployment"], AsyncContextManager):
         )
         self.contexts = {}  # invalidate contexts
 
-    # Worker should register post handlers for all remote_funcs in our map, /remote/a/b/... should server remote_funcs[(a,b,...)]
-    # Worker should start sending loading status updates to autoscaler, start Deployment.__aenter__, and only report ready/start serving remote funcs once __aenter__ completes
-    # i.e., __aenter__ replaces the log-based ready detection
-    # Worker should guarantee that __aexit__ should run on termination, with the exceptions passed through if terminated due to exception
+    def _wrap_remote_func(self, func: Callable[..., Awaitable[Any]], func_globals: dict) -> Callable[..., Awaitable[Any]]:
+        """Wrap a remote function with serialization/deserialization.
+
+        Expects payload: {"args": [serialized_args], "kwargs": {serialized_kwargs}}
+        Returns: {"ok": serialized_result} on success, {"err": serialized_exception} on failure.
+        """
+        root_module = self.root_module
+
+        async def wrapper(*, args: list = [], kwargs: dict = {}) -> dict:
+            deserialized_args = [deserialize(a, root_module, func_globals) for a in args]
+            deserialized_kwargs = {k: deserialize(v, root_module, func_globals) for k, v in kwargs.items()}
+            try:
+                result = await func(*deserialized_args, **deserialized_kwargs)
+                return serialize_ok(result, root_module)
+            except Exception as e:
+                return serialize_err(e, root_module)
+
+        return wrapper
+
     def into_worker(self) -> Worker:
-        raise NotImplementedError("not implemented")
+        handlers: list[HandlerConfig] = []
+        for key, entry in self.remote_funcs.items():
+            route = "/remote/" + "/".join(key)
+
+            benchmark_config = None
+            if entry["benchmark_dataset"] is not None or entry["benchmark_generator"] is not None:
+                benchmark_config = BenchmarkConfig(
+                    dataset=entry["benchmark_dataset"],
+                    generator=entry["benchmark_generator"],
+                    runs=entry["benchmark_runs"],
+                )
+
+            wrapped = self._wrap_remote_func(entry["func"], entry["globals"])
+
+            handlers.append(
+                HandlerConfig(
+                    route=route,
+                    remote_function=wrapped,
+                    allow_parallel_requests=False,
+                    benchmark_config=benchmark_config,
+                    max_queue_time=30.0,
+                )
+            )
+
+        config = WorkerConfig(
+            handlers=handlers,
+            lifecycle=self,
+        )
+        return Worker(config)
 
     P = ParamSpec("P")
 
-    def remote(self, f: Callable[P, Awaitable[Any]]) -> Callable[P, Awaitable[Any]]:
-        pass
+    def remote(
+        self,
+        f: Callable[P, Awaitable[Any]] | None = None,
+        *,
+        benchmark_dataset: list[dict] | None = None,
+        benchmark_generator: Callable[[], dict] | None = None,
+        benchmark_runs: int = 10,
+    ) -> Callable[P, Awaitable[Any]] | Callable[[Callable[P, Awaitable[Any]]], Callable[P, Awaitable[Any]]]:
+        def decorator(f: Callable[P, Awaitable[Any]]) -> Callable[P, Awaitable[Any]]:
+            key = self.relativize(f)
+            self.remote_funcs[key] = {
+                "func": f,
+                "globals": f.__globals__,
+                "benchmark_dataset": benchmark_dataset,
+                "benchmark_generator": benchmark_generator,
+                "benchmark_runs": benchmark_runs,
+            }
+            return f
+
+        if f is not None:
+            return decorator(f)
+        return decorator
