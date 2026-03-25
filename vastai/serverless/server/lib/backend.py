@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import base64
@@ -6,7 +7,7 @@ import subprocess
 import dataclasses
 import logging
 from asyncio import sleep, gather, Semaphore, create_task
-from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any, Dict
+from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any, Dict, AsyncContextManager
 from functools import cached_property
 from distutils.util import strtobool
 from collections import deque
@@ -84,6 +85,7 @@ class Backend:
     sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
     max_sessions: int = dataclasses.field(default=-1)
+    lifecycle: Optional[AsyncContextManager] = dataclasses.field(default=None)
         
     async def session_health_handler(self, request: web.Request) -> web.Response:
         try:
@@ -551,9 +553,60 @@ class Backend:
                     self.backend_errored(str(e))
 
     async def _start_tracking(self) -> None:
-        await gather(
-            self.__read_logs(), self.metrics._send_metrics_loop(), self.__healthcheck(), self.metrics._send_delete_requests_loop(), self.__session_gc_loop(), 
-        )
+        if self.lifecycle is not None:
+            await gather(
+                self.__lifecycle_startup(),
+                self.metrics._send_metrics_loop(),
+                self.__healthcheck(),
+                self.metrics._send_delete_requests_loop(),
+                self.__session_gc_loop(),
+            )
+        else:
+            await gather(
+                self.__read_logs(),
+                self.metrics._send_metrics_loop(),
+                self.__healthcheck(),
+                self.metrics._send_delete_requests_loop(),
+                self.__session_gc_loop(),
+            )
+
+    async def __lifecycle_startup(self) -> None:
+        """
+        Alternative to __read_logs for deployments that use an AsyncContextManager
+        lifecycle instead of log-based ready detection.
+
+        Enters the lifecycle context (which replaces on_init / log-based readiness),
+        runs the benchmark, then marks the model as loaded. Guarantees __aexit__ runs
+        on cancellation or exception.
+        """
+        try:
+            await self.lifecycle.__aenter__()
+            try:
+                max_throughput = await self.__run_benchmark()
+                self.__start_healthcheck = True
+
+                if self.healthcheck_url:
+                    log.debug("Lifecycle ready, waiting for healthcheck...")
+                    try:
+                        await asyncio.wait_for(self.__healthcheck_ready.wait(), timeout=300.0)
+                    except asyncio.TimeoutError:
+                        raise Exception("Timed out waiting for healthcheck after lifecycle ready (300s)")
+                else:
+                    log.debug("Lifecycle ready, no healthcheck configured")
+
+                self.metrics._model_loaded(max_throughput=max_throughput)
+                log.debug("Model marked as loaded via lifecycle")
+
+                # Keep alive — this coroutine lives for the duration of the server
+                await asyncio.Event().wait()
+            except BaseException:
+                await self.lifecycle.__aexit__(*sys.exc_info())
+                raise
+            else:
+                await self.lifecycle.__aexit__(None, None, None)
+        except Exception as e:
+            log.error(f"Lifecycle startup failed: {e}")
+            self.backend_errored(f"Lifecycle startup failed: {e}")
 
     def backend_errored(self, msg: str) -> None:
         self.metrics._model_errored(msg)
@@ -623,72 +676,73 @@ class Backend:
             log.error(f"Signature error: signature verification failed, sig:{auth_data.signature}, message: {message}")
             return False
 
-    async def __read_logs(self) -> Awaitable[NoReturn]:
+    async def __run_benchmark(self) -> float:
+        """Run the benchmark against the benchmark handler. Returns max throughput."""
+        log.debug("Running benchmark")
+        try:
+            with open(BENCHMARK_INDICATOR_FILE, "r") as f:
+                perf = float(f.readline())
+                log.debug(f"Already ran benchmark for perf score of {perf}")
+                return perf
+        except FileNotFoundError:
+            pass
+        if self.benchmark_handler.do_warmup_benchmark:
+            log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
+            log.debug("Initial run to trigger model loading...")
+            payload = self.benchmark_handler.make_benchmark_payload()
+            await self.__call_backend(handler=self.benchmark_handler, payload=payload)
 
-        async def run_benchmark() -> float:
-            log.debug("Model load detected")
-            try:
-                with open(BENCHMARK_INDICATOR_FILE, "r") as f:
-                    perf = float(f.readline())
-                    log.debug(f"Already ran benchmark for perf score of {perf}")
-                    return perf
-            except FileNotFoundError:
-                pass
-            if self.benchmark_handler.do_warmup_benchmark:
-                log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
-                log.debug("Initial run to trigger model loading...")
+        max_throughput = 0
+        sum_throughput = 0
+        concurrent_requests = self.benchmark_handler.concurrency if self.benchmark_handler.allow_parallel_requests else 1
+        for run in range(1, self.benchmark_handler.benchmark_runs + 1):
+            start = time.time()
+            benchmark_requests = []
+
+            for i in range(concurrent_requests):
                 payload = self.benchmark_handler.make_benchmark_payload()
-                await self.__call_backend(handler=self.benchmark_handler, payload=payload)
-
-            max_throughput = 0
-            sum_throughput = 0
-            concurrent_requests = self.benchmark_handler.concurrency if self.benchmark_handler.allow_parallel_requests else 1
-            for run in range(1, self.benchmark_handler.benchmark_runs + 1):
-                start = time.time()
-                benchmark_requests = []
-
-                for i in range(concurrent_requests):
-                    payload = self.benchmark_handler.make_benchmark_payload()
-                    workload = payload.count_workload()
-                    task = self.__call_backend(handler=self.benchmark_handler, payload=payload)
-                    benchmark_requests.append(
-                        BenchmarkResult(request_idx=i, workload=workload, task=task)
-                    )
-
-                responses = await gather(*[br.task for br in benchmark_requests])
-                for br, response in zip(benchmark_requests, responses):
-                    br.response = response
-
-                total_workload = sum(br.workload for br in benchmark_requests if br.is_successful)
-                time_elapsed = time.time() - start
-                successful_responses = sum([1 for br in benchmark_requests if br.is_successful])
-                if successful_responses == 0:
-                    self.backend_errored("No successful responses from benchmark")
-                    log.error(f"Benchmark Failed: No successful responses")
-                    return 0.0
-                throughput = total_workload / time_elapsed
-                sum_throughput += throughput
-                max_throughput = max(max_throughput, throughput)
-
-                # Log results for debugging
-                log.debug(
-                    "\n".join(
-                        [
-                            "#" * 60,
-                            f"Run: {run}, concurrent_requests: {concurrent_requests}",
-                            f"Total workload: {total_workload}, time_elapsed: {time_elapsed}s",
-                            f"Throughput: {throughput} workload/s",
-                            f"Successful responses: {successful_responses}/{concurrent_requests}",
-                            "#" * 60,
-                        ]
-                    )
+                workload = payload.count_workload()
+                task = self.__call_backend(handler=self.benchmark_handler, payload=payload)
+                benchmark_requests.append(
+                    BenchmarkResult(request_idx=i, workload=workload, task=task)
                 )
 
-            average_throughput = sum_throughput / self.benchmark_handler.benchmark_runs
-            log.debug( f"Benchmark complete: average perf is {average_throughput}, measured perf is {max_throughput}")
-            with open(BENCHMARK_INDICATOR_FILE, "w") as f:
-                f.write(str(max_throughput))
-            return max_throughput
+            responses = await gather(*[br.task for br in benchmark_requests])
+            for br, response in zip(benchmark_requests, responses):
+                br.response = response
+
+            total_workload = sum(br.workload for br in benchmark_requests if br.is_successful)
+            time_elapsed = time.time() - start
+            successful_responses = sum([1 for br in benchmark_requests if br.is_successful])
+            if successful_responses == 0:
+                self.backend_errored("No successful responses from benchmark")
+                log.error(f"Benchmark Failed: No successful responses")
+                return 0.0
+            throughput = total_workload / time_elapsed
+            sum_throughput += throughput
+            max_throughput = max(max_throughput, throughput)
+
+            # Log results for debugging
+            log.debug(
+                "\n".join(
+                    [
+                        "#" * 60,
+                        f"Run: {run}, concurrent_requests: {concurrent_requests}",
+                        f"Total workload: {total_workload}, time_elapsed: {time_elapsed}s",
+                        f"Throughput: {throughput} workload/s",
+                        f"Successful responses: {successful_responses}/{concurrent_requests}",
+                        "#" * 60,
+                    ]
+                )
+            )
+
+        average_throughput = sum_throughput / self.benchmark_handler.benchmark_runs
+        log.debug( f"Benchmark complete: average perf is {average_throughput}, measured perf is {max_throughput}")
+        with open(BENCHMARK_INDICATOR_FILE, "w") as f:
+            f.write(str(max_throughput))
+        return max_throughput
+
+    async def __read_logs(self) -> Awaitable[NoReturn]:
 
         async def handle_log_line(log_line: str) -> None:
             """
@@ -702,7 +756,7 @@ class Backend:
                             f"Got log line indicating model is loaded: {log_line}"
                         )
                         try:
-                            max_throughput = await run_benchmark()
+                            max_throughput = await self.__run_benchmark()
                             self.__start_healthcheck = True
 
                             # Wait for the first successful healthcheck before marking model as loaded
