@@ -52,6 +52,13 @@ hf_transfer = ">=0.1.9"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that hit the live Vast API",
+    "serverless: serverless tests that create real resources (costs money)",
+]
+asyncio_mode = "strict"
+
 [tool.poetry.urls]
 Homepage = "https://vast.ai"
 Source = "https://github.com/vast-ai/vast-sdk"
