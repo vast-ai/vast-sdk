@@ -1,18 +1,23 @@
 # endpoint.py
 from .connection import _make_request
-from typing import TYPE_CHECKING
+from typing import Awaitable, Generic, Optional, TypeVar, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .client import _ServerlessBase, ServerlessRequest
+    from .request_status import RequestStatus
     from .session import Session
 
-class Endpoint:
+R = TypeVar("R", bound=Awaitable)
+
+class Endpoint_(Generic[R]):
     name: str
     id: int
+    client: "_ServerlessBase[R]"
 
     def __repr__(self):
         return f"<Endpoint {self.name} (id={self.id})>"
 
-    def __init__(self, client, name, id, api_key):
+    def __init__(self, client: "_ServerlessBase[R]", name: str, id: int, api_key: str):
         if client is None:
             raise ValueError("Endpoint cannot be created without client reference")
         if not name:
@@ -24,7 +29,17 @@ class Endpoint:
         self.id = id
         self.api_key = api_key
 
-    def request(self, route, payload, serverless_request=None, cost: int = 100, retry: bool = True, stream: bool = False, timeout: float = None, session: "Session" = None):
+    def request(
+        self,
+        route,
+        payload,
+        serverless_request: Optional[Union["ServerlessRequest", "RequestStatus"]] = None,
+        cost: int = 100,
+        retry: bool = True,
+        stream: bool = False,
+        timeout: float = None,
+        session: "Session" = None,
+    ) -> R:
         return self.client.queue_endpoint_request(
             endpoint=self,
             worker_route=route,
@@ -34,7 +49,7 @@ class Endpoint:
             retry=retry,
             stream=stream,
             timeout=timeout,
-            session=session
+            session=session,
         )
 
     def close_session(self, session: "Session"):
@@ -69,7 +84,7 @@ class Endpoint:
     def get_workers(self):
         return self.client.get_endpoint_workers(self)
 
-    async def _route(self, cost: float = 0.0, req_idx: int = 0, timeout: float = 60.0):
+    async def _route(self, cost: float = 0.0, req_idx: int = 0, timeout: float = 60.0) -> "RouteResponse":
         if self.client is None or not self.client.is_open():
             raise ValueError("Client is invalid")
         try:
@@ -120,3 +135,8 @@ class RouteResponse:
 
     def get_url(self):
         return self.body.get("url")
+
+
+# Backward-compatible alias — works for instantiation at runtime.
+# Static analysis infers the R parameter from the client argument to __init__.
+Endpoint = Endpoint_
