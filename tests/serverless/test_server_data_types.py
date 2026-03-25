@@ -121,17 +121,6 @@ class FalsyPayloadHandler(EndpointHandler):
         return None
 
 
-def _valid_auth_dict():
-    return {
-        "cost": "1",
-        "endpoint": "/predict",
-        "reqnum": 1,
-        "request_idx": 0,
-        "signature": "sig",
-        "url": "http://example.com",
-    }
-
-
 class TestJsonDataException:
     """JsonDataException stores structured error payloads."""
 
@@ -154,7 +143,9 @@ class TestJsonDataException:
 class TestAuthDataFromJsonMsg:
     """AuthData.from_json_msg validates required fields."""
 
-    def test_from_json_msg_with_all_fields_returns_auth_data(self) -> None:
+    def test_from_json_msg_with_all_fields_returns_auth_data(
+        self, valid_auth_data_dict
+    ) -> None:
         """
         Verifies successful construction when every dataclass field is present.
 
@@ -166,7 +157,7 @@ class TestAuthDataFromJsonMsg:
         Assumptions:
         - inspect.signature(AuthData) matches dataclass fields used for validation
         """
-        data = _valid_auth_dict()
+        data = valid_auth_data_dict
         auth = AuthData.from_json_msg(data)
         assert auth.cost == data["cost"]
         assert auth.endpoint == data["endpoint"]
@@ -175,7 +166,9 @@ class TestAuthDataFromJsonMsg:
         assert auth.signature == data["signature"]
         assert auth.url == data["url"]
 
-    def test_from_json_msg_missing_field_raises_json_data_exception(self) -> None:
+    def test_from_json_msg_missing_field_raises_json_data_exception(
+        self, valid_auth_data_dict
+    ) -> None:
         """
         Verifies missing required parameters produce JsonDataException with per-field errors.
 
@@ -187,14 +180,14 @@ class TestAuthDataFromJsonMsg:
         Assumptions:
         - 'signature' is a required AuthData field
         """
-        data = _valid_auth_dict()
+        data = {**valid_auth_data_dict}
         del data["signature"]
         with pytest.raises(JsonDataException) as ctx:
             AuthData.from_json_msg(data)
         assert "signature" in ctx.value.message
         assert ctx.value.message["signature"] == "missing parameter"
 
-    def test_from_json_msg_ignores_unknown_keys(self) -> None:
+    def test_from_json_msg_ignores_unknown_keys(self, valid_auth_data_dict) -> None:
         """
         Verifies extra keys in JSON do not break construction or appear on the instance.
 
@@ -206,7 +199,7 @@ class TestAuthDataFromJsonMsg:
         Assumptions:
         - Filtering uses inspect.signature parameters only
         """
-        data = {**_valid_auth_dict(), "extra": "ignored"}
+        data = {**valid_auth_data_dict, "extra": "ignored"}
         auth = AuthData.from_json_msg(data)
         assert not hasattr(auth, "extra")
 
@@ -214,7 +207,9 @@ class TestAuthDataFromJsonMsg:
 class TestEndpointHandlerGetDataFromRequest:
     """EndpointHandler.get_data_from_request parses auth, payload, and optional session_id."""
 
-    def test_get_data_from_request_returns_auth_payload_and_none_session(self) -> None:
+    def test_get_data_from_request_returns_auth_payload_and_none_session(
+        self, valid_auth_data_dict
+    ) -> None:
         """
         Verifies happy path returns auth, payload, and None session_id when omitted.
 
@@ -227,7 +222,7 @@ class TestEndpointHandlerGetDataFromRequest:
         - Backend unpacks three values (see vastai.serverless.server.lib.backend)
         """
         req = {
-            "auth_data": _valid_auth_dict(),
+            "auth_data": valid_auth_data_dict,
             "payload": {"value": 7},
         }
         auth, payload, session_id = DummyHandler.get_data_from_request(req)
@@ -236,7 +231,9 @@ class TestEndpointHandlerGetDataFromRequest:
         assert payload.value == 7
         assert session_id is None
 
-    def test_get_data_from_request_includes_session_id_when_present(self) -> None:
+    def test_get_data_from_request_includes_session_id_when_present(
+        self, valid_auth_data_dict
+    ) -> None:
         """
         Verifies session_id from req_data is returned as the third element.
 
@@ -249,7 +246,7 @@ class TestEndpointHandlerGetDataFromRequest:
         - session_id is optional and passed through without validation
         """
         req = {
-            "auth_data": _valid_auth_dict(),
+            "auth_data": valid_auth_data_dict,
             "payload": {"value": 1},
             "session_id": "sess-abc",
         }
@@ -272,7 +269,9 @@ class TestEndpointHandlerGetDataFromRequest:
             DummyHandler.get_data_from_request(req)
         assert ctx.value.message["auth_data"] == "field missing"
 
-    def test_get_data_from_request_missing_payload_raises(self) -> None:
+    def test_get_data_from_request_missing_payload_raises(
+        self, valid_auth_data_dict
+    ) -> None:
         """
         Verifies absent payload yields JsonDataException.
 
@@ -283,7 +282,7 @@ class TestEndpointHandlerGetDataFromRequest:
         Assumptions:
         - auth_data alone is insufficient
         """
-        req = {"auth_data": _valid_auth_dict()}
+        req = {"auth_data": valid_auth_data_dict}
         with pytest.raises(JsonDataException) as ctx:
             DummyHandler.get_data_from_request(req)
         assert ctx.value.message["payload"] == "field missing"
@@ -307,7 +306,9 @@ class TestEndpointHandlerGetDataFromRequest:
         assert isinstance(inner, dict)
         assert "endpoint" in inner
 
-    def test_get_data_from_request_invalid_payload_merges_errors(self) -> None:
+    def test_get_data_from_request_invalid_payload_merges_errors(
+        self, valid_auth_data_dict
+    ) -> None:
         """
         Verifies payload from_json_msg JsonDataException maps to errors['payload'].
 
@@ -318,7 +319,7 @@ class TestEndpointHandlerGetDataFromRequest:
         Assumptions:
         - DummyPayload.from_json_msg raises JsonDataException like real payloads
         """
-        req = {"auth_data": _valid_auth_dict(), "payload": {}}
+        req = {"auth_data": valid_auth_data_dict, "payload": {}}
         with pytest.raises(JsonDataException) as ctx:
             DummyHandler.get_data_from_request(req)
         assert "value" in ctx.value.message["payload"]
@@ -347,6 +348,7 @@ class TestEndpointHandlerGetDataFromRequest:
 
     def test_get_data_from_request_raises_generic_exception_when_payload_falsy(
         self,
+        valid_auth_data_dict,
     ) -> None:
         """
         Verifies generic Exception when no field errors but payload deserialize is falsy.
@@ -358,7 +360,7 @@ class TestEndpointHandlerGetDataFromRequest:
         Assumptions:
         - Branch at data_types.get_data_from_request when auth_data truthy but payload falsy
         """
-        req = {"auth_data": _valid_auth_dict(), "payload": {"ignored": True}}
+        req = {"auth_data": valid_auth_data_dict, "payload": {"ignored": True}}
         with pytest.raises(Exception, match="error deserializing request data"):
             FalsyPayloadHandler.get_data_from_request(req)
 
