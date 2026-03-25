@@ -30,22 +30,22 @@ from vastai.serverless.server.lib import server as server_mod
 class TestWorker:
     """Verify Worker builds backend/routes and run_async/run call server correctly."""
 
-    def test_worker_init_creates_backend_with_config_values(self, worker_config_with_handler) -> None:
+    def test_worker_init_creates_backend_with_config_values(self, server_worker_config) -> None:
         """
         Verifies that Worker.__init__ creates Backend with url, log file, benchmark handler,
         log_actions, healthcheck_url, and max_sessions from WorkerConfig.
 
         This test verifies by:
-        1. Building a WorkerConfig with handler and benchmark via worker_config_with_handler
+        1. Building a WorkerConfig with handler and benchmark via server_worker_config
         2. Patching backend.Backend to a MagicMock
         3. Instantiating Worker(config)
         4. Asserting Backend was called once with the expected keyword arguments
 
         Assumptions:
-        - worker_config_with_handler yields a config with one handler that has BenchmarkConfig
+        - server_worker_config yields a config with one handler that has BenchmarkConfig
         - Backend is constructed in Worker.__init__ with these arguments
         """
-        config = worker_config_with_handler(
+        config = server_worker_config("handler", 
             route="/predict",
             dataset=[{"input": "test"}],
         )
@@ -66,7 +66,7 @@ class TestWorker:
         assert call_kw["max_sessions"] == 5
         assert call_kw["log_actions"] == [(LogAction.ModelLoaded, "Loaded")]
 
-    def test_worker_init_creates_routes_for_each_handler(self, worker_config_with_handler) -> None:
+    def test_worker_init_creates_routes_for_each_handler(self, server_worker_config) -> None:
         """
         Verifies that Worker attaches one route per handler via backend.create_handler.
 
@@ -78,7 +78,7 @@ class TestWorker:
         Assumptions:
         - Each (route_path, handler) gets one web.post(route_path, backend.create_handler(handler))
         """
-        config = worker_config_with_handler(route="/predict", dataset=[{"x": 1}])
+        config = server_worker_config("handler", route="/predict", dataset=[{"x": 1}])
         with patch.object(backend_mod, "Backend", MagicMock()) as mock_backend_class:
             mock_backend = MagicMock()
             mock_backend_class.return_value = mock_backend
@@ -89,7 +89,7 @@ class TestWorker:
 
     @pytest.mark.asyncio
     async def test_worker_run_async_calls_start_server_async(
-        self, worker_config_with_handler
+        self, server_worker_config
     ) -> None:
         """
         Verifies that Worker.run_async calls server.start_server_async with backend and routes.
@@ -103,7 +103,7 @@ class TestWorker:
         Assumptions:
         - No real server is started; start_server_async is fully mocked
         """
-        config = worker_config_with_handler(route="/", dataset=[{"a": 1}])
+        config = server_worker_config("handler", route="/", dataset=[{"a": 1}])
         with patch.object(backend_mod, "Backend", MagicMock()):
             worker = Worker(config)
         with patch.object(
@@ -116,7 +116,7 @@ class TestWorker:
         assert mock_start.call_args[0][1] is worker.routes
         assert mock_start.call_args[1].get("host") == "0.0.0.0"
 
-    def test_worker_run_calls_start_server(self, worker_config_with_handler) -> None:
+    def test_worker_run_calls_start_server(self, server_worker_config) -> None:
         """
         Verifies that Worker.run calls server.start_server with backend and routes.
 
@@ -129,7 +129,7 @@ class TestWorker:
         Assumptions:
         - start_server runs the event loop; we mock it so no server starts
         """
-        config = worker_config_with_handler(route="/", dataset=[{"a": 1}])
+        config = server_worker_config("handler", route="/", dataset=[{"a": 1}])
         with patch.object(backend_mod, "Backend", MagicMock()):
             worker = Worker(config)
         with patch.object(server_mod, "start_server", MagicMock()) as mock_start:
@@ -140,7 +140,7 @@ class TestWorker:
         assert mock_start.call_args[0][1] is worker.routes
 
     def test_worker_init_sets_handler_level_when_root_has_handlers(
-        self, worker_config_with_handler
+        self, server_worker_config
     ) -> None:
         """
         Verifies that Worker.__init__ sets level on existing root logger handlers when present.
@@ -153,7 +153,7 @@ class TestWorker:
         Assumptions:
         - When root_logger.handlers is non-empty, Worker uses the else branch and sets level on each
         """
-        config = worker_config_with_handler(route="/", dataset=[{"a": 1}])
+        config = server_worker_config("handler", route="/", dataset=[{"a": 1}])
         mock_handler = MagicMock()
         mock_root = MagicMock()
         mock_root.handlers = [mock_handler]

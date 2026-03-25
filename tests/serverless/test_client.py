@@ -971,7 +971,7 @@ class TestServerlessEndpointSessionHttp:
 
     @pytest.mark.asyncio
     async def test_end_endpoint_session_raises_when_not_ok(
-        self, client, make_mock_endpoint_session
+        self, client, make_session_mock
     ) -> None:
         """
         Verifies end_endpoint_session raises when _make_request returns ok=False.
@@ -984,7 +984,7 @@ class TestServerlessEndpointSessionHttp:
         Assumptions:
         - Session.url and session.auth_data are read for the request body
         """
-        mock_session = make_mock_endpoint_session(
+        mock_session = make_session_mock(
             session_id=9, url="https://worker/u", auth_data={"a": 1}
         )
 
@@ -1067,7 +1067,7 @@ class TestServerlessEndpointSessionHttp:
 
     @pytest.mark.asyncio
     async def test_end_endpoint_session_succeeds_when_ok_true(
-        self, client, make_mock_endpoint_session
+        self, client, make_session_mock
     ) -> None:
         """
         Verifies end_endpoint_session returns None when _make_request reports success.
@@ -1079,7 +1079,7 @@ class TestServerlessEndpointSessionHttp:
         Assumptions:
         - Successful end is a fire-and-forget style API (implicit None return)
         """
-        mock_session = make_mock_endpoint_session(auth_data={"a": 1})
+        mock_session = make_session_mock(auth_data={"a": 1})
         with patch(
             "vastai.serverless.client.client._make_request",
             new_callable=AsyncMock,
@@ -1089,10 +1089,10 @@ class TestServerlessEndpointSessionHttp:
 
     @pytest.mark.asyncio
     async def test_end_endpoint_session_wraps_generic_errors(
-        self, client, make_mock_endpoint_session
+        self, client, make_session_mock
     ) -> None:
         """Non-timeout failures from _make_request are wrapped with session context."""
-        mock_session = make_mock_endpoint_session(session_id=3, auth_data={})
+        mock_session = make_session_mock(session_id=3, auth_data={})
         with patch(
             "vastai.serverless.client.client._make_request",
             new_callable=AsyncMock,
@@ -1103,7 +1103,7 @@ class TestServerlessEndpointSessionHttp:
 
     @pytest.mark.asyncio
     async def test_end_endpoint_session_propagates_timeout_error(
-        self, client, make_mock_endpoint_session
+        self, client, make_session_mock
     ) -> None:
         """
         Verifies asyncio.TimeoutError from end_endpoint_session is not wrapped.
@@ -1115,7 +1115,7 @@ class TestServerlessEndpointSessionHttp:
         Assumptions:
         - Same TimeoutError ordering as get_endpoint_session
         """
-        mock_session = make_mock_endpoint_session(auth_data={})
+        mock_session = make_session_mock(auth_data={})
         with patch(
             "vastai.serverless.client.client._make_request",
             new_callable=AsyncMock,
@@ -1363,8 +1363,7 @@ class TestServerlessQueueEndpointRequest:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_waiting_mock,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -1383,8 +1382,8 @@ class TestServerlessQueueEndpointRequest:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        waiting = make_route_waiting_mock(request_idx=7)
-        ready = make_route_ready_mock(
+        waiting = make_route_response_mock(request_idx=7)
+        ready = make_route_response_mock(status="READY", 
             url="https://worker/",
             request_idx=7,
             body={"token": "t"},
@@ -1463,7 +1462,7 @@ class TestServerlessQueueEndpointRequestBranches:
         monkeypatch,
         client_with_session,
         make_serverless_endpoint,
-        make_route_waiting_mock,
+        make_route_response_mock,
     ) -> None:
         """
         Verifies TimeoutError when the route stays non-READY until the deadline.
@@ -1486,7 +1485,7 @@ class TestServerlessQueueEndpointRequestBranches:
         monkeypatch.setattr(client.logger, "disabled", True)
         ep = make_serverless_endpoint(client)
 
-        waiting = make_route_waiting_mock()
+        waiting = make_route_response_mock()
 
         calls = {"n": 0}
 
@@ -1524,7 +1523,7 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -1541,7 +1540,7 @@ class TestServerlessQueueEndpointRequestBranches:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_ready_mock(
+        ready = make_route_response_mock(status="READY", 
             url="https://worker/",
             request_idx=3,
             body={"token": "t"},
@@ -1648,7 +1647,7 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -1665,7 +1664,7 @@ class TestServerlessQueueEndpointRequestBranches:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_ready_mock(request_idx=2, body={"t": 1})
+        ready = make_route_response_mock(status="READY", request_idx=2, body={"t": 1})
 
         make_req = AsyncMock(
             side_effect=[
@@ -1731,7 +1730,7 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -1748,7 +1747,7 @@ class TestServerlessQueueEndpointRequestBranches:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
 
         make_req = AsyncMock(
             side_effect=[
@@ -1777,14 +1776,14 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """When retry=False, a retryable worker error completes immediately (no loop)."""
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
 
         with (
             patch.object(Endpoint, "_route", AsyncMock(return_value=ready)),
@@ -1810,14 +1809,14 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """When max_retries is set and exhausted, return the last non-ok result."""
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
 
         fail = {"ok": False, "retryable": True, "status": 503, "json": {"detail": "x"}}
 
@@ -1847,7 +1846,7 @@ class TestServerlessQueueEndpointRequestBranches:
         monkeypatch,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -1868,7 +1867,7 @@ class TestServerlessQueueEndpointRequestBranches:
         monkeypatch.setattr(client.logger, "disabled", True)
         ep = make_serverless_endpoint(client)
 
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
 
         # time.time() order: create_time (ServerlessRequest.__init__), start_time, first
         # outer-loop deadline (~357), then retry guard (~447), then f-string in TimeoutError.
@@ -1902,7 +1901,7 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -1918,7 +1917,7 @@ class TestServerlessQueueEndpointRequestBranches:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
 
         with (
             patch.object(Endpoint, "_route", AsyncMock(return_value=ready)),
@@ -1950,7 +1949,7 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -1966,7 +1965,7 @@ class TestServerlessQueueEndpointRequestBranches:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
         stream_obj = object()
 
         with (
@@ -1992,7 +1991,7 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_waiting_mock,
+        make_route_response_mock,
     ) -> None:
         """
         Verifies cancelling the ServerlessRequest cancels the background task and ends clean.
@@ -2008,7 +2007,7 @@ class TestServerlessQueueEndpointRequestBranches:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        waiting = make_route_waiting_mock()
+        waiting = make_route_response_mock()
 
         cancel_event = asyncio.Event()
         # Patching client.asyncio.sleep replaces the real asyncio.sleep globally; keep a
@@ -2045,7 +2044,7 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """
@@ -2061,7 +2060,7 @@ class TestServerlessQueueEndpointRequestBranches:
         client = client_with_session
         ep = make_serverless_endpoint(client)
 
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
         existing = ServerlessRequest()
 
         with (
@@ -2122,14 +2121,14 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_route_ready_mock,
+        make_route_response_mock,
         patch_serverless_queue_async_stubs,
     ) -> None:
         """Completed worker requests append one sample to ``Serverless.latencies``."""
         client = client_with_session
         client.latencies.clear()
         ep = make_serverless_endpoint(client)
-        ready = make_route_ready_mock()
+        ready = make_route_response_mock(status="READY")
 
         with (
             patch.object(Endpoint, "_route", AsyncMock(return_value=ready)),
@@ -2155,13 +2154,13 @@ class TestServerlessQueueEndpointRequestBranches:
         self,
         client_with_session,
         make_serverless_endpoint,
-        make_mock_endpoint_session,
+        make_session_mock,
     ) -> None:
         """If ``session.url`` is falsy, routing body is skipped and worker URL stays empty."""
         client = client_with_session
         ep = make_serverless_endpoint(client)
 
-        mock_session = make_mock_endpoint_session(
+        mock_session = make_session_mock(
             session_id=7,
             url=None,
             auth_data={"tok": 1},

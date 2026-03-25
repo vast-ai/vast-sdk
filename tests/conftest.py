@@ -4,6 +4,11 @@ Fixtures follow unit-test-requirements: one fixture per concept, defined in
 conftest.py for reuse across test files. Pyworker ``Metrics`` helpers live in the
 ``# Pyworker server`` section below.
 
+One fixture name per *kind* of resource; use factory callables for variants
+(``make_request_http_mocks``, ``make_route_response_mock``, ``server_worker_config``,
+``client_worker_dict``, ``make_session_mock``, ``make_test_endpoint``, …) instead
+of parallel fixtures.
+
 An autouse fixture restores the ``Serverless`` logger after each test so global
 logging state follows RAII and cannot leak between cases.
 """
@@ -104,105 +109,91 @@ def make_mock_model_response():
 
 
 # ---------------------------------------------------------------------------
-# Client Worker (vastai.serverless.client.worker) fixtures
+# Client Worker (vastai.serverless.client.worker) — single dict factory
 # ---------------------------------------------------------------------------
 
-
-@pytest.fixture
-def minimal_client_worker_dict() -> dict:
-    """Minimal dict with only required id field for client Worker.from_dict tests."""
-    return {"id": 1}
-
-
-@pytest.fixture
-def full_client_worker_dict() -> dict:
-    """Complete dict with all Worker fields for client Worker.from_dict tests.
-
-    Returns a dict that exercises every field. Tests may override specific
-    keys to test edge cases.
-    """
-    return {
-        "id": 42,
-        "status": "RUNNING",
-        "cur_load": 0.5,
-        "new_load": 0.6,
-        "cur_load_rolling_avg": 0.55,
-        "cur_perf": 1.2,
-        "perf": 1.1,
-        "measured_perf": 1.0,
-        "dlperf": 0.9,
-        "reliability": 0.95,
-        "reqs_working": 3,
-        "disk_usage": 0.4,
-        "loaded_at": 1700000000.0,
-        "started_at": 1699999000.0,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Server Worker (vastai.serverless.server.worker) fixtures
-# ---------------------------------------------------------------------------
+_FULL_CLIENT_WORKER_DICT = {
+    "id": 42,
+    "status": "RUNNING",
+    "cur_load": 0.5,
+    "new_load": 0.6,
+    "cur_load_rolling_avg": 0.55,
+    "cur_perf": 1.2,
+    "perf": 1.1,
+    "measured_perf": 1.0,
+    "dlperf": 0.9,
+    "reliability": 0.95,
+    "reqs_working": 3,
+    "disk_usage": 0.4,
+    "loaded_at": 1700000000.0,
+    "started_at": 1699999000.0,
+}
 
 
 @pytest.fixture
-def minimal_worker_config() -> WorkerConfig:
-    """WorkerConfig with minimal required fields for EndpointHandlerFactory.
+def client_worker_dict():
+    """Single factory for API worker payload dicts (``minimal`` / ``full`` + overrides)."""
 
-    Use when tests need a valid config without custom handlers.
-    """
-    return WorkerConfig(
-        model_server_url="http://localhost",
-        model_server_port=8000,
-    )
-
-
-@pytest.fixture
-def worker_config_with_handler():
-    """Factory fixture: build WorkerConfig with HandlerConfig(s) and BenchmarkConfig.
-
-    Returns a callable that accepts route, dataset, and optional extra handlers.
-    Use to avoid repeating WorkerConfig + HandlerConfig + BenchmarkConfig setup.
-    """
-
-    def _make(
-        route: str = "/predict",
-        dataset: list | None = None,
-        extra_handlers: list[HandlerConfig] | None = None,
-    ) -> WorkerConfig:
-        if dataset is None:
-            dataset = [{"input": "test"}]
-        handlers = [
-            HandlerConfig(
-                route=route,
-                benchmark_config=BenchmarkConfig(dataset=dataset),
-            ),
-        ]
-        if extra_handlers:
-            handlers.extend(extra_handlers)
-        return WorkerConfig(
-            model_server_url="http://localhost",
-            model_server_port=8000,
-            handlers=handlers,
-        )
+    def _make(kind: str = "minimal", **overrides: object) -> dict:
+        if kind == "minimal":
+            d = {"id": 1}
+        elif kind == "full":
+            d = dict(_FULL_CLIENT_WORKER_DICT)
+        else:
+            raise ValueError(f"unknown kind {kind!r}, use 'minimal' or 'full'")
+        d.update(overrides)
+        return d
 
     return _make
 
 
+# ---------------------------------------------------------------------------
+# Server Worker (vastai.serverless.server.worker) — single WorkerConfig factory
+# ---------------------------------------------------------------------------
+
+
 @pytest.fixture
-def worker_config_from_handlers():
-    """Factory fixture: build WorkerConfig from an explicit list of HandlerConfigs.
+def server_worker_config():
+    """Single factory for :class:`WorkerConfig` (minimal / handler / from_handlers)."""
 
-    Returns a callable that accepts a list of HandlerConfig and returns WorkerConfig
-    with standard model_server_url and model_server_port. Use when tests need custom
-    handler options (request_parser, response_generator, payload_class, etc.).
-    """
-
-    def _make(handlers: list[HandlerConfig]) -> WorkerConfig:
-        return WorkerConfig(
-            model_server_url="http://localhost",
-            model_server_port=8000,
-            handlers=handlers,
-        )
+    def _make(
+        kind: str,
+        *,
+        route: str = "/predict",
+        dataset: list | None = None,
+        extra_handlers: list[HandlerConfig] | None = None,
+        handlers: list[HandlerConfig] | None = None,
+    ) -> WorkerConfig:
+        if kind == "minimal":
+            return WorkerConfig(
+                model_server_url="http://localhost",
+                model_server_port=8000,
+            )
+        if kind == "handler":
+            if dataset is None:
+                dataset = [{"input": "test"}]
+            hs = [
+                HandlerConfig(
+                    route=route,
+                    benchmark_config=BenchmarkConfig(dataset=dataset),
+                ),
+            ]
+            if extra_handlers:
+                hs.extend(extra_handlers)
+            return WorkerConfig(
+                model_server_url="http://localhost",
+                model_server_port=8000,
+                handlers=hs,
+            )
+        if kind == "from_handlers":
+            if handlers is None:
+                raise ValueError("from_handlers requires handlers=")
+            return WorkerConfig(
+                model_server_url="http://localhost",
+                model_server_port=8000,
+                handlers=handlers,
+            )
+        raise ValueError(f"unknown kind {kind!r}")
 
     return _make
 
@@ -265,16 +256,18 @@ def make_mock_http_response():
 
 
 @pytest.fixture
-def make_mock_make_request_client():
-    """Factory: create mock session and client for _make_request.
+def make_request_http_mocks():
+    """Single factory for ``(mock_session, mock_client)`` used by ``_make_request`` tests.
 
     Returns a callable ``(mock_session, mock_client)`` configured for _make_request.
 
-    - ``make_mock_make_request_client(mock_resp)`` — ``session.get`` returns ``mock_resp``.
-    - ``make_mock_make_request_client(get_side_effect=...)`` — ``session.get`` uses
+    - ``make_request_http_mocks(mock_resp)`` — ``session.get`` returns ``mock_resp``.
+    - ``make_request_http_mocks(get_side_effect=...)`` — ``session.get`` uses
       ``AsyncMock(side_effect=...)`` (exception, list of responses, etc.).
-    - ``make_mock_make_request_client(post_return=resp)`` — ``session.post`` returns
+    - ``make_request_http_mocks(post_return=resp)`` — ``session.post`` returns
       ``resp``; ``session.get`` is a bare ``AsyncMock()`` (unused).
+    Pass ``mock_resp=None`` and omit the kwargs to configure ``get``/``post`` manually
+    on the returned ``mock_session``.
     """
 
     def _make(mock_resp=None, *, get_side_effect=None, post_return=None):
@@ -319,12 +312,8 @@ def patch_build_kwargs():
 
 
 @pytest.fixture
-def make_mock_session():
-    """Factory: create mock aiohttp session for _open_once tests.
-
-    Returns a callable that accepts get_returns and post_returns (optional)
-    and returns a mock session with get/post configured.
-    """
+def make_aiohttp_client_session_mock():
+    """Factory: mock aiohttp ``ClientSession`` for ``_open_once`` tests."""
 
     def _make(get_returns=None, post_returns=None):
         mock_session = MagicMock()
@@ -608,36 +597,31 @@ def make_serverless_endpoint():
 
 
 @pytest.fixture
-def make_route_waiting_mock():
-    """Factory: MagicMock route with status WAITING (polling loop)."""
-
-    def _make(*, request_idx: int = 1, body: dict | None = None) -> MagicMock:
-        waiting = MagicMock()
-        waiting.status = "WAITING"
-        waiting.request_idx = request_idx
-        waiting.body = body if body is not None else {}
-        return waiting
-
-    return _make
-
-
-@pytest.fixture
-def make_route_ready_mock():
-    """Factory: MagicMock route with status READY, ``get_url``, and body."""
+def make_route_response_mock():
+    """Single factory for autoscaler route polling mocks (WAITING / READY)."""
 
     def _make(
         *,
+        status: str = "WAITING",
         url: str = "https://w/",
         request_idx: int = 1,
         body: dict | None = None,
     ) -> MagicMock:
-        b = {"url": url, **(body or {})}
-        ready = MagicMock()
-        ready.status = "READY"
-        ready.request_idx = request_idx
-        ready.body = b
-        ready.get_url = MagicMock(return_value=url)
-        return ready
+        if status == "READY":
+            b = {"url": url, **(body or {})}
+            m = MagicMock()
+            m.status = "READY"
+            m.request_idx = request_idx
+            m.body = b
+            m.get_url = MagicMock(return_value=url)
+            return m
+        if status == "WAITING":
+            m = MagicMock()
+            m.status = "WAITING"
+            m.request_idx = request_idx
+            m.body = body if body is not None else {}
+            return m
+        raise ValueError(f"unknown status {status!r}, use WAITING or READY")
 
     return _make
 
@@ -667,8 +651,8 @@ def make_completed_serverless_request():
 
 
 @pytest.fixture
-def make_mock_endpoint_session():
-    """Factory: ``MagicMock(spec=Session)`` with common attrs for session HTTP tests."""
+def make_session_mock():
+    """Single factory: ``MagicMock(spec=Session)`` for client session HTTP tests."""
 
     def _make(
         *,
@@ -691,6 +675,40 @@ def make_mock_endpoint_session():
 def default_start_endpoint_session_ep(client, make_serverless_endpoint):
     """Shared :class:`Endpoint` for ``start_endpoint_session`` tests."""
     return make_serverless_endpoint(client, name="ep", endpoint_id=3, api_key="ek")
+
+
+@pytest.fixture
+def make_test_endpoint(client, client_with_session, make_serverless_endpoint):
+    """Single factory for test :class:`Endpoint` instances (optional open aiohttp session)."""
+
+    def _make(
+        *,
+        open_session: bool = False,
+        name: str = "ep",
+        endpoint_id: int = 1,
+        api_key: str = "ek",
+    ) -> Endpoint:
+        sl = client_with_session if open_session else client
+        return make_serverless_endpoint(
+            sl, name=name, endpoint_id=endpoint_id, api_key=api_key
+        )
+
+    return _make
+
+
+@pytest.fixture
+def bound_session(make_test_endpoint) -> tuple[Endpoint, Session]:
+    """Real :class:`Session` tied to a default test :class:`Endpoint`."""
+    ep = make_test_endpoint()
+    sess = Session(
+        ep,
+        session_id=99,
+        lifetime=60.0,
+        expiration="later",
+        url="https://worker/w",
+        auth_data={"t": 1},
+    )
+    return ep, sess
 
 
 @pytest.fixture
