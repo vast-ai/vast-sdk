@@ -463,6 +463,49 @@ class TestEndpointHandlerFactoryCreatedPayload:
         with pytest.raises(Exception):
             handler.payload_cls().for_test()
 
+    def test_payload_for_test_raises_when_benchmark_config_is_none(
+        self, server_worker_config
+    ) -> None:
+        """
+        Verifies that for_test() hits the ``Missing BenchmarkConfig!`` branch when
+        ``HandlerConfig.benchmark_config`` is omitted (None).
+
+        Generic ``for_test`` only enters that else-branch when ``benchmark_config`` is
+        falsy; an empty ``BenchmarkConfig()`` is still truthy, so this case is distinct
+        from ``test_payload_for_test_without_dataset_or_generator_raises``.
+        """
+        config = server_worker_config("from_handlers", handlers=[
+            HandlerConfig(route="/nobench", benchmark_config=None),
+        ])
+        factory = EndpointHandlerFactory(config)
+        handler = factory.get_handler("/nobench")
+        with pytest.raises(Exception, match="Missing BenchmarkConfig"):
+            handler.payload_cls().for_test()
+
+    def test_payload_from_json_msg_wraps_json_data_exception_from_from_dict(
+        self, server_worker_config
+    ) -> None:
+        """
+        Verifies that ``from_json_msg`` converts ``JsonDataException`` from ``from_dict``
+        into a new ``JsonDataException`` (the ``except`` block after ``from_dict``).
+        """
+        config = server_worker_config("from_handlers", handlers=[
+            HandlerConfig(
+                route="/jd",
+                benchmark_config=BenchmarkConfig(dataset=[{"a": 1}]),
+            ),
+        ])
+        factory = EndpointHandlerFactory(config)
+        handler = factory.get_handler("/jd")
+        payload_cls = handler.payload_cls()
+        with patch.object(
+            payload_cls,
+            "from_dict",
+            side_effect=JsonDataException({"field": "bad"}),
+        ):
+            with pytest.raises(JsonDataException, match="Error in user response handler"):
+                payload_cls.from_json_msg({"ok": True})
+
     def test_payload_from_dict_and_generate_payload_json(
         self, server_worker_config
     ) -> None:
@@ -737,6 +780,15 @@ class TestEndpointHandlerFactoryCreatedPayload:
 class TestEndpointHandlerFactoryCreatedHandler:
     """Verify handler instance created by _create_handler (GenericEndpointHandler) behavior."""
 
+    def test_generic_handler_healthcheck_endpoint_is_none(
+        self, server_worker_config
+    ) -> None:
+        """GenericEndpointHandler does not expose a model health URL by default."""
+        config = server_worker_config("handler", route="/h", dataset=[{"a": 1}])
+        factory = EndpointHandlerFactory(config)
+        handler = factory.get_handler("/h")
+        assert handler.healthcheck_endpoint is None
+
     def test_make_benchmark_payload_calls_payload_for_test(
         self, server_worker_config
     ) -> None:
@@ -762,7 +814,10 @@ class TestEndpointHandlerFactoryCreatedHandler:
 
     @pytest.mark.asyncio
     async def test_generate_client_response_uses_user_response_generator(
-        self, server_worker_config
+        self,
+        server_worker_config,
+        make_mock_web_request,
+        make_mock_model_response,
     ) -> None:
         """
         Verifies that generate_client_response calls user_response_generator when provided.
@@ -789,8 +844,8 @@ class TestEndpointHandlerFactoryCreatedHandler:
         ])
         factory = EndpointHandlerFactory(config)
         handler = factory.get_handler("/r")
-        mock_req = MagicMock(spec=web.Request)
-        mock_model_resp = MagicMock()
+        mock_req = make_mock_web_request(spec_request=True)
+        mock_model_resp = make_mock_model_response()
         response = await handler.generate_client_response(mock_req, mock_model_resp)
         assert response.status == 201
         # aiohttp.web.Response body is in .body
@@ -889,7 +944,10 @@ class TestEndpointHandlerFactoryCreatedHandler:
 
     @pytest.mark.asyncio
     async def test_generate_client_response_raises_when_user_response_generator_raises(
-        self, server_worker_config
+        self,
+        server_worker_config,
+        make_mock_web_request,
+        make_mock_model_response,
     ) -> None:
         """
         Verifies that generate_client_response raises when user_response_generator raises.
@@ -916,8 +974,8 @@ class TestEndpointHandlerFactoryCreatedHandler:
         ])
         factory = EndpointHandlerFactory(config)
         handler = factory.get_handler("/r")
-        mock_req = MagicMock(spec=web.Request)
-        mock_resp = MagicMock()
+        mock_req = make_mock_web_request(spec_request=True)
+        mock_resp = make_mock_model_response()
         with pytest.raises(Exception, match="Error in user response generator"):
             await handler.generate_client_response(mock_req, mock_resp)
 

@@ -6,8 +6,11 @@ conftest.py for reuse across test files. Pyworker ``Metrics`` helpers live in th
 
 One fixture name per *kind* of resource; use factory callables for variants
 (``make_request_http_mocks``, ``make_route_response_mock``, ``server_worker_config``,
-``client_worker_dict``, ``make_session_mock``, ``make_test_endpoint``, …) instead
-of parallel fixtures.
+``client_worker_dict``, ``make_session_mock``, ``make_test_endpoint``,
+``make_backend_http_request``, ``make_mock_root_logger``, …) instead of parallel fixtures.
+
+Pyworker: ``pyworker_backend`` (Backend with Metrics mocked), ``patch_pyworker_backend_class``,
+``make_pyworker_session`` (server Session), ``valid_auth_data_dict`` (AuthData-shaped JSON).
 
 An autouse fixture restores the ``Serverless`` logger after each test so global
 logging state follows RAII and cannot leak between cases.
@@ -203,6 +206,105 @@ def server_worker_config():
         raise ValueError(f"unknown kind {kind!r}")
 
     return _make
+
+
+# ---------------------------------------------------------------------------
+# Pyworker Backend / Worker (server.lib.backend, server.worker) — single mocks
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def patch_pyworker_backend_class():
+    """Patch :class:`Backend` in ``server.lib.backend`` with ``MagicMock`` (constructor)."""
+    from vastai.serverless.server.lib import backend as backend_mod
+
+    with patch.object(backend_mod, "Backend", MagicMock()) as mock_cls:
+        yield mock_cls
+
+
+@pytest.fixture
+def make_mock_root_logger():
+    """Factory: mock root logger for :class:`Worker` ``__init__`` logging branches.
+
+    Returns ``(root_mock, handler_mock_or_none)`` — ``handler_mock_or_none`` is the
+    first handler when ``with_handlers=True``, else ``None``.
+    """
+
+    def _make(*, with_handlers: bool):
+        mock_root = MagicMock()
+        mock_root.setLevel = MagicMock()
+        if with_handlers:
+            h = MagicMock()
+            mock_root.handlers = [h]
+            mock_root.addHandler = MagicMock()
+            return mock_root, h
+        mock_root.handlers = []
+        mock_root.addHandler = MagicMock()
+        return mock_root, None
+
+    return _make
+
+
+@pytest.fixture
+def pyworker_backend():
+    """Single :class:`Backend` test instance; ``Metrics`` is mocked (no ``CONTAINER_ID`` env)."""
+    from vastai.serverless.server.lib.backend import Backend
+    from vastai.serverless.server.lib.data_types import LogAction
+
+    with patch(
+        "vastai.serverless.server.lib.backend.Metrics",
+        return_value=MagicMock(),
+    ):
+        return Backend(
+            model_server_url="http://localhost:8000",
+            model_log_file="/tmp/model.log",
+            benchmark_handler=MagicMock(),
+            log_actions=[(LogAction.Info, "ready")],
+        )
+
+
+@pytest.fixture
+def make_backend_http_request():
+    """Factory: mock ``aiohttp.web.Request`` with ``.json`` async for Backend handler tests."""
+
+    def _make(
+        *,
+        json_data=None,
+        json_side_effect=None,
+    ):
+        req = MagicMock()
+        if json_side_effect is not None:
+            req.json = AsyncMock(side_effect=json_side_effect)
+        else:
+            req.json = AsyncMock(return_value=json_data if json_data is not None else {})
+        return req
+
+    return _make
+
+
+@pytest.fixture
+def web_json_body():
+    """Callable: parse JSON dict from ``web.json_response`` result ``.body`` bytes."""
+
+    def _parse(resp):
+        import json
+
+        return json.loads(resp.body.decode())
+
+    return _parse
+
+
+@pytest.fixture
+def valid_auth_data_dict():
+    """Valid ``auth_data`` payload for :class:`AuthData` / ``get_data_from_request`` tests."""
+    return {
+        "cost": "1",
+        "endpoint": "/predict",
+        "reqnum": 1,
+        "request_idx": 0,
+        "signature": "sig",
+        "url": "http://example.com",
+    }
 
 
 # ---------------------------------------------------------------------------
