@@ -15,6 +15,7 @@ class DeploymentConfig:
     image: str
     file_hash: str
     file_size: int
+    env: Optional[str] = None
     tag: Optional[str] = None
     search_params: Optional[str] = None
     storage: Optional[float] = None

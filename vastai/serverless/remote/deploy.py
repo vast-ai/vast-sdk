@@ -117,6 +117,9 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         self._ttl = ttl
         self._inner: _FullDeployment | None = None
 
+    def _compile_env(self, checked_image: Image) -> str:
+        return " ".join(f"-p {port}/{type_}" for port, type_ in checked_image.ports)
+
     def _into_deployment_config_and_tarball(self, tar_path: str) -> DeploymentConfig:
         # should error if _image, _autoscaling, file, or any other field needed to calculate DeploymentConfig is None
         if not isinstance(self._image, Image):
@@ -143,6 +146,7 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             if self.name
             else self.root_module,  # if "", is main deployment for module
             image=self._image.image_,
+            env=self._compile_env(self._image),
             file_hash=hash,
             file_size=size,
             tag=self.tag,

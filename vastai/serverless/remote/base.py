@@ -23,7 +23,11 @@ class DockerLogin(TypedDict, total=False):
 
 class Image:
     def __init__(
-        self, from_image: str, storage: float = 50, **docker_login: Unpack[DockerLogin]
+        self,
+        from_image: str,
+        storage: float = 50,
+        worker_port: tuple[int, str] = (3000, "tcp"),
+        **docker_login: Unpack[DockerLogin],
     ):
         self.image_ = from_image
         self.envs_: dict[str, str] = {}
@@ -34,6 +38,7 @@ class Image:
         self.requires_ = Query.search_defaults()
         self.storage_ = storage
         self.copies: list[tuple[str, str]] = []
+        self.ports: set[tuple[int, str]] = {worker_port}
 
     def pip_install(self, *args: str) -> "Image":
         for arg in args:
@@ -65,6 +70,10 @@ class Image:
 
     def copy(self, src: str, dst: str) -> "Image":
         self.copies.append((src, dst))
+        return self
+
+    def publish_port(self, number: int, type_: str = "tcp") -> "Image":
+        self.ports.add((number, type_))
         return self
 
 
