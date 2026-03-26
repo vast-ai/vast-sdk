@@ -22,6 +22,59 @@ class Query:
                 q.query[name] = {"eq": value}
         return q
 
+    def unparse_query(self) -> str:
+        """Converts this Query back into a query string that parse_query() would parse into the same dict.
+
+        Inverse of vast/web/parse.py:parse_query, i.e. parse_query(query.unparse_query()) == query.query.
+        """
+        op_to_str = {
+            "eq": "=",
+            "neq": "!=",
+            "gt": ">",
+            "gte": ">=",
+            "lt": "<",
+            "lte": "<=",
+            "in": " in ",
+            "notin": " notin ",
+        }
+        # Fields whose values get multiplied by these factors during parsing
+        mult_fields = {
+            "cpu_ram": 1000,
+            "gpu_ram": 1000,
+            "gpu_total_ram": 1000,
+            "duration": 24.0 * 60.0 * 60.0,
+        }
+
+        parts = []
+        for field, ops in self.query.items():
+            for op, value in ops.items():
+                op_str = op_to_str[op]
+
+                # Reverse the multiplier applied during parsing
+                if field in mult_fields:
+                    value = value / mult_fields[field]
+                    # Use int if it's a whole number
+                    if value == int(value):
+                        value = int(value)
+
+                # Format the value
+                if isinstance(value, bool):
+                    val_str = "true" if value else "false"
+                elif value is None:
+                    val_str = "None"
+                elif isinstance(value, list):
+                    # in/notin: reverse the space→underscore replacement per element
+                    items = [str(v).replace(" ", "_") for v in value]
+                    val_str = ",".join(items)
+                elif isinstance(value, str):
+                    # Reverse the underscore→space replacement done by parse_query
+                    val_str = value.replace(" ", "_")
+                else:
+                    val_str = str(value)
+
+                parts.append(f"{field}{op_str}{val_str}")
+        return " ".join(parts)
+
     def extend(self, other: "Query") -> "Query":
         """
         Extends self.query with filters in other.
