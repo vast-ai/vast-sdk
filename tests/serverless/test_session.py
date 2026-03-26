@@ -35,7 +35,9 @@ class TestSessionInit:
                 auth_data={},
             )
 
-    def test_init_raises_when_session_id_is_none(self) -> None:
+    def test_init_raises_when_session_id_is_none(
+        self, make_mock_endpoint_for_session
+    ) -> None:
         """
         Verifies that Session rejects a None session_id.
 
@@ -48,7 +50,7 @@ class TestSessionInit:
         """
         with pytest.raises(ValueError, match="empty session_id"):
             Session(
-                endpoint=MagicMock(),
+                endpoint=make_mock_endpoint_for_session(),
                 session_id=None,
                 lifetime=1.0,
                 expiration="e",
@@ -56,7 +58,9 @@ class TestSessionInit:
                 auth_data={},
             )
 
-    def test_init_raises_when_url_is_none(self) -> None:
+    def test_init_raises_when_url_is_none(
+        self, make_mock_endpoint_for_session
+    ) -> None:
         """
         Verifies that Session rejects a None url.
 
@@ -69,7 +73,7 @@ class TestSessionInit:
         """
         with pytest.raises(ValueError, match="empty url"):
             Session(
-                endpoint=MagicMock(),
+                endpoint=make_mock_endpoint_for_session(),
                 session_id="s",
                 lifetime=1.0,
                 expiration="e",
@@ -109,6 +113,19 @@ class TestSessionInit:
         assert session.on_close_route is None
         assert session.on_close_payload is None
 
+    def test_init_sets_on_close_route_and_payload(
+        self, make_mock_endpoint_for_session, make_client_session
+    ) -> None:
+        """Optional teardown hints from ``start_endpoint_session`` are stored on Session."""
+        ep = make_mock_endpoint_for_session()
+        session = make_client_session(
+            endpoint=ep,
+            on_close_route="/cleanup",
+            on_close_payload={"reason": "idle"},
+        )
+        assert session.on_close_route == "/cleanup"
+        assert session.on_close_payload == {"reason": "idle"}
+
 
 class TestSessionAsyncContext:
     """Verify async context manager behavior."""
@@ -130,9 +147,16 @@ class TestSessionAsyncContext:
         assert entered is session
 
     @pytest.mark.asyncio
-    async def test_aexit_awaits_close(
-        self, make_mock_endpoint_for_session, make_client_session
+    async def test_aexit_returns_false_so_exceptions_propagate(
+        self, make_client_session
     ) -> None:
+        """``__aexit__`` must not swallow exceptions from the ``async with`` body."""
+        session = make_client_session()
+        await session.__aenter__()
+        assert await session.__aexit__(None, None, None) is False
+
+    @pytest.mark.asyncio
+    async def test_aexit_awaits_close(self, session_on_mock_endpoint) -> None:
         """
         Verifies that __aexit__ invokes close so the session is shut down.
 
@@ -144,8 +168,7 @@ class TestSessionAsyncContext:
         Assumptions:
         - close() delegates to endpoint.close_session as implemented
         """
-        ep = make_mock_endpoint_for_session()
-        session = make_client_session(endpoint=ep)
+        ep, session = session_on_mock_endpoint
         await session.__aexit__(None, None, None)
         ep.close_session.assert_awaited_once_with(session)
         assert session.open is False
@@ -156,7 +179,7 @@ class TestSessionIsOpen:
 
     @pytest.mark.asyncio
     async def test_is_open_returns_true_and_sets_open_when_healthcheck_true(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies is_open delegates to endpoint.session_healthcheck and updates open.
@@ -169,9 +192,8 @@ class TestSessionIsOpen:
         Assumptions:
         - session_healthcheck receives the Session instance as argument
         """
-        ep = make_mock_endpoint_for_session()
+        ep, session = session_on_mock_endpoint
         ep.session_healthcheck = AsyncMock(return_value=True)
-        session = make_client_session(endpoint=ep)
         result = await session.is_open()
         assert result is True
         assert session.open is True
@@ -179,7 +201,7 @@ class TestSessionIsOpen:
 
     @pytest.mark.asyncio
     async def test_is_open_returns_false_and_sets_open_when_healthcheck_false(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies is_open reflects a failed health check.
@@ -192,9 +214,8 @@ class TestSessionIsOpen:
         Assumptions:
         - Implementation assigns self.open from the healthcheck result
         """
-        ep = make_mock_endpoint_for_session()
+        ep, session = session_on_mock_endpoint
         ep.session_healthcheck = AsyncMock(return_value=False)
-        session = make_client_session(endpoint=ep)
         result = await session.is_open()
         assert result is False
         assert session.open is False
@@ -205,7 +226,7 @@ class TestSessionClose:
 
     @pytest.mark.asyncio
     async def test_close_returns_none_when_already_closed(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies close is a no-op when the session is already marked closed.
@@ -218,8 +239,7 @@ class TestSessionClose:
         Assumptions:
         - Early return uses self.open before touching _closing
         """
-        ep = make_mock_endpoint_for_session()
-        session = make_client_session(endpoint=ep)
+        ep, session = session_on_mock_endpoint
         session.open = False
         out = await session.close()
         assert out is None
@@ -227,7 +247,7 @@ class TestSessionClose:
 
     @pytest.mark.asyncio
     async def test_close_awaits_endpoint_close_session_and_clears_open(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies close calls endpoint.close_session and sets open to False.
@@ -239,15 +259,14 @@ class TestSessionClose:
         Assumptions:
         - close_session completes without raising
         """
-        ep = make_mock_endpoint_for_session()
-        session = make_client_session(endpoint=ep)
+        ep, session = session_on_mock_endpoint
         await session.close()
         ep.close_session.assert_awaited_once_with(session)
         assert session.open is False
 
     @pytest.mark.asyncio
     async def test_close_sets_open_false_when_close_session_raises(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies close still clears open if endpoint.close_session fails.
@@ -260,16 +279,15 @@ class TestSessionClose:
         Assumptions:
         - finally block in close() always sets open False
         """
-        ep = make_mock_endpoint_for_session()
+        ep, session = session_on_mock_endpoint
         ep.close_session = AsyncMock(side_effect=RuntimeError("network"))
-        session = make_client_session(endpoint=ep)
         with patch("vastai.serverless.client.session.log"):
             await session.close()
         assert session.open is False
 
     @pytest.mark.asyncio
     async def test_close_second_call_does_not_await_close_session_again(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies sequential close calls only hit the endpoint once.
@@ -281,15 +299,14 @@ class TestSessionClose:
         Assumptions:
         - After first close, open is False so second call returns immediately
         """
-        ep = make_mock_endpoint_for_session()
-        session = make_client_session(endpoint=ep)
+        ep, session = session_on_mock_endpoint
         await session.close()
         await session.close()
         assert ep.close_session.await_count == 1
 
     @pytest.mark.asyncio
     async def test_close_skips_when_closing_guard_set(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies a second close while _closing is True does not call close_session again.
@@ -302,8 +319,7 @@ class TestSessionClose:
         Assumptions:
         - Guard check uses _closing before starting work; used for re-entrancy
         """
-        ep = make_mock_endpoint_for_session()
-        session = make_client_session(endpoint=ep)
+        ep, session = session_on_mock_endpoint
         session._closing = True
         await session.close()
         ep.close_session.assert_not_awaited()
@@ -331,7 +347,7 @@ class TestSessionRequest:
 
     @pytest.mark.asyncio
     async def test_request_awaitable_returns_endpoint_result(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies awaiting request() returns the JSON dict from endpoint.request.
@@ -343,9 +359,8 @@ class TestSessionRequest:
         Assumptions:
         - endpoint.request is awaitable in tests via AsyncMock
         """
-        ep = make_mock_endpoint_for_session()
+        ep, session = session_on_mock_endpoint
         ep.request = AsyncMock(return_value={"status": 200, "data": 42})
-        session = make_client_session(endpoint=ep)
         coro = session.request("/path", {"x": 1}, cost=50, retry=False, stream=True)
         result = await coro
         assert result == {"status": 200, "data": 42}
@@ -361,7 +376,7 @@ class TestSessionRequest:
 
     @pytest.mark.asyncio
     async def test_request_passes_serverless_request_through(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies request forwards serverless_request to endpoint.request.
@@ -374,15 +389,14 @@ class TestSessionRequest:
         Assumptions:
         - Session does not wrap or replace serverless_request
         """
-        ep = make_mock_endpoint_for_session()
-        session = make_client_session(endpoint=ep)
+        ep, session = session_on_mock_endpoint
         sr = MagicMock(name="serverless_request")
         await session.request("/r", {}, serverless_request=sr)
         assert ep.request.await_args.kwargs["serverless_request"] is sr
 
     @pytest.mark.asyncio
     async def test_request_status_410_marks_closed_and_raises(
-        self, make_mock_endpoint_for_session, make_client_session
+        self, session_on_mock_endpoint
     ) -> None:
         """
         Verifies a 410 response marks the session closed and raises ValueError.
@@ -395,9 +409,8 @@ class TestSessionRequest:
         Assumptions:
         - Wrapped handler treats HTTP gone (status 410) as a closed session
         """
-        ep = make_mock_endpoint_for_session()
+        ep, session = session_on_mock_endpoint
         ep.request = AsyncMock(return_value={"status": 410})
-        session = make_client_session(endpoint=ep)
         with pytest.raises(ValueError, match="closed session"):
             await session.request("/r", {})
         assert session.open is False

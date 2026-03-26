@@ -57,18 +57,18 @@ class TestServerlessInitAndConfig:
         with pytest.raises(AttributeError, match="API key missing"):
             Serverless(api_key="")
 
-    def test_init_accepts_explicit_api_key(self, serverless_client, api_key: str) -> None:
+    def test_init_accepts_explicit_api_key(self, client) -> None:
         """
         Verifies explicit api_key is stored on the client.
 
         This test verifies by:
-        1. Constructing Serverless(api_key=...) via serverless_client fixture
+        1. Constructing Serverless(api_key=...) via client fixture
         2. Asserting client.api_key matches
 
         Assumptions:
         - No environment key is required when api_key is passed
         """
-        assert serverless_client.api_key == api_key
+        assert client.api_key == "k"
 
     @pytest.mark.parametrize(
         ("instance", "autoscaler_substr"),
@@ -79,7 +79,7 @@ class TestServerlessInitAndConfig:
             ("local", "localhost:8080"),
         ],
     )
-    def test_instance_selects_autoscaler_url(self, api_key: str, instance: str, autoscaler_substr: str) -> None:
+    def test_instance_selects_autoscaler_url(self, instance: str, autoscaler_substr: str) -> None:
         """
         Verifies instance keyword maps to expected autoscaler base URL.
 
@@ -90,15 +90,15 @@ class TestServerlessInitAndConfig:
         Assumptions:
         - Mapping matches current client.py match/case branches
         """
-        client = Serverless(api_key=api_key, instance=instance)
-        assert autoscaler_substr in client.autoscaler_url
+        sl = Serverless(api_key="k", instance=instance)
+        assert autoscaler_substr in sl.autoscaler_url
 
 
 @pytest.mark.asyncio
 class TestServerlessEndpoints:
     """get_endpoints and get_endpoint."""
 
-    async def test_get_endpoints_parses_results_into_endpoints(self, serverless_client) -> None:
+    async def test_get_endpoints_parses_results_into_endpoints(self, client) -> None:
         """
         Verifies get_endpoints builds Endpoint objects from JSON results.
 
@@ -110,7 +110,6 @@ class TestServerlessEndpoints:
         Assumptions:
         - _make_request is patched at the module where client.py uses it
         """
-        client = serverless_client
         fake = {
             "ok": True,
             "json": {
@@ -127,7 +126,7 @@ class TestServerlessEndpoints:
         assert endpoints[0].api_key == "wk"
         assert endpoints[0].client is client
 
-    async def test_get_endpoints_raises_when_http_not_ok(self, serverless_client) -> None:
+    async def test_get_endpoints_raises_when_http_not_ok(self, client) -> None:
         """
         Verifies get_endpoints wraps failed HTTP into Exception.
 
@@ -138,7 +137,6 @@ class TestServerlessEndpoints:
         Assumptions:
         - Client surfaces HTTP failures as generic Exception
         """
-        client = serverless_client
         with patch(
             "vastai.serverless.client.client._make_request",
             new_callable=AsyncMock,
@@ -147,7 +145,7 @@ class TestServerlessEndpoints:
             with pytest.raises(Exception, match="Failed to get endpoints"):
                 await client.get_endpoints()
 
-    async def test_get_endpoint_returns_matching_endpoint(self, serverless_client) -> None:
+    async def test_get_endpoint_returns_matching_endpoint(self, client) -> None:
         """
         Verifies get_endpoint selects by name from get_endpoints.
 
@@ -159,14 +157,13 @@ class TestServerlessEndpoints:
         Assumptions:
         - get_endpoint only compares e.name
         """
-        client = serverless_client
         e1 = Endpoint(client, "one", 1, "k")
         e2 = Endpoint(client, "two", 2, "k")
         with patch.object(client, "get_endpoints", new_callable=AsyncMock, return_value=[e1, e2]):
             got = await client.get_endpoint("two")
         assert got is e2
 
-    async def test_get_endpoint_raises_when_name_not_found(self, serverless_client) -> None:
+    async def test_get_endpoint_raises_when_name_not_found(self, client) -> None:
         """
         Verifies get_endpoint raises when no endpoint matches the name.
 
@@ -177,7 +174,6 @@ class TestServerlessEndpoints:
         Assumptions:
         - Empty list yields no match
         """
-        client = serverless_client
         with patch.object(client, "get_endpoints", new_callable=AsyncMock, return_value=[]):
             with pytest.raises(Exception, match="could not be found"):
                 await client.get_endpoint("nope")
@@ -187,7 +183,7 @@ class TestServerlessEndpoints:
 class TestServerlessWorkersAndSessions:
     """get_endpoint_workers, get_endpoint_session, end_endpoint_session, start_endpoint_session."""
 
-    async def test_get_endpoint_workers_requires_endpoint_type(self, serverless_client) -> None:
+    async def test_get_endpoint_workers_requires_endpoint_type(self, client) -> None:
         """
         Verifies get_endpoint_workers rejects non-Endpoint values.
 
@@ -198,12 +194,11 @@ class TestServerlessWorkersAndSessions:
         Assumptions:
         - isinstance check runs before HTTP
         """
-        client = serverless_client
         with pytest.raises(ValueError, match="endpoint must be an Endpoint"):
             await client.get_endpoint_workers(MagicMock())
 
     async def test_get_endpoint_workers_returns_worker_list(
-        self, serverless_client, make_mock_http_response, make_serverless_endpoint
+        self, client, make_mock_http_response, make_serverless_endpoint
     ) -> None:
         """
         Verifies get_endpoint_workers parses JSON list into Worker models.
@@ -216,7 +211,6 @@ class TestServerlessWorkersAndSessions:
         Assumptions:
         - _session.post is used with JSON body containing endpoint id and api_key
         """
-        client = serverless_client
         mock_sess = MagicMock()
         mock_sess.post = MagicMock(
             return_value=make_mock_http_response(
@@ -225,13 +219,13 @@ class TestServerlessWorkersAndSessions:
             )
         )
         client._session = mock_sess
-        ep = make_serverless_endpoint(endpoint_id=3)
+        ep = make_serverless_endpoint(client, endpoint_id=3)
         workers = await client.get_endpoint_workers(ep)
         assert len(workers) == 1
         assert workers[0].id == 99
 
     async def test_get_endpoint_workers_error_msg_returns_empty_list(
-        self, serverless_client, make_mock_http_response, make_serverless_endpoint
+        self, client, make_mock_http_response, make_serverless_endpoint
     ) -> None:
         """
         Verifies get_endpoint_workers returns [] when API returns error_msg dict.
@@ -243,18 +237,17 @@ class TestServerlessWorkersAndSessions:
         Assumptions:
         - Client treats error_msg as soft failure for not-ready endpoints
         """
-        client = serverless_client
         mock_sess = MagicMock()
         mock_sess.post = MagicMock(
             return_value=make_mock_http_response(status=200, json_data={"error_msg": "not ready"})
         )
         client._session = mock_sess
-        ep = make_serverless_endpoint(endpoint_id=3)
+        ep = make_serverless_endpoint(client, endpoint_id=3)
         workers = await client.get_endpoint_workers(ep)
         assert workers == []
 
     async def test_get_endpoint_session_builds_session(
-        self, serverless_client, make_serverless_endpoint
+        self, client, make_serverless_endpoint
     ) -> None:
         """
         Verifies get_endpoint_session calls _make_request and constructs Session.
@@ -267,8 +260,7 @@ class TestServerlessWorkersAndSessions:
         Assumptions:
         - session_auth dict includes url used for worker request and Session.url
         """
-        client = serverless_client
-        ep = make_serverless_endpoint()
+        ep = make_serverless_endpoint(client)
         auth = {"url": "https://worker/s", "token": "t"}
         fake = {
             "ok": True,
@@ -286,7 +278,7 @@ class TestServerlessWorkersAndSessions:
         assert sess.url == "https://worker/s"
 
     async def test_end_endpoint_session_calls_make_request(
-        self, serverless_client, make_serverless_endpoint
+        self, client, make_serverless_endpoint
     ) -> None:
         """
         Verifies end_endpoint_session POSTs to session.url via _make_request.
@@ -299,8 +291,7 @@ class TestServerlessWorkersAndSessions:
         Assumptions:
         - Route is /session/end and body includes session_id and session_auth
         """
-        client = serverless_client
-        ep = make_serverless_endpoint()
+        ep = make_serverless_endpoint(client)
         sess = ClientSession(
             endpoint=ep,
             session_id="sid",
@@ -319,7 +310,7 @@ class TestServerlessWorkersAndSessions:
         assert call_kw["body"]["session_id"] == "sid"
 
     async def test_start_endpoint_session_uses_queue_result(
-        self, serverless_client, make_serverless_endpoint
+        self, client, make_serverless_endpoint
     ) -> None:
         """
         Verifies start_endpoint_session awaits queue_endpoint_request and returns Session.
@@ -332,8 +323,7 @@ class TestServerlessWorkersAndSessions:
         Assumptions:
         - queue_endpoint_request result dict matches successful worker create shape
         """
-        client = serverless_client
-        ep = make_serverless_endpoint()
+        ep = make_serverless_endpoint(client)
         fut = ServerlessRequest()
         fut.set_result(
             {
@@ -357,7 +347,7 @@ class TestQueueEndpointRequest:
     """Background task for worker requests (session-bound path)."""
 
     async def test_queue_endpoint_request_with_session_sets_result_on_success(
-        self, serverless_client, make_serverless_endpoint
+        self, client, make_serverless_endpoint
     ) -> None:
         """
         Verifies queue_endpoint_request completes when session is set and worker returns ok JSON.
@@ -370,8 +360,7 @@ class TestQueueEndpointRequest:
         Assumptions:
         - Session-bound path skips _route polling and posts directly to session.url
         """
-        client = serverless_client
-        ep = make_serverless_endpoint()
+        ep = make_serverless_endpoint(client)
         sess = ClientSession(
             ep,
             "sid-99",
@@ -400,7 +389,7 @@ class TestQueueEndpointRequest:
 class TestServerlessContextAndSessionState:
     """Async context manager, is_open, close."""
 
-    async def test_is_open_false_without_session(self, serverless_client) -> None:
+    async def test_is_open_false_without_session(self, client) -> None:
         """
         Verifies is_open is False before _get_session creates a session.
 
@@ -411,9 +400,9 @@ class TestServerlessContextAndSessionState:
         Assumptions:
         - _session starts as None
         """
-        assert serverless_client.is_open() is False
+        assert client.is_open() is False
 
-    async def test_close_noop_when_no_session(self, serverless_client) -> None:
+    async def test_close_noop_when_no_session(self, client) -> None:
         """
         Verifies close does not fail when no session exists.
 
@@ -424,9 +413,9 @@ class TestServerlessContextAndSessionState:
         Assumptions:
         - close checks _session truthiness and closed flag
         """
-        await serverless_client.close()
+        await client.close()
 
-    async def test_aenter_calls_get_session(self, serverless_client) -> None:
+    async def test_aenter_calls_get_session(self, client) -> None:
         """
         Verifies __aenter__ awaits _get_session and returns self.
 
@@ -438,8 +427,176 @@ class TestServerlessContextAndSessionState:
         Assumptions:
         - __aenter__ only opens session, does not require real aiohttp
         """
-        client = serverless_client
         with patch.object(client, "_get_session", new_callable=AsyncMock) as mock_gs:
             async with client as entered:
                 assert entered is client
             mock_gs.assert_awaited()
+
+
+@pytest.mark.asyncio
+class TestServerlessSessionApiErrors:
+    """Failure paths for get / end / start endpoint session (wrapped exceptions)."""
+
+    async def test_get_endpoint_session_raises_when_worker_http_not_ok(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        auth = {"url": "https://worker/s"}
+        with patch(
+            "vastai.serverless.client.client._make_request",
+            new_callable=AsyncMock,
+            return_value={"ok": False, "status": 503, "text": "unavailable"},
+        ):
+            with pytest.raises(Exception, match="Error on /session/get"):
+                await client.get_endpoint_session(ep, 1, auth)
+
+    async def test_get_endpoint_session_raises_when_auth_data_missing(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        auth = {"url": "https://worker/s"}
+        with patch(
+            "vastai.serverless.client.client._make_request",
+            new_callable=AsyncMock,
+            return_value={"ok": True, "json": {"lifetime": 1.0}},
+        ):
+            with pytest.raises(Exception, match="Missing auth_data"):
+                await client.get_endpoint_session(ep, 1, auth)
+
+    async def test_end_endpoint_session_raises_when_worker_http_not_ok(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        sess = ClientSession(
+            endpoint=ep,
+            session_id="s",
+            lifetime=1.0,
+            expiration="e",
+            url="https://worker/x",
+            auth_data={},
+        )
+        with patch(
+            "vastai.serverless.client.client._make_request",
+            new_callable=AsyncMock,
+            return_value={"ok": False, "json": {"error": "gone"}},
+        ):
+            with pytest.raises(Exception, match="Error on /session/end"):
+                await client.end_endpoint_session(sess)
+
+    async def test_start_endpoint_session_raises_when_queue_returns_not_ok(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        fut = ServerlessRequest()
+        fut.set_result({"ok": False, "text": "nope"})
+        with patch.object(client, "queue_endpoint_request", return_value=fut):
+            with pytest.raises(Exception, match="Error on /session/create"):
+                await client.start_endpoint_session(ep)
+
+    async def test_start_endpoint_session_raises_when_url_missing(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        fut = ServerlessRequest()
+        fut.set_result(
+            {
+                "ok": True,
+                "response": {"session_id": "id", "expiration": "e"},
+                "auth_data": {"k": "v"},
+            }
+        )
+        with patch.object(client, "queue_endpoint_request", return_value=fut):
+            with pytest.raises(Exception, match="Missing URL"):
+                await client.start_endpoint_session(ep)
+
+    async def test_start_endpoint_session_raises_when_auth_data_missing(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        fut = ServerlessRequest()
+        fut.set_result(
+            {
+                "ok": True,
+                "response": {"session_id": "id", "expiration": "e"},
+                "url": "https://w",
+            }
+        )
+        with patch.object(client, "queue_endpoint_request", return_value=fut):
+            with pytest.raises(Exception, match="Missing auth data"):
+                await client.start_endpoint_session(ep)
+
+    async def test_start_endpoint_session_raises_when_session_id_missing(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        fut = ServerlessRequest()
+        fut.set_result(
+            {
+                "ok": True,
+                "response": {"expiration": "e"},
+                "url": "https://w",
+                "auth_data": {"k": "v"},
+            }
+        )
+        with patch.object(client, "queue_endpoint_request", return_value=fut):
+            with pytest.raises(Exception, match="Missing session id"):
+                await client.start_endpoint_session(ep)
+
+    async def test_start_endpoint_session_raises_when_response_body_missing(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        fut = ServerlessRequest()
+        fut.set_result(
+            {
+                "ok": True,
+                "url": "https://w",
+                "auth_data": {"k": "v"},
+            }
+        )
+        with patch.object(client, "queue_endpoint_request", return_value=fut):
+            with pytest.raises(Exception, match="No response from /session/create"):
+                await client.start_endpoint_session(ep)
+
+
+@pytest.mark.asyncio
+class TestStartEndpointSessionQueueContract:
+    """Ensure session creation request matches the worker API contract."""
+
+    async def test_start_endpoint_session_forwards_on_close_and_cost_to_queue(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        ep = make_serverless_endpoint(client)
+        captured: dict = {}
+
+        def _capture_queue(**kwargs):
+            captured.update(kwargs)
+            fut = ServerlessRequest()
+            fut.set_result(
+                {
+                    "ok": True,
+                    "response": {"session_id": "new", "expiration": "ex"},
+                    "url": "https://w",
+                    "auth_data": {"t": 1},
+                }
+            )
+            return fut
+
+        with patch.object(client, "queue_endpoint_request", side_effect=_capture_queue):
+            await client.start_endpoint_session(
+                ep,
+                cost=77,
+                lifetime=88.0,
+                on_close_route="/bye",
+                on_close_payload={"reason": "idle"},
+                timeout=12.0,
+            )
+
+        assert captured["endpoint"] is ep
+        assert captured["worker_route"] == "/session/create"
+        assert captured["cost"] == 77
+        assert captured["timeout"] == 12.0
+        wp = captured["worker_payload"]
+        assert wp["lifetime"] == 88.0
+        assert wp["on_close_route"] == "/bye"
+        assert wp["on_close_payload"] == {"reason": "idle"}

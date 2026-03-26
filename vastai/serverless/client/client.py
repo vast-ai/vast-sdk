@@ -308,7 +308,7 @@ class Serverless:
                 raise Exception(error_msg)
             response = session_start_response.get("response")
             if response is None:
-                raise Exception(f"No response from /session/create. Status {response.get('status')}")
+                raise Exception("No response from /session/create")
             session_id = session_start_response.get("response").get("session_id")
             if session_id is None:
                 raise Exception("Missing session id")

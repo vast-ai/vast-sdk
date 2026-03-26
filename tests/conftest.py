@@ -6,7 +6,8 @@ conftest.py for reuse across test files. Pyworker ``Metrics`` helpers live in th
 
 One fixture name per *kind* of resource; use factory callables for variants
 (``make_request_http_mocks``, ``make_route_response_mock``, ``server_worker_config``,
-``client_worker_dict``, ``make_session_mock``, ``make_test_endpoint``,
+``client_worker_dict``, ``make_session_mock``, ``make_client_session``, ``session_on_mock_endpoint``,
+``make_mock_endpoint_for_session``, ``make_test_endpoint``,
 ``make_backend_http_request``, ``make_mock_root_logger``, …) instead of parallel fixtures.
 
 Pyworker: ``pyworker_backend`` (Backend with Metrics mocked), ``patch_pyworker_backend_class``,
@@ -841,21 +842,6 @@ def make_test_endpoint(client, make_serverless_endpoint):
 
 
 @pytest.fixture
-def bound_session(make_test_endpoint) -> tuple[Endpoint, Session]:
-    """Real :class:`Session` tied to a default test :class:`Endpoint`."""
-    ep = make_test_endpoint()
-    sess = Session(
-        ep,
-        session_id=99,
-        lifetime=60.0,
-        expiration="later",
-        url="https://worker/w",
-        auth_data={"t": 1},
-    )
-    return ep, sess
-
-
-@pytest.fixture
 def patch_serverless_queue_async_stubs():
     """Patch ``asyncio.sleep`` and ``random.uniform`` on the serverless client module.
 
@@ -903,3 +889,10 @@ def make_client_session(make_mock_endpoint_for_session):
         )
 
     return _make
+
+
+@pytest.fixture
+def session_on_mock_endpoint(make_mock_endpoint_for_session, make_client_session):
+    """Single mock endpoint and :class:`Session` bound to it (configure ``ep`` attrs in tests as needed)."""
+    ep = make_mock_endpoint_for_session()
+    return ep, make_client_session(endpoint=ep)

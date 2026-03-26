@@ -73,7 +73,9 @@ class TestEndpointInit:
 class TestEndpointDelegatesToClient:
     """Endpoint methods forward to the Serverless client."""
 
-    def test_request_forwards_to_queue_endpoint_request(self, mock_serverless_client) -> None:
+    def test_request_forwards_to_queue_endpoint_request(
+        self, mock_serverless_client, make_session_mock
+    ) -> None:
         """
         Verifies request passes route, payload, and options to client.queue_endpoint_request.
 
@@ -85,7 +87,7 @@ class TestEndpointDelegatesToClient:
         - client.queue_endpoint_request is synchronous and returns the mock return value
         """
         ep = Endpoint(mock_serverless_client, "e", 1, "ek")
-        sess = MagicMock(name="session")
+        sess = make_session_mock()
         out = ep.request(
             "/do",
             {"x": 1},
@@ -110,7 +112,9 @@ class TestEndpointDelegatesToClient:
         assert kw["session"] is sess
 
     @pytest.mark.asyncio
-    async def test_close_session_forwards_to_client(self, mock_serverless_client) -> None:
+    async def test_close_session_forwards_to_client(
+        self, mock_serverless_client, make_session_mock
+    ) -> None:
         """
         Verifies close_session delegates to client.end_endpoint_session.
 
@@ -122,7 +126,7 @@ class TestEndpointDelegatesToClient:
         - close_session returns the awaitable from end_endpoint_session
         """
         ep = Endpoint(mock_serverless_client, "e", 1, "ek")
-        sess = MagicMock()
+        sess = make_session_mock()
         await ep.close_session(sess)
         mock_serverless_client.end_endpoint_session.assert_awaited_once_with(session=sess)
 
@@ -191,7 +195,9 @@ class TestEndpointDelegatesToClient:
 
 @pytest.mark.asyncio
 class TestEndpointSessionHealthcheck:
-    async def test_session_healthcheck_true_when_session_exists(self, mock_serverless_client) -> None:
+    async def test_session_healthcheck_true_when_session_exists(
+        self, mock_serverless_client, make_session_mock
+    ) -> None:
         """
         Verifies session_healthcheck returns True when get_endpoint_session returns non-None.
 
@@ -205,13 +211,13 @@ class TestEndpointSessionHealthcheck:
         """
         mock_serverless_client.get_endpoint_session = AsyncMock(return_value=MagicMock())
         ep = Endpoint(mock_serverless_client, "e", 1, "ek")
-        sess = MagicMock()
-        sess.session_id = "sid"
-        sess.auth_data = {"t": 1}
+        sess = make_session_mock(session_id="sid", auth_data={"t": 1})
         ok = await ep.session_healthcheck(sess)
         assert ok is True
 
-    async def test_session_healthcheck_false_when_no_session(self, mock_serverless_client) -> None:
+    async def test_session_healthcheck_false_when_no_session(
+        self, mock_serverless_client, make_session_mock
+    ) -> None:
         """
         Verifies session_healthcheck returns False when get_endpoint_session returns None.
 
@@ -224,7 +230,7 @@ class TestEndpointSessionHealthcheck:
         """
         mock_serverless_client.get_endpoint_session = AsyncMock(return_value=None)
         ep = Endpoint(mock_serverless_client, "e", 1, "ek")
-        sess = MagicMock(session_id="sid", auth_data={})
+        sess = make_session_mock(session_id="sid", auth_data={})
         ok = await ep.session_healthcheck(sess)
         assert ok is False
 
