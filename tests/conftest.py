@@ -7,7 +7,8 @@ conftest.py for reuse across test files. Pyworker ``Metrics`` helpers live in th
 One fixture name per *kind* of resource; use factory callables for variants
 (``make_request_http_mocks``, ``make_route_response_mock``, ``server_worker_config``,
 ``client_worker_dict``, ``make_session_mock``, ``make_client_session``, ``session_on_mock_endpoint``,
-``make_mock_endpoint_for_session``, ``make_test_endpoint``,
+``make_mock_endpoint_for_session``, ``make_delegate_endpoint``, ``make_serverless_bound_session``,
+``make_test_endpoint``,
 ``make_backend_http_request``, ``make_mock_root_logger``, …) instead of parallel fixtures.
 
 Pyworker: ``pyworker_backend`` (Backend with Metrics mocked), ``patch_pyworker_backend_class``,
@@ -704,6 +705,28 @@ def make_serverless_endpoint():
 
 
 @pytest.fixture
+def make_serverless_bound_session(make_serverless_endpoint):
+    """Factory: :class:`Session` on a real :class:`Endpoint` (queue / Serverless client tests)."""
+
+    def _make(
+        sl_client: Serverless,
+        *,
+        endpoint: Endpoint | None = None,
+        session_id: str = "sid",
+        lifetime: float = 60.0,
+        expiration: str = "e",
+        url: str = "https://worker/u",
+        auth_data: dict | None = None,
+        **kwargs,
+    ) -> Session:
+        ep = endpoint if endpoint is not None else make_serverless_endpoint(sl_client)
+        ad = {"token": "t"} if auth_data is None else auth_data
+        return Session(ep, session_id, lifetime, expiration, url, ad, **kwargs)
+
+    return _make
+
+
+@pytest.fixture
 def mock_serverless_client():
     """Minimal mock Serverless-like client for Endpoint delegation tests."""
     c = MagicMock()
@@ -715,6 +738,23 @@ def mock_serverless_client():
     c.start_endpoint_session = MagicMock(return_value="started")
     c.get_endpoint_workers = AsyncMock(return_value=[])
     return c
+
+
+@pytest.fixture
+def make_delegate_endpoint(mock_serverless_client):
+    """Factory: :class:`Endpoint` on ``mock_serverless_client`` (delegation unit tests)."""
+
+    def _make(
+        *,
+        name: str = "e",
+        endpoint_id: int | None = 1,
+        api_key: str = "ek",
+        client=None,
+    ) -> Endpoint:
+        c = mock_serverless_client if client is None else client
+        return Endpoint(c, name, endpoint_id, api_key)
+
+    return _make
 
 
 @pytest.fixture

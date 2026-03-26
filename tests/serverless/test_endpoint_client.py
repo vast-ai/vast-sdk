@@ -25,7 +25,7 @@ class TestEndpointInit:
         with pytest.raises(ValueError, match="client reference"):
             Endpoint(None, "n", 1, "k")
 
-    def test_init_raises_on_empty_name(self, mock_serverless_client) -> None:
+    def test_init_raises_on_empty_name(self, make_delegate_endpoint) -> None:
         """
         Verifies Endpoint rejects an empty name.
 
@@ -37,9 +37,9 @@ class TestEndpointInit:
         - Falsy string names are rejected
         """
         with pytest.raises(ValueError, match="name cannot be empty"):
-            Endpoint(mock_serverless_client, "", 1, "k")
+            make_delegate_endpoint(name="", api_key="k")
 
-    def test_init_raises_on_none_id(self, mock_serverless_client) -> None:
+    def test_init_raises_on_none_id(self, make_delegate_endpoint) -> None:
         """
         Verifies Endpoint rejects a None id.
 
@@ -51,9 +51,9 @@ class TestEndpointInit:
         - id must be non-None (including 0 is valid if passed explicitly)
         """
         with pytest.raises(ValueError, match="id cannot be empty"):
-            Endpoint(mock_serverless_client, "n", None, "k")
+            make_delegate_endpoint(name="n", endpoint_id=None, api_key="k")
 
-    def test_repr_contains_name_and_id(self, mock_serverless_client) -> None:
+    def test_repr_contains_name_and_id(self, make_delegate_endpoint) -> None:
         """
         Verifies __repr__ includes endpoint name and id.
 
@@ -64,7 +64,7 @@ class TestEndpointInit:
         Assumptions:
         - __repr__ format matches endpoint.py implementation
         """
-        ep = Endpoint(mock_serverless_client, "my-ep", 42, "k")
+        ep = make_delegate_endpoint(name="my-ep", endpoint_id=42, api_key="k")
         r = repr(ep)
         assert "my-ep" in r
         assert "42" in r
@@ -74,7 +74,7 @@ class TestEndpointDelegatesToClient:
     """Endpoint methods forward to the Serverless client."""
 
     def test_request_forwards_to_queue_endpoint_request(
-        self, mock_serverless_client, make_session_mock
+        self, mock_serverless_client, make_delegate_endpoint, make_session_mock
     ) -> None:
         """
         Verifies request passes route, payload, and options to client.queue_endpoint_request.
@@ -86,7 +86,7 @@ class TestEndpointDelegatesToClient:
         Assumptions:
         - client.queue_endpoint_request is synchronous and returns the mock return value
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         sess = make_session_mock()
         out = ep.request(
             "/do",
@@ -113,7 +113,7 @@ class TestEndpointDelegatesToClient:
 
     @pytest.mark.asyncio
     async def test_close_session_forwards_to_client(
-        self, mock_serverless_client, make_session_mock
+        self, mock_serverless_client, make_delegate_endpoint, make_session_mock
     ) -> None:
         """
         Verifies close_session delegates to client.end_endpoint_session.
@@ -125,13 +125,13 @@ class TestEndpointDelegatesToClient:
         Assumptions:
         - close_session returns the awaitable from end_endpoint_session
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         sess = make_session_mock()
         await ep.close_session(sess)
         mock_serverless_client.end_endpoint_session.assert_awaited_once_with(session=sess)
 
     @pytest.mark.asyncio
-    async def test_get_session_forwards_kwargs(self, mock_serverless_client) -> None:
+    async def test_get_session_forwards_kwargs(self, mock_serverless_client, make_delegate_endpoint) -> None:
         """
         Verifies get_session passes session_id, session_auth, timeout to client.
 
@@ -142,14 +142,16 @@ class TestEndpointDelegatesToClient:
         Assumptions:
         - get_session returns the coroutine from client.get_endpoint_session
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         auth = {"url": "https://x"}
         await ep.get_session(9, auth, timeout=3.0)
         mock_serverless_client.get_endpoint_session.assert_awaited_once_with(
             endpoint=ep, session_id=9, session_auth=auth, timeout=3.0
         )
 
-    def test_session_forwards_to_start_endpoint_session(self, mock_serverless_client) -> None:
+    def test_session_forwards_to_start_endpoint_session(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
         """
         Verifies session() delegates to client.start_endpoint_session.
 
@@ -160,7 +162,7 @@ class TestEndpointDelegatesToClient:
         Assumptions:
         - session() is synchronous wrapper
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         ep.session(
             cost=20,
             lifetime=45.0,
@@ -178,7 +180,7 @@ class TestEndpointDelegatesToClient:
         )
 
     @pytest.mark.asyncio
-    async def test_get_workers_forwards_self(self, mock_serverless_client) -> None:
+    async def test_get_workers_forwards_self(self, mock_serverless_client, make_delegate_endpoint) -> None:
         """
         Verifies get_workers calls client.get_endpoint_workers with this endpoint.
 
@@ -188,7 +190,7 @@ class TestEndpointDelegatesToClient:
         Assumptions:
         - get_endpoint_workers is async on the client mock
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         await ep.get_workers()
         mock_serverless_client.get_endpoint_workers.assert_awaited_once_with(ep)
 
@@ -196,7 +198,7 @@ class TestEndpointDelegatesToClient:
 @pytest.mark.asyncio
 class TestEndpointSessionHealthcheck:
     async def test_session_healthcheck_true_when_session_exists(
-        self, mock_serverless_client, make_session_mock
+        self, mock_serverless_client, make_delegate_endpoint, make_session_mock
     ) -> None:
         """
         Verifies session_healthcheck returns True when get_endpoint_session returns non-None.
@@ -210,13 +212,13 @@ class TestEndpointSessionHealthcheck:
         - Health is defined as result is not None
         """
         mock_serverless_client.get_endpoint_session = AsyncMock(return_value=MagicMock())
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         sess = make_session_mock(session_id="sid", auth_data={"t": 1})
         ok = await ep.session_healthcheck(sess)
         assert ok is True
 
     async def test_session_healthcheck_false_when_no_session(
-        self, mock_serverless_client, make_session_mock
+        self, mock_serverless_client, make_delegate_endpoint, make_session_mock
     ) -> None:
         """
         Verifies session_healthcheck returns False when get_endpoint_session returns None.
@@ -229,7 +231,7 @@ class TestEndpointSessionHealthcheck:
         - Client returns None for missing/expired session
         """
         mock_serverless_client.get_endpoint_session = AsyncMock(return_value=None)
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         sess = make_session_mock(session_id="sid", auth_data={})
         ok = await ep.session_healthcheck(sess)
         assert ok is False
@@ -237,7 +239,9 @@ class TestEndpointSessionHealthcheck:
 
 @pytest.mark.asyncio
 class TestEndpointRoute:
-    async def test_route_raises_when_client_not_open(self, mock_serverless_client) -> None:
+    async def test_route_raises_when_client_not_open(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
         """
         Verifies _route raises ValueError when client.is_open is False.
 
@@ -250,11 +254,13 @@ class TestEndpointRoute:
         - _route checks is_open before calling _make_request
         """
         mock_serverless_client.is_open = MagicMock(return_value=False)
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         with pytest.raises(ValueError, match="invalid"):
             await ep._route()
 
-    async def test_route_returns_ready_route_response(self, mock_serverless_client) -> None:
+    async def test_route_returns_ready_route_response(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
         """
         Verifies _route returns RouteResponse with READY when JSON includes url.
 
@@ -266,7 +272,7 @@ class TestEndpointRoute:
         Assumptions:
         - Patch applied where endpoint.py resolves _make_request
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         fake = {"ok": True, "json": {"request_idx": 3, "url": "https://w"}}
         with patch("vastai.serverless.client.endpoint._make_request", new_callable=AsyncMock, return_value=fake):
             route = await ep._route(cost=1.0, req_idx=0, timeout=30.0)
@@ -274,7 +280,9 @@ class TestEndpointRoute:
         assert route.request_idx == 3
         assert route.get_url() == "https://w"
 
-    async def test_route_wraps_make_request_failure_as_runtime_error(self, mock_serverless_client) -> None:
+    async def test_route_wraps_make_request_failure_as_runtime_error(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
         """
         Verifies _route wraps _make_request exceptions in RuntimeError.
 
@@ -285,7 +293,7 @@ class TestEndpointRoute:
         Assumptions:
         - Outer message mentions failed to route
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         with patch(
             "vastai.serverless.client.endpoint._make_request",
             new_callable=AsyncMock,
@@ -294,7 +302,9 @@ class TestEndpointRoute:
             with pytest.raises(RuntimeError, match="Failed to route endpoint"):
                 await ep._route()
 
-    async def test_route_raises_when_http_not_ok(self, mock_serverless_client) -> None:
+    async def test_route_raises_when_http_not_ok(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
         """
         Verifies _route raises RuntimeError when result ok is False.
 
@@ -305,7 +315,7 @@ class TestEndpointRoute:
         Assumptions:
         - Error text includes HTTP status
         """
-        ep = Endpoint(mock_serverless_client, "e", 1, "ek")
+        ep = make_delegate_endpoint()
         with patch(
             "vastai.serverless.client.endpoint._make_request",
             new_callable=AsyncMock,
