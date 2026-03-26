@@ -127,6 +127,10 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             raise Exception(
                 "Trying to deploy an unbound deployment. Have any remote functions been registered?"
             )
+        if not isinstance(self.root_module, str):
+            raise Exception(
+                "Trying to deploy an unbound deployment. Have any remote functions been registered?"
+            )
         if not isinstance(self._autoscaling, dict):
             raise Exception(
                 "Trying to deploy a deployment without autoscaling configured."
@@ -135,7 +139,9 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             tar_path, self.name, self._image
         )
         return DeploymentConfig(
-            name=self.name,
+            name=self.name
+            if self.name
+            else self.root_module,  # if "", is main deployment for module
             image=self._image.image_,
             file_hash=hash,
             file_size=size,

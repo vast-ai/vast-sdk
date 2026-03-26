@@ -110,6 +110,7 @@ class Deployment_(ABC):
         self.tag = tag
         self.version_label: str | None = version_label
         self.root_module: str | None = None
+        self.is_main = False
 
     def context(
         self, *args, **kwargs
@@ -150,7 +151,7 @@ class Deployment_(ABC):
         if self.root_module is None:
             self.root_module = mod
             if self.name_ is None:
-                self.name = mod
+                self.name = ""
             if file is None:
                 raise Exception(
                     f"Cowardly refusing to deploy function {name} defined in your interactive Python session! We need it to be defined in a .py file to deploy from."
