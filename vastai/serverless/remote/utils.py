@@ -282,8 +282,7 @@ def create_deployment_tarball(
     tar_path: str,
     config: Config,
     deployment_path: str,
-    extra_files: list[tuple[str, str]] | None = None,
-    compress: bool = True,
+    extra_files: list[tuple[str, str]] | None = None
 ):
     """Create a deployment tarball in /tmp and return its path.
 
@@ -296,7 +295,6 @@ def create_deployment_tarball(
         config: The deployment Config object.
         deployment_path: Path to the deployment source (a .py file or a package directory).
         extra_files: List of (source_path, dest_path) pairs. dest_path may be absolute.
-        compress: If True (default), gzip-compress the tarball.
     """
     tf = tarfile.TarFile.open(tar_path, mode="w:gz")
     try:

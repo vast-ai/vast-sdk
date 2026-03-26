@@ -21,7 +21,6 @@ from vastai.serverless.remote.utils import (
     add_string,
     compute_deployment_hash,
     create_deployment_tarball,
-    create_tarball,
     deployment_arcname,
     filter_ignored_lines,
     is_python_module,
@@ -77,46 +76,30 @@ def package_path(tmp_path):
     return str(pkg)
 
 
+@pytest.fixture
+def tar_path():
+    """Provide a closed NamedTemporaryFile path, matching the deploy.py pattern."""
+    with tempfile.NamedTemporaryFile(delete_on_close=False, suffix=".tar") as f:
+        path = f.name
+        f.close()
+        yield path
+    if os.path.exists(path):
+        os.unlink(path)
+
+
 # ---------------------------------------------------------------------------
-# create_tarball
+# Helper to open a writable tar at a given path (for add_* unit tests)
 # ---------------------------------------------------------------------------
 
 
-class TestCreateTarball:
-    def test_compressed_path_and_suffix(self):
-        path, tf = create_tarball(compress=True)
-        try:
-            assert path.startswith("/tmp/")
-            assert path.endswith(".tar.gz")
-            assert os.path.isfile(path)
-        finally:
-            _close_tarball(tf)
-            os.unlink(path)
+def _write_tar(path: str) -> tarfile.TarFile:
+    """Open a new tarball for writing at the given path."""
+    return tarfile.open(path, "w:")
 
-    def test_uncompressed_path_and_suffix(self):
-        path, tf = create_tarball(compress=False)
-        try:
-            assert path.endswith(".tar")
-        finally:
-            _close_tarball(tf)
-            os.unlink(path)
 
-    def test_file_permissions(self):
-        path, tf = create_tarball()
-        try:
-            mode = os.stat(path).st_mode
-            assert stat.S_IMODE(mode) == 0o700
-        finally:
-            _close_tarball(tf)
-            os.unlink(path)
-
-    def test_handle_is_writable(self):
-        path, tf = create_tarball()
-        try:
-            add_string(tf, "test", "test.txt")
-        finally:
-            _close_tarball(tf)
-            os.unlink(path)
+def _open_tar_from_path(path: str) -> tarfile.TarFile:
+    """Open a tarball for reading (detect compression)."""
+    return tarfile.open(path, "r:*")
 
 
 # ---------------------------------------------------------------------------
@@ -144,133 +127,94 @@ class TestSanitizeInfo:
 # ---------------------------------------------------------------------------
 
 
-def _open_tar_from_path(path: str) -> tarfile.TarFile:
-    """Open a tarball for reading (detect compression)."""
-    return tarfile.open(path, "r:*")
-
-
-def _close_tarball(tf: tarfile.TarFile) -> None:
-    """Close a tarball created by create_tarball, flushing the underlying file."""
-    tf.close()
-    tf._vast_fileobj.close()
-
-
 class TestAddFile:
-    def test_file_appears_at_arcname(self, tmp_dir):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_file(tf, str(tmp_dir / "hello.txt"), "dest/hello.txt")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                assert "dest/hello.txt" in rtf.getnames()
-                assert rtf.extractfile("dest/hello.txt").read() == b"hello world"
-        finally:
-            os.unlink(path)
+    def test_file_appears_at_arcname(self, tmp_dir, tar_path):
+        tf = _write_tar(tar_path)
+        add_file(tf, str(tmp_dir / "hello.txt"), "dest/hello.txt")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            assert "dest/hello.txt" in rtf.getnames()
+            assert rtf.extractfile("dest/hello.txt").read() == b"hello world"
 
-    def test_uid_gid_sanitized(self, tmp_dir):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_file(tf, str(tmp_dir / "hello.txt"), "f.txt")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                info = rtf.getmember("f.txt")
-                assert info.uid == 0
-                assert info.gid == 0
-        finally:
-            os.unlink(path)
+    def test_uid_gid_sanitized(self, tmp_dir, tar_path):
+        tf = _write_tar(tar_path)
+        add_file(tf, str(tmp_dir / "hello.txt"), "f.txt")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            info = rtf.getmember("f.txt")
+            assert info.uid == 0
+            assert info.gid == 0
 
 
 class TestAddFolder:
-    def test_recursive_contents(self, package_path):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_folder(tf, package_path, "pkg")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                names = rtf.getnames()
-                assert "pkg" in names
-                assert "pkg/__init__.py" in names
-                assert "pkg/main.py" in names
-                assert "pkg/sub" in names
-                assert "pkg/sub/__init__.py" in names
-                assert "pkg/sub/helper.py" in names
-        finally:
-            os.unlink(path)
+    def test_recursive_contents(self, package_path, tar_path):
+        tf = _write_tar(tar_path)
+        add_folder(tf, package_path, "pkg")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            names = rtf.getnames()
+            assert "pkg" in names
+            assert "pkg/__init__.py" in names
+            assert "pkg/main.py" in names
+            assert "pkg/sub" in names
+            assert "pkg/sub/__init__.py" in names
+            assert "pkg/sub/helper.py" in names
 
-    def test_uid_gid_sanitized_on_all_entries(self, package_path):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_folder(tf, package_path, "pkg")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                for member in rtf.getmembers():
-                    assert member.uid == 0
-                    assert member.gid == 0
-        finally:
-            os.unlink(path)
+    def test_uid_gid_sanitized_on_all_entries(self, package_path, tar_path):
+        tf = _write_tar(tar_path)
+        add_folder(tf, package_path, "pkg")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            for member in rtf.getmembers():
+                assert member.uid == 0
+                assert member.gid == 0
 
 
 class TestAddString:
-    def test_content_roundtrip(self):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_string(tf, "hello world", "msg.txt")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                assert rtf.extractfile("msg.txt").read() == b"hello world"
-        finally:
-            os.unlink(path)
+    def test_content_roundtrip(self, tar_path):
+        tf = _write_tar(tar_path)
+        add_string(tf, "hello world", "msg.txt")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            assert rtf.extractfile("msg.txt").read() == b"hello world"
 
-    def test_default_mode(self):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_string(tf, "x", "f.txt")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                assert rtf.getmember("f.txt").mode == 0o644
-        finally:
-            os.unlink(path)
+    def test_default_mode(self, tar_path):
+        tf = _write_tar(tar_path)
+        add_string(tf, "x", "f.txt")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            assert rtf.getmember("f.txt").mode == 0o644
 
-    def test_executable_mode(self):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_string(tf, "#!/bin/bash", "run.sh", executable=True)
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                assert rtf.getmember("run.sh").mode == 0o755
-        finally:
-            os.unlink(path)
+    def test_executable_mode(self, tar_path):
+        tf = _write_tar(tar_path)
+        add_string(tf, "#!/bin/bash", "run.sh", executable=True)
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            assert rtf.getmember("run.sh").mode == 0o755
 
 
 class TestAddPath:
-    def test_dispatches_to_file(self, tmp_dir):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_path(tf, str(tmp_dir / "hello.txt"), "f.txt")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                assert rtf.extractfile("f.txt").read() == b"hello world"
-        finally:
-            os.unlink(path)
+    def test_dispatches_to_file(self, tmp_dir, tar_path):
+        tf = _write_tar(tar_path)
+        add_path(tf, str(tmp_dir / "hello.txt"), "f.txt")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            assert rtf.extractfile("f.txt").read() == b"hello world"
 
-    def test_dispatches_to_folder(self, package_path):
-        path, tf = create_tarball(compress=False)
-        try:
-            add_path(tf, package_path, "pkg")
-            _close_tarball(tf)
-            with _open_tar_from_path(path) as rtf:
-                assert "pkg/__init__.py" in rtf.getnames()
-        finally:
-            os.unlink(path)
+    def test_dispatches_to_folder(self, package_path, tar_path):
+        tf = _write_tar(tar_path)
+        add_path(tf, package_path, "pkg")
+        tf.close()
+        with _open_tar_from_path(tar_path) as rtf:
+            assert "pkg/__init__.py" in rtf.getnames()
 
-    def test_raises_on_nonexistent(self):
-        path, tf = create_tarball(compress=False)
+    def test_raises_on_nonexistent(self, tar_path):
+        tf = _write_tar(tar_path)
         try:
             with pytest.raises(FileNotFoundError):
                 add_path(tf, "/no/such/path", "x")
         finally:
-            _close_tarball(tf)
-            os.unlink(path)
+            tf.close()
 
 
 # ---------------------------------------------------------------------------
@@ -527,14 +471,14 @@ class TestHashUpdateDirectory:
     def test_deterministic(self, package_path):
         h1 = hashlib.sha256()
         h2 = hashlib.sha256()
-        from vastai.serverless.client.utils import hash_update_directory
+        from vastai.serverless.remote.utils import hash_update_directory
 
         hash_update_directory(h1, package_path, "pkg")
         hash_update_directory(h2, package_path, "pkg")
         assert h1.hexdigest() == h2.hexdigest()
 
     def test_content_change_changes_hash(self, package_path):
-        from vastai.serverless.client.utils import hash_update_directory
+        from vastai.serverless.remote.utils import hash_update_directory
 
         h1 = hashlib.sha256()
         hash_update_directory(h1, package_path, "pkg")
@@ -617,177 +561,139 @@ class TestComputeDeploymentHash:
 
 
 class TestCreateDeploymentTarball:
-    def test_contains_config_json(self, sample_config, module_path):
-        path = create_deployment_tarball(sample_config, module_path, compress=False)
-        try:
-            with _open_tar_from_path(path) as rtf:
-                data = json.loads(rtf.extractfile("./config.json").read())
-                assert data["name"] == "test-deployment"
-        finally:
-            os.unlink(path)
+    def test_contains_config_json(self, sample_config, module_path, tar_path):
+        create_deployment_tarball(tar_path, sample_config, module_path, compress=False)
+        with _open_tar_from_path(tar_path) as rtf:
+            data = json.loads(rtf.extractfile("./config.json").read())
+            assert data["name"] == "test-deployment"
 
-    def test_module_becomes_deployment_py(self, sample_config, module_path):
-        path = create_deployment_tarball(sample_config, module_path, compress=False)
-        try:
-            with _open_tar_from_path(path) as rtf:
-                assert "./deployment.py" in rtf.getnames()
-                content = rtf.extractfile("./deployment.py").read()
-                assert b"def handler" in content
-        finally:
-            os.unlink(path)
+    def test_module_becomes_deployment_py(self, sample_config, module_path, tar_path):
+        create_deployment_tarball(tar_path, sample_config, module_path, compress=False)
+        with _open_tar_from_path(tar_path) as rtf:
+            assert "./deployment.py" in rtf.getnames()
+            content = rtf.extractfile("./deployment.py").read()
+            assert b"def handler" in content
 
-    def test_package_becomes_deployment_dir(self, sample_config, package_path):
-        path = create_deployment_tarball(sample_config, package_path, compress=False)
-        try:
-            with _open_tar_from_path(path) as rtf:
-                names = rtf.getnames()
-                assert "./deployment" in names
-                assert "./deployment/__init__.py" in names
-                assert "./deployment/main.py" in names
-                assert "./deployment/sub/helper.py" in names
-        finally:
-            os.unlink(path)
+    def test_package_becomes_deployment_dir(self, sample_config, package_path, tar_path):
+        create_deployment_tarball(tar_path, sample_config, package_path, compress=False)
+        with _open_tar_from_path(tar_path) as rtf:
+            names = rtf.getnames()
+            assert "./deployment" in names
+            assert "./deployment/__init__.py" in names
+            assert "./deployment/main.py" in names
+            assert "./deployment/sub/helper.py" in names
 
-    def test_extra_files_absolute_dest_paths(self, sample_config, module_path, tmp_dir):
+    def test_extra_files_absolute_dest_paths(self, sample_config, module_path, tmp_dir, tar_path):
         extras = [
             (str(tmp_dir / "hello.txt"), "/opt/data/hello.txt"),
             (str(tmp_dir / "script.py"), "/opt/scripts/run.py"),
         ]
-        path = create_deployment_tarball(
-            sample_config, module_path, extras, compress=False
+        create_deployment_tarball(
+            tar_path, sample_config, module_path, extras, compress=False
         )
-        try:
-            with _open_tar_from_path(path) as rtf:
-                names = rtf.getnames()
-                assert "/opt/data/hello.txt" in names
-                assert "/opt/scripts/run.py" in names
-        finally:
-            os.unlink(path)
+        with _open_tar_from_path(tar_path) as rtf:
+            names = rtf.getnames()
+            assert "/opt/data/hello.txt" in names
+            assert "/opt/scripts/run.py" in names
 
-    def test_extra_files_relative_dest_paths(self, sample_config, module_path, tmp_dir):
+    def test_extra_files_relative_dest_paths(self, sample_config, module_path, tmp_dir, tar_path):
         extras = [
             (str(tmp_dir / "hello.txt"), "data/hello.txt"),
             (str(tmp_dir / "script.py"), "./scripts/run.py"),
         ]
-        path = create_deployment_tarball(
-            sample_config, module_path, extras, compress=False
+        create_deployment_tarball(
+            tar_path, sample_config, module_path, extras, compress=False
         )
-        try:
-            with _open_tar_from_path(path) as rtf:
-                names = rtf.getnames()
-                assert "data/hello.txt" in names
-                assert "./scripts/run.py" in names
-        finally:
-            os.unlink(path)
+        with _open_tar_from_path(tar_path) as rtf:
+            names = rtf.getnames()
+            assert "data/hello.txt" in names
+            assert "./scripts/run.py" in names
 
-    def test_compressed_tarball_is_valid(self, sample_config, module_path):
-        path = create_deployment_tarball(sample_config, module_path, compress=True)
-        try:
-            assert path.endswith(".tar.gz")
-            with tarfile.open(path, "r:gz") as rtf:
-                assert "./config.json" in rtf.getnames()
-        finally:
-            os.unlink(path)
+    def test_compressed_tarball_is_valid(self, sample_config, module_path, tar_path):
+        create_deployment_tarball(tar_path, sample_config, module_path, compress=True)
+        with tarfile.open(tar_path, "r:gz") as rtf:
+            assert "./config.json" in rtf.getnames()
 
-    def test_uncompressed_tarball_is_valid(self, sample_config, module_path):
-        path = create_deployment_tarball(sample_config, module_path, compress=False)
-        try:
-            assert path.endswith(".tar")
-            with tarfile.open(path, "r:") as rtf:
-                assert "./config.json" in rtf.getnames()
-        finally:
-            os.unlink(path)
+    def test_uncompressed_tarball_is_valid(self, sample_config, module_path, tar_path):
+        create_deployment_tarball(tar_path, sample_config, module_path, compress=False)
+        with tarfile.open(tar_path, "r:*") as rtf:
+            assert "./config.json" in rtf.getnames()
 
-    def test_tar_extract_module_deployment(self, sample_config, module_path, tmp_path):
-        tarball = create_deployment_tarball(sample_config, module_path, compress=False)
+    def test_tar_extract_module_deployment(self, sample_config, module_path, tmp_path, tar_path):
+        create_deployment_tarball(tar_path, sample_config, module_path, compress=False)
         extract_dir = tmp_path / "extract"
         extract_dir.mkdir()
-        try:
-            subprocess.run(
-                ["tar", "-xPf", tarball, "-C", str(extract_dir)],
-                check=True,
-            )
-            assert (extract_dir / "config.json").is_file()
-            config_data = json.loads((extract_dir / "config.json").read_text())
-            assert config_data["name"] == "test-deployment"
-            assert (extract_dir / "deployment.py").is_file()
-            assert "def handler" in (extract_dir / "deployment.py").read_text()
-        finally:
-            os.unlink(tarball)
+        subprocess.run(
+            ["tar", "-xPf", tar_path, "-C", str(extract_dir)],
+            check=True,
+        )
+        assert (extract_dir / "config.json").is_file()
+        config_data = json.loads((extract_dir / "config.json").read_text())
+        assert config_data["name"] == "test-deployment"
+        assert (extract_dir / "deployment.py").is_file()
+        assert "def handler" in (extract_dir / "deployment.py").read_text()
 
     def test_tar_extract_package_deployment(
-        self, sample_config, package_path, tmp_path
+        self, sample_config, package_path, tmp_path, tar_path
     ):
-        tarball = create_deployment_tarball(sample_config, package_path, compress=False)
+        create_deployment_tarball(tar_path, sample_config, package_path, compress=False)
         extract_dir = tmp_path / "extract"
         extract_dir.mkdir()
-        try:
-            subprocess.run(
-                ["tar", "-xPf", tarball, "-C", str(extract_dir)],
-                check=True,
-            )
-            assert (extract_dir / "deployment" / "__init__.py").is_file()
-            assert (extract_dir / "deployment" / "main.py").is_file()
-            assert (extract_dir / "deployment" / "sub" / "helper.py").is_file()
-        finally:
-            os.unlink(tarball)
+        subprocess.run(
+            ["tar", "-xPf", tar_path, "-C", str(extract_dir)],
+            check=True,
+        )
+        assert (extract_dir / "deployment" / "__init__.py").is_file()
+        assert (extract_dir / "deployment" / "main.py").is_file()
+        assert (extract_dir / "deployment" / "sub" / "helper.py").is_file()
 
     def test_tar_extract_absolute_extra_files(
-        self, sample_config, module_path, tmp_dir, tmp_path
+        self, sample_config, module_path, tmp_dir, tmp_path, tar_path
     ):
         abs_dest = str(tmp_path / "abs_output" / "data" / "hello.txt")
         extras = [
             (str(tmp_dir / "hello.txt"), abs_dest),
         ]
-        tarball = create_deployment_tarball(
-            sample_config, module_path, extras, compress=False
+        create_deployment_tarball(
+            tar_path, sample_config, module_path, extras, compress=False
         )
-        try:
-            subprocess.run(["tar", "-xPf", tarball], check=True)
-            assert os.path.isfile(abs_dest)
-            with open(abs_dest) as f:
-                assert f.read() == "hello world"
-        finally:
-            os.unlink(tarball)
-            os.unlink(abs_dest)
+        subprocess.run(["tar", "-xPf", tar_path], check=True)
+        assert os.path.isfile(abs_dest)
+        with open(abs_dest) as f:
+            assert f.read() == "hello world"
+        os.unlink(abs_dest)
 
     def test_tar_extract_relative_extra_files(
-        self, sample_config, module_path, tmp_dir, tmp_path
+        self, sample_config, module_path, tmp_dir, tmp_path, tar_path
     ):
         extras = [
             (str(tmp_dir / "hello.txt"), "data/hello.txt"),
         ]
-        tarball = create_deployment_tarball(
-            sample_config, module_path, extras, compress=False
+        create_deployment_tarball(
+            tar_path, sample_config, module_path, extras, compress=False
         )
         extract_dir = tmp_path / "extract"
         extract_dir.mkdir()
-        try:
-            subprocess.run(
-                ["tar", "-xPf", tarball, "-C", str(extract_dir)],
-                check=True,
-            )
-            extracted = extract_dir / "data" / "hello.txt"
-            assert extracted.is_file()
-            assert extracted.read_text() == "hello world"
-        finally:
-            os.unlink(tarball)
+        subprocess.run(
+            ["tar", "-xPf", tar_path, "-C", str(extract_dir)],
+            check=True,
+        )
+        extracted = extract_dir / "data" / "hello.txt"
+        assert extracted.is_file()
+        assert extracted.read_text() == "hello world"
 
-    def test_tar_extract_compressed(self, sample_config, module_path, tmp_path):
-        tarball = create_deployment_tarball(sample_config, module_path, compress=True)
+    def test_tar_extract_compressed(self, sample_config, module_path, tmp_path, tar_path):
+        create_deployment_tarball(tar_path, sample_config, module_path, compress=True)
         extract_dir = tmp_path / "extract"
         extract_dir.mkdir()
-        try:
-            subprocess.run(
-                ["tar", "-xPzf", tarball, "-C", str(extract_dir)],
-                check=True,
-            )
-            assert (extract_dir / "config.json").is_file()
-            assert (extract_dir / "deployment.py").is_file()
-        finally:
-            os.unlink(tarball)
+        subprocess.run(
+            ["tar", "-xPzf", tar_path, "-C", str(extract_dir)],
+            check=True,
+        )
+        assert (extract_dir / "config.json").is_file()
+        assert (extract_dir / "deployment.py").is_file()
 
-    def test_tarball_closed_on_error(self, sample_config, tmp_path):
+    def test_tarball_closed_on_error(self, sample_config, tmp_path, tar_path):
         bad_path = str(tmp_path / "nonexistent.py")
         with pytest.raises(ValueError, match="neither a Python package"):
-            create_deployment_tarball(sample_config, bad_path)
+            create_deployment_tarball(tar_path, sample_config, bad_path)
