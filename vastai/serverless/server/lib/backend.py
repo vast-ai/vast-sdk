@@ -319,7 +319,7 @@ class Backend:
     def session(self):
         log.debug(f"Starting TCP session with model server at {self.model_server_url}")
         connector = TCPConnector(
-            force_close=True, # Required for long running jobs
+            force_close=True,  # Required for long running jobs
             enable_cleanup_closed=True,
         )
         
