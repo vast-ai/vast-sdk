@@ -8,47 +8,72 @@ import aiofiles
 import sys
 import time
 import logging
+import hashlib
+import io
+import shlex
+import tarfile
 
 from vastai.serverless.remote.serialization import serialize, deserialize
 
 from typing import Optional
 from anyio import Path
-from vastai.serverless.remote.endpoint_group import EndpointGroup
-from vastai.serverless.remote.worker_group import WorkerGroup
-from vastai.serverless.remote.template import Template
 
+
+API_URL = os.getenv("VAST_API_BASE", "https://console.vast.ai")
 
 mode = os.getenv("VAST_DEPLOYMENT_MODE", "client")
 debug = os.getenv("VAST_DEBUG", "") == "1"
 
 
 def _setup_logger(name: str) -> logging.Logger:
-    """Setup a logger."""
     logger = logging.getLogger(name)
-
     if not logger.handlers:
         logger.addHandler(logging.NullHandler())
-
     if debug:
         handler = logging.StreamHandler()
         formatter = logging.Formatter('[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
         handler.setFormatter(formatter)
         handler.setLevel(logging.DEBUG)
-
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
     else:
         logger.propagate = True
-
     return logger
 
-REMOTE_FUNCTIONS_BY_ENDPOINT_NAME = {}
 
+REMOTE_FUNCTIONS_BY_ENDPOINT_NAME = {}
 BENCHMARK_CONFIG_BY_ENDPOINT_NAME = {}
+ENDPOINT_NAME_MAP = {}  # maps user endpoint_name -> actual API endpoint name (set by deploy())
+
 
 def get_mode():
     return mode
+
+
+def _add_file_to_tar(tar, filepath, arcname):
+    """Add a file to a tar archive with deterministic metadata."""
+    info = tar.gettarinfo(filepath, arcname=arcname)
+    info.mtime = 0
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    with open(filepath, 'rb') as f:
+        tar.addfile(info, f)
+
+
+def _add_string_to_tar(tar, content, arcname):
+    """Add a string as a file to a tar archive with deterministic metadata."""
+    data = content.encode('utf-8')
+    info = tarfile.TarInfo(name=arcname)
+    info.size = len(data)
+    info.mtime = 0
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    tar.addfile(info, io.BytesIO(data))
 
 
 def remote(endpoint_name: str):
@@ -76,50 +101,40 @@ def remote(endpoint_name: str):
             async def async_wrapper(*args, **kwargs):
                 from vastai import Serverless
 
-                # Bind arguments to get a mapping of parameter names to values
                 bound_args = sig.bind(*args, **kwargs)
                 bound_args.apply_defaults()
 
-                # Construct the payload in the format expected by the endpoint
                 payload = {
-                    "input": {
-                        k : serialize(v,func_mod) for k,v in bound_args.arguments.items()
-                    }
-                    # dict(bound_args.arguments)
+                    k: serialize(v, func_mod) for k, v in bound_args.arguments.items()
                 }
 
                 print("Payload: ", payload)
 
-                # Make the remote request
                 async with Serverless() as client:
                     snapshot_time = time.time()
-                    endpoint = await client.get_endpoint(name=endpoint_name)
+                    resolved_name = ENDPOINT_NAME_MAP.get(endpoint_name, endpoint_name)
+                    endpoint = await client.get_endpoint(name=resolved_name)
                     response = await endpoint.request(f"/remote/{func_name}", payload)
                     time_elapsed = time.time() - snapshot_time
                     print(f"Time elapsed: {time_elapsed} seconds")
                     if response["response"]["result"] is not None:
-                        return deserialize(response["response"]["result"],func_mod, func_globals)
+                        return deserialize(response["response"]["result"], func_mod, func_globals)
                     else:
-                        return deserialize(response["response"],func_mod, func_globals)
+                        return deserialize(response["response"], func_mod, func_globals)
 
             return async_wrapper
         elif get_mode() == "serve":
-            # Register this function under the configured endpoint so that
-            # Deployment.ready() in serve mode can expose it via Worker.
             funcs_for_endpoint = REMOTE_FUNCTIONS_BY_ENDPOINT_NAME.setdefault(
                 endpoint_name, {}
             )
 
-            async def inner(*args,**kwargs):
-                args_ = [deserialize(a,func_mod,func_globals) for a in args]
-                kwargs_ = {k : deserialize(v,func_mod,func_globals) for k,v in kwargs.items()}
-                return serialize(await func(*args_,**kwargs_),func_mod)
+            async def inner(*args, **kwargs):
+                args_ = [deserialize(a, func_mod, func_globals) for a in args]
+                kwargs_ = {k: deserialize(v, func_mod, func_globals) for k, v in kwargs.items()}
+                return serialize(await func(*args_, **kwargs_), func_mod)
             funcs_for_endpoint[func_name] = inner
-            # In serve mode, the function should just run locally when called
-            # (e.g. useful for tests or local invocation), so we return it unchanged.
             return func
 
-        # Optional: default behavior (e.g. deploy mode) – just return the original
         return func
 
     return decorator
@@ -135,50 +150,22 @@ def benchmark(
     Decorator to mark a remote function as the benchmark function for an endpoint.
 
     Exactly one of `dataset` or `generator` should be provided.
-
-    Example:
-
-        @benchmark(
-            endpoint_name="my-endpoint",
-            dataset=[{"a": 1}, {"a": 2}, {"a": 3}],
-        )
-        @remote(endpoint_name="my-endpoint")
-        async def remote_func_a(a: int):
-            ...
-
-    Or:
-
-        import random
-
-        def benchmark_generator() -> dict:
-            return {"a": random.randint(0, 100)}
-
-        @benchmark(
-            endpoint_name="my-endpoint",
-            generator=benchmark_generator,
-        )
-        @remote(endpoint_name="my-endpoint")
-        async def remote_func_a(a: int):
-            ...
     """
     if dataset is not None and generator is not None:
         raise ValueError("Specify either dataset or generator, not both")
     if dataset is None and generator is None:
         raise ValueError("Must specify either dataset or generator")
-
-    # Normalize dataset to a list
     if dataset is not None and not isinstance(dataset, list):
         raise TypeError("dataset must be a list of dicts")
-
 
     def decorator(func):
         func_mod = func.__globals__['__name__']
         nonlocal dataset
         nonlocal generator
         if dataset is not None:
-            dataset = [{k: serialize(v, func_mod) for k,v in datum.items()} for datum in dataset]
+            dataset = [{k: serialize(v, func_mod) for k, v in datum.items()} for datum in dataset]
         if generator is not None:
-            generator = (lambda: {k:serialize(v,func_mod) for k,v in generator().items()})
+            generator = (lambda: {k: serialize(v, func_mod) for k, v in generator().items()})
         func_name = func.__name__
 
         BENCHMARK_CONFIG_BY_ENDPOINT_NAME[endpoint_name] = {
@@ -191,59 +178,74 @@ def benchmark(
 
     return decorator
 
+
 class Deployment:
     def __init__(
         self,
         name: str,
-        endpoint_group_id: Optional[int] = None,
-        cold_mult: int = 3,
-        min_workers: int = 5,
-        max_workers: int = 16,
-        min_load: int = 1,
-        min_cold_load: int = 0,
-        target_util: float = 0.9,
+        tag: str = "default",
         image_name: str = "vastai/base-image:@vastai-automatic-tag",
         env_vars: dict = {},
         search_params: str = "",
         disk_space: int = 32,
-        model_log_file: str = "/var/log/remote/debug.log",
-        model_backend_load_logs: str = ["Deployment ready"],
-        model_backend_error_logs: str = ["Deployment error"],
-        model_healthcheck_endpoint: str = "health",
+        cold_workers: int = 5,
+        max_workers: int = 16,
+        min_load: int = 1,
+        min_cold_load: int = 0,
+        target_util: float = 0.9,
+        cold_mult: int = 3,
+        max_queue_time: Optional[float] = None,
+        target_queue_time: Optional[float] = None,
+        inactivity_timeout: Optional[float] = None,
         autoscaler_instance: str = "",
-        on_start: str = "",
+        ttl: Optional[float] = None,
+        version_label: Optional[str] = None,
+        # Worker configuration
+        model_log_file: str = "/var/log/remote/debug.log",
+        model_backend_load_logs: list = ["Deployment ready"],
+        model_backend_error_logs: list = ["Deployment error"],
+        model_healthcheck_endpoint: str = "health",
+        secrets: list[str] = [],
     ):
-        # --- Logging ---
         self.logger = _setup_logger("Deployment")
 
-        # --- Endpoint Configuration ---
+        # --- Deployment identity ---
         self.name = name
-        self.endpoint_group_id = endpoint_group_id
-        self.cold_mult = cold_mult
-        self.min_workers = min_workers
+        self.tag = tag
+
+        # --- Scaling configuration ---
+        self.cold_workers = cold_workers
         self.max_workers = max_workers
         self.min_load = min_load
         self.min_cold_load = min_cold_load
         self.target_util = target_util
+        self.cold_mult = cold_mult
+        self.max_queue_time = max_queue_time
+        self.target_queue_time = target_queue_time
+        self.inactivity_timeout = inactivity_timeout
         self.autoscaler_instance = autoscaler_instance
+        self.ttl = ttl
+        self.version_label = version_label
 
-        self.logger.debug(f"Endpoint initialized: name={name}, autoscaler_instance={autoscaler_instance or 'default'}")
-
-        # --- Template Configuration ---
+        # --- Template configuration ---
         self.image_name = image_name
         self.env_vars = env_vars
         self.search_params = search_params
         self.disk_space = disk_space
 
-        # User onstart script should run after the system onstart
-        self.user_onstart = on_start
+        # --- Setup commands (become on_start.sh in tar) ---
         self.__onstart_cmd = ""
-
         self.__pip_packages_requested = False
 
-        # --- Worker Configuration ---
+        # --- Secrets (list of env var names, resolved from os.environ at deploy time) ---
+        self.secrets = list(secrets)
+
+        # --- Worker configuration ---
         self.remote_functions = REMOTE_FUNCTIONS_BY_ENDPOINT_NAME.get(name, {})
         benchmark_cfg = BENCHMARK_CONFIG_BY_ENDPOINT_NAME.get(name)
+        self.benchmark_function_name = None
+        self.benchmark_dataset = []
+        self.benchmark_generator = None
         if benchmark_cfg:
             self.benchmark_function_name = benchmark_cfg["function_name"]
             self.benchmark_dataset = benchmark_cfg["dataset"]
@@ -255,6 +257,17 @@ class Deployment:
         self.model_backend_load_logs = model_backend_load_logs
         self.model_backend_error_logs = model_backend_error_logs
 
+        # --- Deployment result state ---
+        self.deployment_id = None
+        self.endpoint_id = None
+
+        # Capture the file path of the script that created this Deployment
+        # (the caller's module, i.e. deployment.py)
+        caller_frame = inspect.stack()[1]
+        self._deployment_script_path = os.path.abspath(caller_frame.filename)
+
+    # --- Setup methods (build on_start.sh content) ---
+
     def apt_get(self, packages: list[str]):
         packages_str = " ".join(packages)
         self.__onstart_cmd += f"apt-get install -y {packages_str}\n"
@@ -263,7 +276,6 @@ class Deployment:
         if not self.__pip_packages_requested:
             self.__onstart_cmd += "curl -LsSf https://astral.sh/uv/install.sh | sh && uv venv && source .venv/bin/activate\n"
             self.__pip_packages_requested = True
-
         packages_str = " ".join(packages)
         self.__onstart_cmd += f"uv pip install {packages_str}\n"
 
@@ -273,88 +285,211 @@ class Deployment:
     def set_env_vars(self, vars: dict[str, str]):
         self.env_vars.update(vars)
 
-    def __upload_deploy_script(self):
-        vast_upload_url = os.environ["VAST_UPLOAD_URL"]
-        vast_upload_auth_token = os.environ["VAST_UPLOAD_AUTH_TOKEN"]
-        vast_download_url_base = os.environ["VAST_DOWNLOAD_URL"]
-        deploy_script = sys.argv[0]
-        with open(deploy_script, 'r') as deploy_script_file:
-            blob_id = requests.post(vast_upload_url, headers = {'Authorization': f'Bearer {vast_upload_auth_token}'}, data = deploy_script_file.read()).text
-        return vast_download_url_base.rstrip('/') + '/' + blob_id
-    
-    def __install_remote_worker_script(self):
-        worker_script_download_url = self.__upload_deploy_script()
-        self.apt_get(["wget"])
-        self.__onstart_cmd += f"""
-mkdir -p /workspace
-wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw.githubusercontent.com/vast-ai/vast-sdk/refs/heads/remote/start_server_sdk.sh | bash
-        """
+    def set_secrets(self, keys: list[str]):
+        """Set secret env var names. Values are resolved from os.environ at deploy time
+        and bundled in the tar.gz only (not stored in DB)."""
+        self.secrets.extend(keys)
+
+    # --- Deploy ---
+
+    def _build_env_string(self):
+        """Convert env_vars dict to Docker -e format string."""
+        parts = ["-p 3000:3000"]
+        for k, v in self.env_vars.items():
+            parts.append(f"-e {k}={v}")
+        return " ".join(parts)
+
+    def _build_tar_payload(self):
+        """Build tar.gz containing deployment.py, on_start.sh, and .secrets."""
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+            # 1. deployment.py
+            _add_file_to_tar(tar, self._deployment_script_path, arcname="deployment.py")
+
+            # 2. on_start.sh (if any setup commands were specified)
+            if self.__onstart_cmd.strip():
+                onstart_content = f"#!/bin/bash\nset -e\n{self.__onstart_cmd}"
+                _add_string_to_tar(tar, onstart_content, arcname="on_start.sh")
+
+            # 3. .secrets (resolve key names from current os.environ)
+            if self.secrets:
+                secrets_lines = []
+                for key in self.secrets:
+                    val = os.environ.get(key)
+                    if val is None:
+                        self.logger.warning(f"Secret '{key}' not found in environment, skipping")
+                        continue
+                    secrets_lines.append(f"export {key}={shlex.quote(val)}")
+                if secrets_lines:
+                    secrets_content = "\n".join(secrets_lines) + "\n"
+                    _add_string_to_tar(tar, secrets_content, arcname=".secrets")
+
+        payload = buf.getvalue()
+        file_hash = hashlib.sha256(payload).hexdigest()
+        file_size = len(payload)
+        return payload, file_hash, file_size
+
+    def deploy(self):
+        """Package code and deploy via PUT /api/v0/deployments/. Upload to S3 if needed."""
+        api_key = os.environ.get("VAST_API_KEY")
+        if not api_key:
+            raise ValueError("VAST_API_KEY environment variable is not set")
+
+        self.logger.info(f"Deploying '{self.name}' (tag={self.tag})")
+
+        # Build tar.gz payload
+        payload, file_hash, file_size = self._build_tar_payload()
+        self.logger.debug(f"Payload: {file_size} bytes, hash={file_hash}")
+
+        # PUT /api/v0/deployments/
+        body = {
+            "name": self.name,
+            "tag": self.tag,
+            "image": self.image_name,
+            "file_hash": file_hash,
+            "file_size": file_size,
+            "storage": self.disk_space,
+            "cold_workers": self.cold_workers,
+            "max_workers": self.max_workers,
+        }
+
+        # Search params — merge user params with sensible defaults
+        default_search = "verified=true rentable=true static_ip=true"
+        if self.search_params:
+            body["search_params"] = f"{default_search} {self.search_params}"
+        else:
+            body["search_params"] = default_search
+        if self.env_vars:
+            body["env"] = self._build_env_string()
+        if self.ttl is not None:
+            body["ttl"] = self.ttl
+        if self.version_label:
+            body["version_label"] = self.version_label
+        if self.min_load is not None:
+            body["min_load"] = self.min_load
+        if self.min_cold_load is not None:
+            body["min_cold_load"] = self.min_cold_load
+        if self.target_util is not None:
+            body["target_util"] = self.target_util
+        if self.cold_mult is not None:
+            body["cold_mult"] = self.cold_mult
+        if self.max_queue_time is not None:
+            body["max_queue_time"] = self.max_queue_time
+        if self.target_queue_time is not None:
+            body["target_queue_time"] = self.target_queue_time
+        if self.inactivity_timeout is not None:
+            body["inactivity_timeout"] = self.inactivity_timeout
+        if self.autoscaler_instance:
+            body["autoscaler_instance"] = self.autoscaler_instance
+
+        self.logger.debug(f"PUT {API_URL}/api/v0/deployments/ body={body}")
+        resp = requests.put(
+            f"{API_URL}/api/v0/deployments/",
+            json=body,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        resp.raise_for_status()
+        result = resp.json()
+
+        if not result.get("success"):
+            raise RuntimeError(f"Deployment failed: {result}")
+
+        self.deployment_id = result["deployment_id"]
+        self.endpoint_id = result["endpoint_id"]
+        action = result.get("action", "unknown")
+
+        # Register the API endpoint name so @remote wrappers can find it
+        api_endpoint_name = f"deployment-{self.name}-{self.tag}"
+        ENDPOINT_NAME_MAP[self.name] = api_endpoint_name
+        self.logger.info(f"Deployment {action}: id={self.deployment_id}, endpoint={self.endpoint_id}")
+
+        # Upload to S3 if the API returned a presigned upload URL (new version)
+        if "upload_url" in result:
+            self.logger.debug("Uploading deployment tar.gz to S3...")
+            upload_resp = requests.post(
+                result["upload_url"],
+                data=result["upload_fields"],
+                files={"file": ("deployment.tar.gz", payload)},
+            )
+            upload_resp.raise_for_status()
+            self.logger.info("Upload complete.")
+
+        if result.get("evicted_versions"):
+            self.logger.info(f"Evicted old versions: {result['evicted_versions']}")
+
+        # On soft_update, trigger a rolling worker update via the autoscaler
+        if action == "soft_update":
+            self._trigger_worker_update(api_key)
+
+        action_msgs = {
+            "created": f"Created new deployment '{self.name}' (id={self.deployment_id})",
+            "soft_update": f"Updated deployment '{self.name}' code (id={self.deployment_id}), worker update initiated",
+            "autoscale_update": f"Updated deployment '{self.name}' scaling config (id={self.deployment_id})",
+            "exists": f"Deployment '{self.name}' unchanged (id={self.deployment_id})",
+        }
+        print(action_msgs.get(action, f"Deployed '{self.name}' (action={action}, id={self.deployment_id})"))
+        return result
+
+    def _trigger_worker_update(self, api_key):
+        """Trigger a rolling worker update via the autoscaler's /update_workers/ endpoint."""
+        AUTOSCALER_URL = os.getenv("VAST_AUTOSCALER_URL", "https://run.vast.ai")
+
+        # Look up workergroup_id and endpoint api_key from the webserver
+        autojobs_resp = requests.get(
+            f"{API_URL}/api/v0/autojobs/",
+            params={"api_key": api_key, "client_id": "me"},
+        )
+        autojobs_resp.raise_for_status()
+        autojobs = autojobs_resp.json().get("results", [])
+
+        workergroup = None
+        for aj in autojobs:
+            if aj.get("endpoint_id") == self.endpoint_id:
+                workergroup = aj
+                break
+
+        if not workergroup:
+            self.logger.warning(f"No workergroup found for endpoint {self.endpoint_id}, skipping worker update")
+            return
+
+        workergroup_id = workergroup["id"]
+        endpoint_api_key = workergroup.get("api_key", api_key)
+
+        self.logger.info(f"Triggering worker update for workergroup {workergroup_id}...")
+        update_resp = requests.post(
+            f"{AUTOSCALER_URL}/update_workers/",
+            json={
+                "workergroup_id": workergroup_id,
+                "api_key": endpoint_api_key,
+            },
+            headers={"Authorization": f"Bearer {endpoint_api_key}"},
+        )
+
+        if update_resp.ok:
+            update_result = update_resp.json()
+            if update_result.get("success"):
+                workers_count = update_result.get("workers_to_update", 0)
+                self.logger.info(f"Worker update initiated: {workers_count} workers to update")
+                print(f"Rolling update initiated for {workers_count} workers")
+            else:
+                self.logger.warning(f"Worker update response: {update_result}")
+        else:
+            self.logger.warning(f"Failed to trigger worker update: HTTP {update_resp.status_code}")
+
+    # --- Serve (worker side) ---
 
     def ready(self):
+        """In serve mode, start the Worker server. In client mode, deploy automatically."""
+        current_mode = get_mode()
 
-        if (mode := get_mode()) == "deploy":
-            vast_api_key = os.environ.get("VAST_API_KEY")
-            if not vast_api_key:
-                raise ValueError("VAST_API_KEY environment variable is not set")
-            self.logger.info(f"Deploying '{self.name}'")
-            self.logger.debug(f"Deployment config: image={self.image_name}, min_workers={self.min_workers}, max_workers={self.max_workers}")
-            print("Deploying...")
+        if current_mode == "client":
+            self.deploy()
+            return
 
-            self.logger.debug("Uploading deploy script...")
-            self.__install_remote_worker_script()
-            self.logger.debug("Deploy script uploaded successfully")
-
-            self.logger.debug(f"Creating template with image '{self.image_name}'...")
-            template = Template(
-                vast_api_key,
-                self.image_name,
-                self.env_vars,
-                self.disk_space,
-                template_name="template-test",
-                onstart_cmd=self.__onstart_cmd,
-            )
-            template_id = template.create_template()
-            self.logger.info(f"Template created with ID: {template_id}")
-
-            self.logger.debug(f"Creating endpoint group '{self.name}'...")
-            endpoint_group = EndpointGroup(
-                vast_api_key,
-                self.name,
-                self.cold_mult,
-                self.min_workers,
-                self.max_workers,
-                self.min_load,
-                self.min_cold_load,
-                self.target_util,
-                self.autoscaler_instance,
-            )
-            endpoint_group_id = endpoint_group.create_endpoint_group()
-            self.logger.info(f"Endpoint group created with ID: {endpoint_group_id}")
-
-            self.logger.debug(f"Creating worker group for endpoint ID {endpoint_group_id}...")
-            worker_group = WorkerGroup(
-                vast_api_key,
-                self.cold_mult,
-                endpoint_group_id,
-                self.name,
-                self.min_load,
-                self.search_params,
-                self.target_util,
-                template_id,
-                self.autoscaler_instance,
-            )
-
-            worker_group.create_worker_group()
-            self.logger.info("Worker group created, waiting for workers to become ready...")
-            worker_group.check_worker_group_status()
-
-            self.logger.info(f"Deployment complete for endpoint '{self.name}'")
-
-
-        elif mode == "serve":
+        if current_mode == "serve":
             from vastai import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig, LogActionConfig
 
-            remote_function_handlers : list[HandlerConfig] = []
+            remote_function_handlers: list[HandlerConfig] = []
 
             for remote_func_name, remote_func in self.remote_functions.items():
                 benchmark_config: BenchmarkConfig = None
@@ -379,39 +514,32 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                     benchmark_config=benchmark_config,
                     max_queue_time=30.0
                 )
-                
                 remote_function_handlers.append(remote_func_handler)
-
 
             remote_worker_config = WorkerConfig(
                 model_log_file=self.model_log_file,
-                handlers = remote_function_handlers,
+                handlers=remote_function_handlers,
                 log_action_config=LogActionConfig(
                     on_load=self.model_backend_load_logs,
                     on_error=self.model_backend_error_logs,
                 )
             )
 
-            # Build the worker handling our remote functions
             remote_worker = Worker(remote_worker_config)
 
             async def main():
-                # Call on_init if present
                 if self.on_init_function is not None:
                     try:
                         self.on_init_function()
                     except Exception as ex:
                         raise Exception(f"Error in on_init function: {ex}")
 
-                # Prepare log file
                 model_log = Path(self.model_log_file)
                 await model_log.parent.mkdir(parents=True, exist_ok=True)
 
-                # Append instead of overwrite
                 async with aiofiles.open(model_log, "a") as f:
                     await f.write("Deployment ready\n")
 
-                # Start background task(s)
                 if self.background_task:
                     await asyncio.gather(
                         remote_worker.run_async(),
@@ -421,27 +549,3 @@ wget -O /workspace/worker.py {worker_script_download_url} && curl -L https://raw
                     await remote_worker.run_async()
 
             asyncio.run(main())
-        elif mode == "client":
-            # Nothing to do here
-            pass
-        elif mode == "down":
-            vast_api_key = os.environ.get("VAST_API_KEY")
-            if not vast_api_key:
-                raise ValueError("VAST_API_KEY environment variable is not set")
-            self.logger.info(f"Starting teardown for deployment '{self.name}'")
-
-            self.logger.debug("Tearing down endpoint group...")
-            endpoint_group = EndpointGroup(
-                vast_api_key,
-                self.name,
-            ).teardown_endpoint_group()
-            self.logger.debug("Endpoint group teardown complete")
-
-            self.logger.debug("Tearing down template...")
-            template = Template(
-                vast_api_key,
-            ).teardown_template()
-            self.logger.debug("Template teardown complete")
-
-            self.logger.info(f"Teardown complete for deployment '{self.name}'")
-

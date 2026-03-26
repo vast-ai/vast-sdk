@@ -3,23 +3,39 @@ import sys
 import json
 import time
 import base64
-import subprocess
 import dataclasses
 import logging
 from asyncio import sleep, gather, Semaphore, create_task
-from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any, Dict, AsyncContextManager
+from typing import (
+    Tuple,
+    Awaitable,
+    NoReturn,
+    List,
+    Union,
+    Callable,
+    Optional,
+    Any,
+    Dict,
+    AsyncContextManager,
+)
 from functools import cached_property
 from distutils.util import strtobool
 from collections import deque
 from asyncio import sleep, CancelledError
 
 from anyio import open_file
-from aiohttp import web, ClientResponse, ClientSession, ClientConnectorError, ClientTimeout, TCPConnector
+from aiohttp import (
+    web,
+    ClientResponse,
+    ClientSession,
+    ClientConnectorError,
+    ClientTimeout,
+    TCPConnector,
+)
 import asyncio
 import string
 import random
 
-import requests
 from Crypto.Signature import pkcs1_15
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
@@ -45,7 +61,7 @@ LOG_POLL_INTERVAL = 0.1
 # Defines waiting interval for session garbage collection
 SESSION_GC_INTERVAL = 5.0
 BENCHMARK_INDICATOR_FILE = ".has_benchmark"
-MAX_PUBKEY_FETCH_ATTEMPTS = 3
+MAX_PUBKEY_FETCH_ATTEMPTS = 5
 
 
 @dataclasses.dataclass
@@ -68,7 +84,9 @@ class Backend:
     version = VERSION
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
     queue: deque = dataclasses.field(default_factory=deque, repr=False)
-    _queue_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock, repr=False)
+    _queue_lock: asyncio.Lock = dataclasses.field(
+        default_factory=asyncio.Lock, repr=False
+    )
     unsecured: bool = dataclasses.field(
         default_factory=lambda: bool(strtobool(os.environ.get("UNSECURED", "false"))),
     )
@@ -81,12 +99,14 @@ class Backend:
     healthcheck_url: str = dataclasses.field(
         default_factory=lambda: os.environ.get("MODEL_HEALTH_ENDPOINT", "")
     )
-    _sessions_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock, repr=False)
+    _sessions_lock: asyncio.Lock = dataclasses.field(
+        default_factory=asyncio.Lock, repr=False
+    )
     sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
     max_sessions: int = dataclasses.field(default=-1)
     lifecycle: Optional[AsyncContextManager] = dataclasses.field(default=None)
-        
+
     async def session_health_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
@@ -104,10 +124,12 @@ class Backend:
                 return web.json_response({"ok": False}, status=200)
 
             if session_auth is None or session.auth_data != session_auth:
-                return web.json_response({"error": "session_auth is not valid"}, status=401)
+                return web.json_response(
+                    {"error": "session_auth is not valid"}, status=401
+                )
 
             return web.json_response({"ok": True}, status=200)
-        
+
     async def session_get_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
@@ -123,19 +145,19 @@ class Backend:
             session = self.sessions.get(session_id)
         if session is None:
             return web.json_response({"error": "session does not exist"}, status=400)
-        
+
         if session_auth is None or session.auth_data != session_auth:
             return web.json_response({"error": "session_auth is not valid"}, status=401)
         else:
             return web.json_response(
                 {
-                    "session_id" : session_id,
-                    "auth_data" : session.auth_data,
-                    "lifetime" : session.lifetime,
-                    "expiration" : session.expiration,
+                    "session_id": session_id,
+                    "auth_data": session.auth_data,
+                    "lifetime": session.lifetime,
+                    "expiration": session.expiration,
                     "created_at": session.created_at,
-                    "on_close_route" : session.on_close_route,
-                    "on_close_payload": session.on_close_payload
+                    "on_close_route": session.on_close_route,
+                    "on_close_payload": session.on_close_payload,
                 }
             )
 
@@ -211,7 +233,6 @@ class Backend:
 
         return True
 
-
     async def session_end_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
@@ -222,7 +243,7 @@ class Backend:
 
         if not session_id:
             return web.json_response({"error": "missing session_id"}, status=422)
-        
+
         session = None
         async with self._sessions_lock:
             session = self.sessions.get(session_id)
@@ -233,8 +254,10 @@ class Backend:
                     status=400,
                 )
             if session_auth is None or session.auth_data != session_auth:
-                return web.json_response({"error": "session_auth is not valid"}, status=401)
-                    
+                return web.json_response(
+                    {"error": "session_auth is not valid"}, status=401
+                )
+
         closed = await self.__close_session(session_id)
         if not closed:
             return web.json_response({"error": "session already closed"}, status=410)
@@ -244,12 +267,10 @@ class Backend:
             status=200,
         )
 
-
     def generate_session_id(self):
         characters = string.ascii_letters + string.digits
-        random_string = ''.join(random.choices(characters, k=13))
+        random_string = "".join(random.choices(characters, k=13))
         return random_string
-
 
     async def session_create_handler(self, request: web.Request) -> web.Response:
         try:
@@ -260,18 +281,21 @@ class Backend:
             return web.json_response(dict(error="invalid JSON"), status=422)
 
         session_request_metrics = RequestMetrics(
-            request_idx= auth_data.get("request_idx"),
-            reqnum= auth_data.get("reqnum"),
-            workload= auth_data.get("cost"),
+            request_idx=auth_data.get("request_idx"),
+            reqnum=auth_data.get("reqnum"),
+            workload=auth_data.get("cost"),
             status="SessionActive",
-            is_session=True
+            is_session=True,
         )
 
         async with self._sessions_lock:
-            if not (self.max_sessions is None or self.max_sessions == 0) and len(self.sessions) >= self.max_sessions:
+            if (
+                not (self.max_sessions is None or self.max_sessions == 0)
+                and len(self.sessions) >= self.max_sessions
+            ):
                 self.metrics._request_reject(session_request_metrics)
                 return web.Response(status=429)
-            
+
             # Set the session expiration time, and the TTL extension per request/get
             lifetime = payload.get("lifetime", 60.0)
             now = time.time()
@@ -293,47 +317,40 @@ class Backend:
                 auth_data=auth_data,
                 on_close_route=on_close_route,
                 on_close_payload=on_close_payload,
-                request_idx=session_request_metrics.request_idx
+                request_idx=session_request_metrics.request_idx,
             )
             self.sessions[session_id] = session
             self.session_metrics[session_id] = session_request_metrics
             self.metrics._request_start(session_request_metrics)
 
         return web.json_response(
-            {
-                "session_id": session.session_id,
-                "expiration": session.expiration
-            },
+            {"session_id": session.session_id, "expiration": session.expiration},
             status=201,
         )
-
 
     def __post_init__(self):
         self.metrics = Metrics()
         self.metrics._set_version(self.version)
         self.metrics._set_mtoken(self.mtoken)
-        self._total_pubkey_fetch_errors = 0
-        self._pubkey = self._fetch_pubkey()
+        self._pubkey: Optional[RSA.RsaKey] = None
+        self.__pubkey_fetch_complete: asyncio.Event = asyncio.Event()
+        self.__pubkey_failed: bool = False
         self.__start_healthcheck: bool = False
         self.__healthcheck_ready: asyncio.Event = asyncio.Event()
         self.__healthcheck_succeeded: bool = False
-
-    @property
-    def pubkey(self) -> Optional[RSA.RsaKey]:
-        if self._pubkey is None:
-            self._pubkey = self._fetch_pubkey()
-        return self._pubkey
 
     @cached_property
     def session(self):
         log.debug(f"Starting TCP session with model server at {self.model_server_url}")
         connector = TCPConnector(
-            force_close=True, # Required for long running jobs
+            force_close=True,  # Required for long running jobs
             enable_cleanup_closed=True,
         )
-        
+
         timeout = ClientTimeout(total=None)
-        return ClientSession(self.model_server_url, timeout=timeout, connector=connector)
+        return ClientSession(
+            self.model_server_url, timeout=timeout, connector=connector
+        )
 
     def create_handler(
         self,
@@ -347,20 +364,43 @@ class Backend:
         return handler_fn
 
     #######################################Private#######################################
-    def _fetch_pubkey(self):
+    async def _fetch_pubkey(self) -> None:
+        """Fetch the serverless public key with exponential backoff retries."""
         report_addr = self.report_addr.rstrip("/")
-        command = ["curl", "-X", "GET", f"{report_addr}/pubkey/"]
-        try:
-            result = subprocess.check_output(command, universal_newlines=True)
-            log.debug("Serverless Public Key:")
-            log.debug(result)
-            key = RSA.import_key(result)
-            if key is not None:
-                return key
-        except (ValueError , subprocess.CalledProcessError) as e:
-            log.debug(f"Error downloading key: {e}")
-        self.backend_errored("Failed to get Serverless public key")
-       
+        url = f"{report_addr}/pubkey/"
+        timeout = ClientTimeout(total=10)
+
+        for attempt in range(1, MAX_PUBKEY_FETCH_ATTEMPTS + 1):
+            try:
+                async with ClientSession(timeout=timeout) as client:
+                    async with client.get(url) as response:
+                        response.raise_for_status()
+                        text = await response.text()
+                        log.debug("Serverless Public Key:")
+                        log.debug(text)
+                        key = RSA.import_key(text)
+                        if key is not None:
+                            self._pubkey = key
+                            self.__pubkey_fetch_complete.set()
+                            log.debug(
+                                f"Successfully fetched pubkey on attempt {attempt}"
+                            )
+                            return
+            except (ValueError, ClientConnectorError, Exception) as e:
+                log.debug(
+                    f"Error downloading key (attempt {attempt}/{MAX_PUBKEY_FETCH_ATTEMPTS}): {e}"
+                )
+                if attempt < MAX_PUBKEY_FETCH_ATTEMPTS:
+                    backoff = 2 ** (attempt - 1)  # 1, 2, 4, 8, 16 seconds
+                    log.debug(f"Retrying in {backoff} seconds...")
+                    await asyncio.sleep(backoff)
+
+        log.error(f"Failed to fetch pubkey after {MAX_PUBKEY_FETCH_ATTEMPTS} attempts")
+        self.__pubkey_failed = True
+        self.__pubkey_fetch_complete.set()  # Signal that fetch is complete (even though it failed)
+        self.backend_errored(
+            "Failed to get Serverless public key after all retry attempts"
+        )
 
     async def __handle_request(
         self,
@@ -376,7 +416,12 @@ class Backend:
         except json.JSONDecodeError:
             return web.json_response(dict(error="invalid JSON"), status=422)
         workload = payload.count_workload()
-        request_metrics: RequestMetrics = RequestMetrics(request_idx=auth_data.request_idx, reqnum=auth_data.reqnum, workload=workload, status="Created")
+        request_metrics: RequestMetrics = RequestMetrics(
+            request_idx=auth_data.request_idx,
+            reqnum=auth_data.reqnum,
+            workload=workload,
+            status="Created",
+        )
 
         event = asyncio.Event()
 
@@ -391,8 +436,7 @@ class Backend:
                 session.session_reqnum += 1
                 request_metrics.session = session
                 request_metrics.session_reqnum = session.session_reqnum
-                
-        
+
         async def advance_queue_after_completion(event: asyncio.Event):
             """Pop current head and wake next waiter, if any."""
             async with self._queue_lock:
@@ -459,7 +503,9 @@ class Backend:
                 if request_metrics.session is None:
                     log.debug(f"Starting work on request {request_metrics.reqnum}")
                 else:
-                    log.debug(f"Starting work on request {request_metrics.session_reqnum} in session {request_metrics.session.request_idx}")
+                    log.debug(
+                        f"Starting work on request {request_metrics.session_reqnum} in session {request_metrics.session.request_idx}"
+                    )
 
                 # Execute the work task
                 work_task = create_task(make_request())
@@ -474,7 +520,7 @@ class Backend:
         except Exception as e:
             log.debug(f"Exception in main handler loop {e}")
             return web.Response(status=500)
-        
+
         finally:
             try:
                 # Remove request from session if present
@@ -555,6 +601,7 @@ class Backend:
     async def _start_tracking(self) -> None:
         if self.lifecycle is not None:
             await gather(
+                self._fetch_pubkey(),
                 self.__lifecycle_startup(),
                 self.metrics._send_metrics_loop(),
                 self.__healthcheck(),
@@ -563,6 +610,7 @@ class Backend:
             )
         else:
             await gather(
+                self._fetch_pubkey(),
                 self.__read_logs(),
                 self.metrics._send_metrics_loop(),
                 self.__healthcheck(),
@@ -588,9 +636,13 @@ class Backend:
                 if self.healthcheck_url:
                     log.debug("Lifecycle ready, waiting for healthcheck...")
                     try:
-                        await asyncio.wait_for(self.__healthcheck_ready.wait(), timeout=300.0)
+                        await asyncio.wait_for(
+                            self.__healthcheck_ready.wait(), timeout=300.0
+                        )
                     except asyncio.TimeoutError:
-                        raise Exception("Timed out waiting for healthcheck after lifecycle ready (300s)")
+                        raise Exception(
+                            "Timed out waiting for healthcheck after lifecycle ready (300s)"
+                        )
                 else:
                     log.debug("Lifecycle ready, no healthcheck configured")
 
@@ -648,32 +700,36 @@ class Backend:
             async def read(self) -> bytes:
                 return self._body
 
-        return RemoteFunctionClientResponse(result) 
+        return RemoteFunctionClientResponse(result)
+
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
             return True
 
-        def verify_signature(message, signature):
-            if self.pubkey is None:
-                log.debug(f"No Public Key!")
-                return False
+        # Reject early if pubkey was never loaded
+        if self._pubkey is None:
+            log.error("Rejecting request: pubkey not loaded")
+            return False
 
+        def verify_signature(message, signature):
             h = SHA256.new(message.encode())
             try:
-                pkcs1_15.new(self.pubkey).verify(h, base64.b64decode(signature))
+                pkcs1_15.new(self._pubkey).verify(h, base64.b64decode(signature))
                 return True
             except (ValueError, TypeError):
                 return False
 
-        message = {
-            "url" : auth_data.url
-        }
+        message = {"url": auth_data.url}
 
-        if verify_signature(json.dumps(message, indent=4, sort_keys=True), auth_data.signature):
+        if verify_signature(
+            json.dumps(message, indent=4, sort_keys=True), auth_data.signature
+        ):
             self.reqnum = max(auth_data.reqnum, self.reqnum)
             return True
         else:
-            log.error(f"Signature error: signature verification failed, sig:{auth_data.signature}, message: {message}")
+            log.error(
+                f"Signature error: signature verification failed, sig:{auth_data.signature}, message: {message}"
+            )
             return False
 
     async def __run_benchmark(self) -> float:
@@ -687,14 +743,20 @@ class Backend:
         except FileNotFoundError:
             pass
         if self.benchmark_handler.do_warmup_benchmark:
-            log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
+            log.debug(
+                f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}"
+            )
             log.debug("Initial run to trigger model loading...")
             payload = self.benchmark_handler.make_benchmark_payload()
             await self.__call_backend(handler=self.benchmark_handler, payload=payload)
 
         max_throughput = 0
         sum_throughput = 0
-        concurrent_requests = self.benchmark_handler.concurrency if self.benchmark_handler.allow_parallel_requests else 1
+        concurrent_requests = (
+            self.benchmark_handler.concurrency
+            if self.benchmark_handler.allow_parallel_requests
+            else 1
+        )
         for run in range(1, self.benchmark_handler.benchmark_runs + 1):
             start = time.time()
             benchmark_requests = []
@@ -702,7 +764,9 @@ class Backend:
             for i in range(concurrent_requests):
                 payload = self.benchmark_handler.make_benchmark_payload()
                 workload = payload.count_workload()
-                task = self.__call_backend(handler=self.benchmark_handler, payload=payload)
+                task = self.__call_backend(
+                    handler=self.benchmark_handler, payload=payload
+                )
                 benchmark_requests.append(
                     BenchmarkResult(request_idx=i, workload=workload, task=task)
                 )
@@ -711,9 +775,13 @@ class Backend:
             for br, response in zip(benchmark_requests, responses):
                 br.response = response
 
-            total_workload = sum(br.workload for br in benchmark_requests if br.is_successful)
+            total_workload = sum(
+                br.workload for br in benchmark_requests if br.is_successful
+            )
             time_elapsed = time.time() - start
-            successful_responses = sum([1 for br in benchmark_requests if br.is_successful])
+            successful_responses = sum(
+                [1 for br in benchmark_requests if br.is_successful]
+            )
             if successful_responses == 0:
                 self.backend_errored("No successful responses from benchmark")
                 log.error(f"Benchmark Failed: No successful responses")
@@ -737,13 +805,14 @@ class Backend:
             )
 
         average_throughput = sum_throughput / self.benchmark_handler.benchmark_runs
-        log.debug( f"Benchmark complete: average perf is {average_throughput}, measured perf is {max_throughput}")
+        log.debug(
+            f"Benchmark complete: average perf is {average_throughput}, measured perf is {max_throughput}"
+        )
         with open(BENCHMARK_INDICATOR_FILE, "w") as f:
             f.write(str(max_throughput))
         return max_throughput
 
     async def __read_logs(self) -> Awaitable[NoReturn]:
-
         async def handle_log_line(log_line: str) -> None:
             """
             Implement this function to handle each log line for your model.
@@ -761,24 +830,54 @@ class Backend:
 
                             # Wait for the first successful healthcheck before marking model as loaded
                             if self.healthcheck_url:
-                                log.debug("Benchmark succeeded, waiting for healthcheck to confirm model is ready...")
+                                log.debug(
+                                    "Benchmark succeeded, waiting for healthcheck to confirm model is ready..."
+                                )
                                 try:
-                                    await asyncio.wait_for(self.__healthcheck_ready.wait(), timeout=300.0)
-                                    log.debug("Healthcheck confirmed - marking model as loaded")
+                                    await asyncio.wait_for(
+                                        self.__healthcheck_ready.wait(), timeout=300.0
+                                    )
+                                    log.debug(
+                                        "Healthcheck confirmed - marking model as loaded"
+                                    )
                                 except asyncio.TimeoutError:
-                                    raise Exception("Timed out waiting for healthcheck after benchmark (waited 300s)")
+                                    raise Exception(
+                                        "Timed out waiting for healthcheck after benchmark (waited 300s)"
+                                    )
                             else:
                                 # No healthcheck endpoint defined, wait 10 seconds as fallback
-                                log.debug("No healthcheck endpoint defined, waiting 10 seconds before marking model as loaded...")
+                                log.debug(
+                                    "No healthcheck endpoint defined, waiting 10 seconds before marking model as loaded..."
+                                )
                                 await asyncio.sleep(10)
                                 log.debug("Wait complete - marking model as loaded")
 
+                            # Wait for pubkey to be fetched before proceeding (unless unsecured)
+                            if not self.unsecured:
+                                if not self.__pubkey_fetch_complete.is_set():
+                                    log.debug("Waiting for pubkey to be fetched...")
+                                    try:
+                                        await asyncio.wait_for(
+                                            self.__pubkey_fetch_complete.wait(),
+                                            timeout=60.0,
+                                        )
+                                    except asyncio.TimeoutError:
+                                        raise Exception(
+                                            "Timed out waiting for pubkey fetch (waited 60s)"
+                                        )
+                                    log.debug("Pubkey fetch complete")
+                                if self.__pubkey_failed:
+                                    raise Exception(
+                                        "Cannot mark model as loaded: pubkey fetch failed"
+                                    )
+
+                            # Mark worker ready!
                             self.metrics._model_loaded(
                                 max_throughput=max_throughput,
                             )
                         except Exception as e:
-                            log.debug(f"Benchmark failed with errror: {e}")
-                            self.backend_errored(f"Benchmark failed with errror: {e}")
+                            log.debug(f"Benchmark failed with error: {e}")
+                            self.backend_errored(f"Benchmark failed with error: {e}")
                     case LogAction.ModelError if msg in log_line:
                         log.debug(f"Got log line indicating error: {log_line}")
                         self.backend_errored(msg)
@@ -808,19 +907,25 @@ class Backend:
                             await f.aclose()
                             f = None
                             current_inode = None
-                        log.debug(f"Log file {self.model_log_file} not found, waiting...")
+                        log.debug(
+                            f"Log file {self.model_log_file} not found, waiting..."
+                        )
                         await asyncio.sleep(1)
                         continue
 
                     # If inode changed (file was rotated) or we don't have a file handle, (re)open
                     if current_inode != file_inode:
                         if f is not None:
-                            log.debug(f"Log file rotation detected (inode changed from {current_inode} to {file_inode}), reopening...")
+                            log.debug(
+                                f"Log file rotation detected (inode changed from {current_inode} to {file_inode}), reopening..."
+                            )
                             await f.aclose()
                         else:
                             log.debug(f"Opening log file (inode: {file_inode})")
 
-                        f = await open_file(self.model_log_file, encoding='utf-8', errors='ignore')
+                        f = await open_file(
+                            self.model_log_file, encoding="utf-8", errors="ignore"
+                        )
                         current_inode = file_inode
 
                     # Read a line
@@ -841,8 +946,6 @@ class Backend:
                 return await tail_log()
             else:
                 await sleep(1)
-      
-
 
     async def __session_gc_loop(self) -> NoReturn:
         while True:
@@ -852,7 +955,8 @@ class Backend:
 
                 async with self._sessions_lock:
                     expired = [
-                        sid for sid, s in self.sessions.items()
+                        sid
+                        for sid, s in self.sessions.items()
                         if s.expiration is not None and s.expiration <= now
                     ]
 
@@ -867,4 +971,3 @@ class Backend:
             except Exception as e:
                 log.debug(f"Session GC loop error: {e}")
                 continue
-                

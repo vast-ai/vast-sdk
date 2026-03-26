@@ -207,7 +207,7 @@ class EndpointHandlerFactory:
                     else True
                 )
             )
-            remote_dispatch_function: Callable[..., Awaitable[Any]] = field(
+            remote_function: Callable = field(
                 default=(
                     handler_config.remote_function
                     if handler_config.remote_function is not None
@@ -220,17 +220,17 @@ class EndpointHandlerFactory:
                 """The endpoint is the same as the route"""
                 return self._route
 
-            async def call_remote_dispatch_function(self, params: dict):
+            async def call_remote_function(self, params: dict):
                 """
-                define a remote dispatch function for this endpoint, return the result
+                define a remote function for this endpoint, return the result
                 """
-                if self.remote_dispatch_function is None:
+                if self.remote_function is None:
                     raise RuntimeError(f"remote_function is not configured for route {self._route}")
 
                 try:
-                    return await self.remote_dispatch_function(**params)
+                    return await self.remote_function(**params)
                 except Exception as ex:
-                    raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
+                    raise RuntimeError(f"Error calling remote function for route {self._route}: {ex}") from ex
 
             
             @property
@@ -345,12 +345,21 @@ class Worker:
 
     def __init__(self, config: WorkerConfig):
         
-        # Configure logging for the pyworker internals
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s[%(levelname)-5s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        # Configure logging for the pyworker internals.
+        # Force-override any prior basicConfig (e.g. from vastai CLI code) by
+        # setting the root logger level and adding a handler if none exist.
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+        if not root_logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter(
+                fmt="%(asctime)s[%(levelname)-5s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            ))
+            root_logger.addHandler(handler)
+        else:
+            for handler in root_logger.handlers:
+                handler.setLevel(logging.DEBUG)
         
         handler_factory = EndpointHandlerFactory(config)
         

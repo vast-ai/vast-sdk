@@ -671,7 +671,7 @@ class _ServerlessBase(Generic[R]):
                         poll_interval = random.uniform(
                             0.1,
                             min(
-                                (2**attempt) + random.uniform(0, 1),
+                                (2**min(attempt,20) + random.uniform(0, 1),
                                 self.max_poll_interval,
                             ),
                         )
@@ -753,7 +753,7 @@ class _ServerlessBase(Generic[R]):
                         tracker.status = "Retrying"
                         await asyncio.sleep(
                             min(
-                                (2**total_attempts) + random.uniform(0, 1),
+                                (2**min(total_attempts,20)) + random.uniform(0, 1),
                                 self.max_poll_interval,
                             )
                         )

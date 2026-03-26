@@ -44,6 +44,7 @@ uvicorn = { version = ">=0.24,<0.32", extras = ["standard"] }
 aiohttp = ">=3.9.1" 
 aiodns = ">=3.6.0" 
 pycares = "=4.11.0"
+aiofiles = ">=23.0"
 anyio = "~4.4"
 nltk = "~3.9"
 psutil = "~6.0"
