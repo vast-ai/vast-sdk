@@ -297,7 +297,7 @@ class Deployment(Deployment_): #TODO: Async Context Manager compatible with clie
         bound_args.apply_defaults()
         return serialization.deserialize_unwrap_error(
             await self._inner.deployment.endpoint.request(
-                '/'.join(f_name), 
+                '/remote/' + '/'.join(f_name), 
                 {
                     k : serialization.serialize(v, self._inner.root_module) for k,v in bound_args.arguments.items()
                 }
