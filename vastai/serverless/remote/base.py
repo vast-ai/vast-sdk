@@ -9,8 +9,85 @@ from typing import (
     Type,
     AsyncContextManager,
     Self,
+    TypedDict,
+    Unpack,
 )
+from vastai.data import Query
 from dataclasses import dataclass
+
+
+class DockerLogin(TypedDict, total=False):
+    docker_login_user: str
+    docker_login_pass: str
+    docker_login_repo: str
+
+
+class Image:
+    def __init__(
+        self, from_image: str, storage: float = 50, **docker_login: Unpack[DockerLogin]
+    ):
+        self.image_ = from_image
+        self.envs_: dict[str, str] = {}
+        self.runs_: list[str | tuple[str, ...]] = []
+        self.pip_installs_: list[str] = []
+        self.apt_gets_: list[str] = []
+        self.docker_login: DockerLogin = docker_login
+        self.requires_ = Query.search_defaults()
+        self.storage_ = storage
+        self.copies: list[tuple[str, str]] = []
+
+    def post_deployment_kwargs(self) -> dict[str, str]:
+        ret = {
+            "image": self.image_,
+            "search_params": self.requires_.query,
+        }
+        return ret
+
+    def pip_install(self, *args: str) -> "Image":
+        for arg in args:
+            self.pip_installs_.append(arg)
+        return self
+
+    def apt_get(self, *args: str) -> "Image":
+        for arg in args:
+            self.apt_gets_.append(arg)
+        return self
+
+    def run_script(self, script) -> "Image":
+        self.runs_.append(script)
+        return self
+
+    def run_cmd(self, *args) -> "Image":
+        self.runs_.append(args)
+        return self
+
+    def env(self, **kwargs: str) -> "Image":
+        for k, v in kwargs.items():
+            self.envs_[k] = v
+        return self
+
+    def require(self, *args: Query) -> "Image":
+        for arg in args:
+            self.requires_.extend(arg)
+        return self
+
+    def copy(self, src: str, dst: str) -> "Image":
+        self.copies.append((src, dst))
+        return self
+
+
+class Autoscaling(TypedDict, total=False):
+    # Scaling params
+    cold_workers: int
+    max_workers: int
+    min_load: int
+    min_cold_load: int
+    target_util: float
+    cold_mult: int
+    max_queue_time: float
+    target_queue_time: float
+    inactivity_timeout: int
+    autoscaler_instance: str
 
 
 @dataclass

@@ -10,13 +10,13 @@ class DeploymentConfig:
     Required: name, image, file_hash, file_size.
     Endpoint scaling params are optional and follow server defaults.
     """
+
     name: str
     image: str
     file_hash: str
     file_size: int
     tag: Optional[str] = None
     search_params: Optional[str] = None
-    env: Optional[str] = None
     storage: Optional[float] = None
     ttl: Optional[float] = None
     version_label: Optional[str] = None
@@ -42,6 +42,7 @@ class DeploymentConfig:
 @dataclass
 class DeploymentPutResponse:
     """Response from PUT /api/v0/deployments/."""
+
     success: bool
     action: str  # "created", "soft_update", "autoscale_update", "exists"
     deployment_id: int
@@ -66,6 +67,7 @@ class DeploymentPutResponse:
 @dataclass
 class DeploymentData:
     """Full deployment entity as returned by GET /api/v0/deployment/{id}/."""
+
     id: int
     name: str
     tag: str
