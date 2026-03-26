@@ -6,7 +6,11 @@ from .worker import Worker
 from .session import Session
 from .request_status import RequestStatus
 from vastai.data.endpoint import EndpointConfig, EndpointData
-from vastai.data.deployment import DeploymentConfig, DeploymentData, DeploymentPutResponse
+from vastai.data.deployment import (
+    DeploymentConfig,
+    DeploymentData,
+    DeploymentPutResponse,
+)
 from vastai.data.workergroup import WorkergroupConfig
 import asyncio
 import aiohttp
@@ -18,7 +22,19 @@ import random
 import time
 import collections
 from abc import abstractmethod
-from typing import Any, Awaitable, Callable, Coroutine, Deque, Dict, Generic, Optional, TypeVar, Union, List
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Deque,
+    Dict,
+    Generic,
+    Optional,
+    TypeVar,
+    Union,
+    List,
+)
 
 
 R = TypeVar("R", bound=Awaitable)
@@ -30,6 +46,7 @@ class ServerlessRequest(asyncio.Future):
     Composes a RequestStatus tracker for status/timestamp tracking.
     Properties delegate to the tracker for backward compatibility.
     """
+
     def __init__(self, tracker: Optional[RequestStatus] = None):
         super().__init__()
         self.tracker = tracker if tracker is not None else RequestStatus()
@@ -80,13 +97,14 @@ class ServerlessRequest(asyncio.Future):
                 print(fut.exception())
                 return
             callback(fut.result())
+
         self.add_done_callback(_done)
         return self
 
 
 class _ServerlessBase(Generic[R]):
-    SSL_CERT_URL        = "https://console.vast.ai/static/jvastai_root.cer"
-    VAST_WEB_URL        = "https://console.vast.ai"
+    SSL_CERT_URL = "https://console.vast.ai/static/jvastai_root.cer"
+    VAST_WEB_URL = "https://console.vast.ai"
     VAST_SERVERLESS_URL = "https://run.vast.ai"
 
     def __init__(
@@ -97,28 +115,30 @@ class _ServerlessBase(Generic[R]):
         instance: str = "prod",
         connection_limit: int = 500,
         default_request_timeout: float = 600.0,
-        max_poll_interval: float = 5.0
+        max_poll_interval: float = 5.0,
     ):
         if api_key is None or api_key == "":
-            raise AttributeError("API key missing. Please set VAST_API_KEY in your environment variables.")
+            raise AttributeError(
+                "API key missing. Please set VAST_API_KEY in your environment variables."
+            )
         self.api_key = api_key
 
         match instance:
             case "prod":
                 self.autoscaler_url = "https://run.vast.ai"
-                self.vast_web_url   = "https://console.vast.ai"
+                self.vast_web_url = "https://console.vast.ai"
             case "alpha":
                 self.autoscaler_url = "https://run-alpha.vast.ai"
-                self.vast_web_url   = "https://alpha.vast.ai"
+                self.vast_web_url = "https://alpha.vast.ai"
             case "candidate":
                 self.autoscaler_url = "https://run-candidate.vast.ai"
-                self.vast_web_url   = "https://candidate.vast.ai"
+                self.vast_web_url = "https://candidate.vast.ai"
             case "local":
                 self.autoscaler_url = "http://localhost:8080"
-                self.vast_web_url   = "https://alpha.vast.ai"
+                self.vast_web_url = "https://alpha.vast.ai"
             case _:
                 self.autoscaler_url = "https://run.vast.ai"
-                self.vast_web_url   = "https://console.vast.ai"
+                self.vast_web_url = "https://console.vast.ai"
 
         self.latencies = collections.deque(maxlen=50)
         self.debug = debug
@@ -131,7 +151,9 @@ class _ServerlessBase(Generic[R]):
 
         if debug:
             handler = logging.StreamHandler()
-            formatter = logging.Formatter('[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
+            formatter = logging.Formatter(
+                "[%(asctime)s] %(name)s - %(levelname)s - %(message)s"
+            )
             handler.setFormatter(formatter)
             handler.setLevel(logging.DEBUG)
 
@@ -147,7 +169,9 @@ class _ServerlessBase(Generic[R]):
         self.connection_limit = connection_limit
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
-        self._transport_owner = None  # if set, delegate _get_session/get_ssl_context and skip close
+        self._transport_owner = (
+            None  # if set, delegate _get_session/get_ssl_context and skip close
+        )
 
     async def __aenter__(self):
         await self._get_session()
@@ -161,7 +185,9 @@ class _ServerlessBase(Generic[R]):
             return await self._transport_owner._get_session()
         if self._session is None or self._session.closed:
             self.logger.info("Started aiohttp ClientSession")
-            connector = aiohttp.TCPConnector(limit=self.connection_limit, ssl=await self.get_ssl_context())
+            connector = aiohttp.TCPConnector(
+                limit=self.connection_limit, ssl=await self.get_ssl_context()
+            )
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
 
@@ -201,7 +227,6 @@ class _ServerlessBase(Generic[R]):
 
         return self._ssl_context
 
-
     async def get_endpoint(self, name="") -> Endpoint_[R]:
         endpoints = await self.get_endpoints()
         for e in endpoints:
@@ -216,18 +241,27 @@ class _ServerlessBase(Generic[R]):
                 url=self.vast_web_url,
                 route="/api/v0/endptjobs/",
                 api_key=self.api_key,
-                params={"client_id": "me"}
+                params={"client_id": "me"},
             )
         except Exception as ex:
             raise Exception(f"Failed to get endpoints:\nReason={ex}")
 
         if not result.get("ok"):
-            raise Exception(f"Failed to get endpoints: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to get endpoints: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         response = result.get("json") or {}
         endpoints = []
         for e in response.get("results", []):
-            endpoints.append(Endpoint(client=self, name=e["endpoint_name"], id=e["id"], api_key=e["api_key"]))
+            endpoints.append(
+                Endpoint(
+                    client=self,
+                    name=e["endpoint_name"],
+                    id=e["id"],
+                    api_key=e["api_key"],
+                )
+            )
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
 
@@ -244,7 +278,9 @@ class _ServerlessBase(Generic[R]):
             raise Exception(f"Failed to fetch endpoint {endpoint_id}:\nReason={ex}")
 
         if not result.get("ok"):
-            raise Exception(f"Failed to fetch endpoint {endpoint_id}: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to fetch endpoint {endpoint_id}: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         return EndpointData.from_dict(result["json"]["result"])
 
@@ -261,7 +297,9 @@ class _ServerlessBase(Generic[R]):
             raise Exception(f"Failed to fetch deployment {deployment_id}:\nReason={ex}")
 
         if not result.get("ok"):
-            raise Exception(f"Failed to fetch deployment {deployment_id}: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to fetch deployment {deployment_id}: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         return DeploymentData.from_dict(result["json"]["deployment"])
 
@@ -280,7 +318,9 @@ class _ServerlessBase(Generic[R]):
             raise Exception(f"Failed to create endpoint:\nReason={ex}")
 
         if not result.get("ok"):
-            raise Exception(f"Failed to create endpoint: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to create endpoint: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         endpoint_id = result["json"]["result"]
         self.logger.info(f"Created endpoint {endpoint_id}")
@@ -301,10 +341,14 @@ class _ServerlessBase(Generic[R]):
             raise Exception(f"Failed to put deployment:\nReason={ex}")
 
         if not result.get("ok"):
-            raise Exception(f"Failed to put deployment: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to put deployment: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         resp = DeploymentPutResponse.from_dict(result["json"])
-        self.logger.info(f"Deployment {resp.deployment_id} ({resp.action}), endpoint {resp.endpoint_id}")
+        self.logger.info(
+            f"Deployment {resp.deployment_id} ({resp.action}), endpoint {resp.endpoint_id}"
+        )
         return ManagedDeployment(
             id=resp.deployment_id,
             endpoint_id=resp.endpoint_id,
@@ -327,7 +371,9 @@ class _ServerlessBase(Generic[R]):
             raise Exception(f"Failed to create workergroup:\nReason={ex}")
 
         if not result.get("ok"):
-            raise Exception(f"Failed to create workergroup: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to create workergroup: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         wg_id = result["json"]["id"]
         self.logger.info(f"Created workergroup {wg_id}")
@@ -344,10 +390,14 @@ class _ServerlessBase(Generic[R]):
                 method="DELETE",
             )
         except Exception as ex:
-            raise Exception(f"Failed to delete workergroup {workergroup_id}:\nReason={ex}")
+            raise Exception(
+                f"Failed to delete workergroup {workergroup_id}:\nReason={ex}"
+            )
 
         if not result.get("ok"):
-            raise Exception(f"Failed to delete workergroup {workergroup_id}: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to delete workergroup {workergroup_id}: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         self.logger.info(f"Deleted workergroup {workergroup_id}")
 
@@ -365,7 +415,9 @@ class _ServerlessBase(Generic[R]):
             raise Exception(f"Failed to delete endpoint {endpoint_id}:\nReason={ex}")
 
         if not result.get("ok"):
-            raise Exception(f"Failed to delete endpoint {endpoint_id}: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise Exception(
+                f"Failed to delete endpoint {endpoint_id}: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         self.logger.info(f"Deleted endpoint {endpoint_id}")
 
@@ -376,10 +428,14 @@ class _ServerlessBase(Generic[R]):
         url = f"{self.autoscaler_url}/get_endpoint_workers/"
         payload = {"id": endpoint.id, "api_key": self.api_key}
 
-        async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        async with self._session.post(
+            url, json=payload, timeout=aiohttp.ClientTimeout(total=30)
+        ) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                raise RuntimeError(f"get_endpoint_workers failed: HTTP {resp.status} - {text}")
+                raise RuntimeError(
+                    f"get_endpoint_workers failed: HTTP {resp.status} - {text}"
+                )
 
             data = await resp.json(content_type=None)
 
@@ -387,23 +443,22 @@ class _ServerlessBase(Generic[R]):
             # the endpoint's worker instances are not ready to be queried. If an error message occurs,
             # return an empty list and print the error message to the user. The endpoint get_endpoint_workers
             # should normally return a list of dictionaries containing worker instance information.
-            if isinstance(data,dict):
-                if 'error_msg' in data.keys():
-                    self.logger.warning(f"Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again.")
+            if isinstance(data, dict):
+                if "error_msg" in data.keys():
+                    self.logger.warning(
+                        f"Received the following error from get_endpoint_workers:{data['error_msg']}.\nEndpoint may not be ready for query. Check credentials or wait a few minutes and try again."
+                    )
                     return []
 
-
             if not isinstance(data, list):
-                raise RuntimeError(f"Unexpected response type (wanted list): {type(data)}")
+                raise RuntimeError(
+                    f"Unexpected response type (wanted list): {type(data)}"
+                )
 
             return [Worker.from_dict(item) for item in data]
 
     async def get_endpoint_session(
-        self,
-        endpoint,
-        session_id: int,
-        session_auth: str,
-        timeout: float = 10.0
+        self, endpoint, session_id: int, session_auth: str, timeout: float = 10.0
     ):
         try:
             result = await _make_request(
@@ -434,7 +489,7 @@ class _ServerlessBase(Generic[R]):
                 lifetime=worker_response.get("lifetime"),
                 expiration=worker_response.get("expiration"),
                 auth_data=auth_data,
-                url=auth_data.get("url")
+                url=auth_data.get("url"),
             )
             return session
 
@@ -445,19 +500,20 @@ class _ServerlessBase(Generic[R]):
             self.logger.error(error_msg)
             raise Exception(error_msg)
 
-    async def end_endpoint_session(
-        self,
-        session: Session,
-        timeout: float = 10.0
-    ):
+    async def end_endpoint_session(self, session: Session, timeout: float = 10.0):
         try:
-            self.logger.debug(f"Attempting to end session {session.session_id} at {session.url}")
+            self.logger.debug(
+                f"Attempting to end session {session.session_id} at {session.url}"
+            )
             result = await _make_request(
                 client=self,
                 url=session.url,
                 api_key="",
                 route="/session/end",
-                body={"session_id": session.session_id, "session_auth": session.auth_data},
+                body={
+                    "session_id": session.session_id,
+                    "session_auth": session.auth_data,
+                },
                 method="POST",
                 retries=1,
                 timeout=timeout,
@@ -485,23 +541,29 @@ class _ServerlessBase(Generic[R]):
         lifetime: float = 60,
         on_close_route: str = None,
         on_close_payload: dict = None,
-        timeout: float = None
+        timeout: float = None,
     ) -> Session:
         try:
             session_start_response = await self.queue_endpoint_request(
                 endpoint=endpoint,
                 worker_route="/session/create",
-                worker_payload={"lifetime": lifetime, "on_close_route" : on_close_route, "on_close_payload" : on_close_payload },
+                worker_payload={
+                    "lifetime": lifetime,
+                    "on_close_route": on_close_route,
+                    "on_close_payload": on_close_payload,
+                },
                 cost=cost,
                 timeout=timeout,
-                worker_timeout=10.0
+                worker_timeout=10.0,
             )
             if not session_start_response.get("ok"):
                 error_msg = f"Error on /session/create: {session_start_response.get('json', {}).get('error', session_start_response.get('text', 'Unknown error'))}"
                 raise Exception(error_msg)
             response = session_start_response.get("response")
             if response is None:
-                raise Exception(f"No response from /session/create. Status {response.get('status')}")
+                raise Exception(
+                    f"No response from /session/create. Status {response.get('status')}"
+                )
             session_id = session_start_response.get("response").get("session_id")
             if session_id is None:
                 raise Exception("Missing session id")
@@ -512,7 +574,14 @@ class _ServerlessBase(Generic[R]):
             auth_data = session_start_response.get("auth_data")
             if auth_data is None:
                 raise Exception("Missing auth data")
-            return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, expiration=expiration, url=url, auth_data=auth_data)
+            return Session(
+                endpoint=endpoint,
+                session_id=session_id,
+                lifetime=lifetime,
+                expiration=expiration,
+                url=url,
+                auth_data=auth_data,
+            )
         except asyncio.TimeoutError:
             raise
         except Exception as ex:
@@ -551,15 +620,23 @@ class _ServerlessBase(Generic[R]):
 
                 # Check total elapsed time
                 if timeout is not None and (time.time() - start_time) >= timeout:
-                    raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker")
+                    raise asyncio.TimeoutError(
+                        f"Timed out after {time.time() - start_time:.1f}s waiting for worker"
+                    )
 
                 if session is None:
                     if request_idx == 0:
-                        self.logger.debug(f"Sending initial route call for request_idx {request_idx}")
+                        self.logger.debug(
+                            f"Sending initial route call for request_idx {request_idx}"
+                        )
                     else:
-                        self.logger.debug(f"Sending retry route call for request_idx {request_idx}")
+                        self.logger.debug(
+                            f"Sending retry route call for request_idx {request_idx}"
+                        )
 
-                    route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
+                    route = await endpoint._route(
+                        cost=cost, req_idx=request_idx, timeout=60.0
+                    )
 
                     request_idx = route.request_idx
                     if request_idx:
@@ -574,17 +651,30 @@ class _ServerlessBase(Generic[R]):
                         tracker.status = "Polling"
 
                         # Check total elapsed time
-                        if timeout is not None and (time.time() - start_time) >= timeout:
-                            raise asyncio.TimeoutError(f"Timed out after {time.time() - start_time:.1f}s waiting for worker to become ready")
+                        if (
+                            timeout is not None
+                            and (time.time() - start_time) >= timeout
+                        ):
+                            raise asyncio.TimeoutError(
+                                f"Timed out after {time.time() - start_time:.1f}s waiting for worker to become ready"
+                            )
 
                         await asyncio.sleep(poll_interval)
                         poll_elapsed += poll_interval
 
-                        route = await endpoint._route(cost=cost, req_idx=request_idx, timeout=60.0)
+                        route = await endpoint._route(
+                            cost=cost, req_idx=request_idx, timeout=60.0
+                        )
                         request_idx = route.request_idx or request_idx
 
                         attempt += 1
-                        poll_interval = random.uniform(0.1, min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval))
+                        poll_interval = random.uniform(
+                            0.1,
+                            min(
+                                (2**attempt) + random.uniform(0, 1),
+                                self.max_poll_interval,
+                            ),
+                        )
                         self.logger.debug(f"Polling route, attempt {attempt}")
 
                     worker_url = route.get_url()
@@ -599,7 +689,7 @@ class _ServerlessBase(Generic[R]):
                 worker_request_body = {
                     "auth_data": auth_data,
                     "session_id": session_id,
-                    "payload": payload
+                    "payload": payload,
                 }
 
                 self.logger.debug("Found worker machine, starting work")
@@ -618,17 +708,26 @@ class _ServerlessBase(Generic[R]):
                         method="POST",
                         retries=1,  # avoid stacking retries with the outer loop
                         timeout=worker_timeout,
-                        stream=stream
+                        stream=stream,
                     )
-                except (aiohttp.ClientConnectorError, aiohttp.ServerDisconnectedError) as ex:
+                except (
+                    aiohttp.ClientConnectorError,
+                    aiohttp.ServerDisconnectedError,
+                ) as ex:
                     # Worker is gone
                     if session is not None:
                         # Session is bound to this worker - can't re-route
-                        self.logger.error(f"Session worker unavailable ({type(ex).__name__})")
+                        self.logger.error(
+                            f"Session worker unavailable ({type(ex).__name__})"
+                        )
                         session.open = False
-                        raise ConnectionError(f"Session worker unavailable: {ex}") from ex
+                        raise ConnectionError(
+                            f"Session worker unavailable: {ex}"
+                        ) from ex
                     # No session - reset request_idx to force a fresh route
-                    self.logger.warning(f"Worker unavailable ({type(ex).__name__}), re-routing to new worker")
+                    self.logger.warning(
+                        f"Worker unavailable ({type(ex).__name__}), re-routing to new worker"
+                    )
                     tracker.status = "Retrying"
                     continue
                 except Exception as ex:
@@ -636,32 +735,51 @@ class _ServerlessBase(Generic[R]):
                     tracker.status = "Retrying"
                     continue
 
-
                 if not result.get("ok"):
-                    if retry and result.get("retryable") and (max_retries is None or total_attempts < max_retries):
+                    if (
+                        retry
+                        and result.get("retryable")
+                        and (max_retries is None or total_attempts < max_retries)
+                    ):
                         # Check if we have time left before retrying
-                        if timeout is not None and (time.time() - start_time) >= timeout:
-                            raise asyncio.TimeoutError(f"Request timed out after {time.time() - start_time:.1f}s")
+                        if (
+                            timeout is not None
+                            and (time.time() - start_time) >= timeout
+                        ):
+                            raise asyncio.TimeoutError(
+                                f"Request timed out after {time.time() - start_time:.1f}s"
+                            )
 
                         tracker.status = "Retrying"
-                        await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
+                        await asyncio.sleep(
+                            min(
+                                (2**total_attempts) + random.uniform(0, 1),
+                                self.max_poll_interval,
+                            )
+                        )
                         continue
 
                     # Return the raw HTTP result to the caller
                     tracker.status = "Complete"
                     tracker.complete_time = time.time()
                     if tracker.start_time is not None:
-                        self.latencies.append(tracker.complete_time - tracker.start_time)
+                        self.latencies.append(
+                            tracker.complete_time - tracker.start_time
+                        )
 
                     return {
-                        "response": result.get("json") if result.get("json") is not None else {"error": result.get("text", "")},
+                        "response": result.get("json")
+                        if result.get("json") is not None
+                        else {"error": result.get("text", "")},
                         "ok": result.get("ok"),
                         "status": result.get("status"),
-                        "text" : result.get("text"),
-                        "latency": (tracker.complete_time - tracker.start_time) if tracker.start_time else None,
+                        "text": result.get("text"),
+                        "latency": (tracker.complete_time - tracker.start_time)
+                        if tracker.start_time
+                        else None,
                         "url": worker_url,
                         "request_idx": request_idx,
-                        "auth_data": auth_data
+                        "auth_data": auth_data,
                     }
 
                 # Success
@@ -674,13 +792,13 @@ class _ServerlessBase(Generic[R]):
 
                 return {
                     "response": worker_response,
-                    "ok" : result.get("ok"),
-                    "status" : result.get("status"),
-                    "text" : result.get("text"),
+                    "ok": result.get("ok"),
+                    "status": result.get("status"),
+                    "text": result.get("text"),
                     "latency": tracker.complete_time - tracker.start_time,
                     "url": worker_url,
                     "request_idx": request_idx,
-                    "auth_data": auth_data
+                    "auth_data": auth_data,
                 }
 
         except asyncio.CancelledError:

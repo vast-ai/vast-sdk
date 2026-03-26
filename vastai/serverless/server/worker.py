@@ -7,7 +7,7 @@ import json
 import random
 import inspect
 import logging
-from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type
+from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type, AsyncContextManager
 
 # Callable types
 RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
@@ -66,6 +66,7 @@ class WorkerConfig:
     benchmark_route: Optional[str] = None
     log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
     max_sessions: Optional[int] = 10
+    lifecycle: Optional[AsyncContextManager] = None
 
 
 class EndpointHandlerFactory:
@@ -364,7 +365,8 @@ class Worker:
             benchmark_handler=benchmark_handler,
             log_actions=config.log_action_config.log_actions,
             healthcheck_url=config.model_healthcheck_url,
-            max_sessions=config.max_sessions
+            max_sessions=config.max_sessions,
+            lifecycle=config.lifecycle,
         )
         
         # Attach endpoint handlers to HTTP routes
