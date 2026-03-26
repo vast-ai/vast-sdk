@@ -4,7 +4,8 @@ All endpoint I/O is mocked; no real network or API calls.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import logging
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -57,6 +58,18 @@ class TestSessionInit:
                 url="https://u",
                 auth_data={},
             )
+
+    def test_init_accepts_empty_string_session_id_documents_contract(
+        self, make_mock_endpoint_for_session, make_client_session
+    ) -> None:
+        """
+        Documents that only ``session_id is None`` is rejected; falsy strings are allowed.
+
+        Callers cannot infer from the ``None`` check alone that ``""`` is invalid.
+        """
+        ep = make_mock_endpoint_for_session()
+        session = make_client_session(endpoint=ep, session_id="")
+        assert session.session_id == ""
 
     def test_init_raises_when_url_is_none(
         self, make_mock_endpoint_for_session
@@ -266,24 +279,28 @@ class TestSessionClose:
 
     @pytest.mark.asyncio
     async def test_close_sets_open_false_when_close_session_raises(
-        self, session_on_mock_endpoint
+        self, session_on_mock_endpoint, caplog
     ) -> None:
         """
         Verifies close still clears open if endpoint.close_session fails.
 
         This test verifies by:
         1. Making close_session raise RuntimeError
-        2. Patching module logger to avoid noisy output
-        3. Awaiting close() and asserting session.open is False
+        2. Awaiting close() and asserting session.open is False
+        3. Asserting a warning was logged so logging regressions are visible
 
         Assumptions:
         - finally block in close() always sets open False
         """
         ep, session = session_on_mock_endpoint
         ep.close_session = AsyncMock(side_effect=RuntimeError("network"))
-        with patch("vastai.serverless.client.session.log"):
+        with caplog.at_level(logging.WARNING, logger="vastai.serverless.client.session"):
             await session.close()
         assert session.open is False
+        assert any(
+            "Error closing session" in r.message and "network" in r.message
+            for r in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_close_second_call_does_not_await_close_session_again(
@@ -414,3 +431,18 @@ class TestSessionRequest:
         with pytest.raises(ValueError, match="closed session"):
             await session.request("/r", {})
         assert session.open is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_result", [None, "not-a-dict", 404])
+    async def test_request_propagates_attribute_error_when_result_not_mapping(
+        self, session_on_mock_endpoint, bad_result
+    ) -> None:
+        """
+        ``_wrapped_request`` uses ``result.get``; non-mapping results surface as AttributeError.
+
+        Endpoint.request is expected to return a mapping with optional ``status``.
+        """
+        ep, session = session_on_mock_endpoint
+        ep.request = AsyncMock(return_value=bad_result)
+        with pytest.raises(AttributeError):
+            await session.request("/r", {})

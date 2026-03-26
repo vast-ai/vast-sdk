@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vastai.serverless.client.client import Serverless, ServerlessRequest
+from vastai.serverless.client.client import Serverless, ServerlessRequest, SessionCreateError
 from vastai.serverless.client.endpoint import Endpoint
 
 
@@ -541,20 +541,31 @@ class TestServerlessSessionApiErrors:
             with pytest.raises(Exception, match="Missing session id"):
                 await client.start_endpoint_session(ep)
 
-    async def test_start_endpoint_session_raises_when_response_body_missing(
-        self, client, make_serverless_endpoint
-    ) -> None:
-        ep = make_serverless_endpoint(client)
-        fut = ServerlessRequest()
-        fut.set_result(
+    @pytest.mark.parametrize(
+        "queue_payload",
+        [
+            {"ok": True, "url": "https://w", "auth_data": {"k": "v"}},
             {
                 "ok": True,
+                "response": None,
                 "url": "https://w",
                 "auth_data": {"k": "v"},
-            }
-        )
+            },
+        ],
+    )
+    async def test_start_endpoint_session_raises_session_create_error_when_response_body_missing(
+        self, client, make_serverless_endpoint, queue_payload: dict
+    ) -> None:
+        """
+        Missing or null ``response`` raises :class:`SessionCreateError` with a stable message.
+
+        This is the supported hook for callers (not ``AttributeError`` from pre-fix code paths).
+        """
+        ep = make_serverless_endpoint(client)
+        fut = ServerlessRequest()
+        fut.set_result(queue_payload)
         with patch.object(client, "queue_endpoint_request", return_value=fut):
-            with pytest.raises(Exception, match="No response from /session/create"):
+            with pytest.raises(SessionCreateError, match="No response from /session/create"):
                 await client.start_endpoint_session(ep)
 
 
@@ -1238,7 +1249,10 @@ class TestQueueEndpointRequestRoutingPath:
             )
             await reached.wait()
             fut.cancel()
-            await asyncio.sleep(0)
+            for _ in range(100):
+                if fut.cancelled():
+                    break
+                await asyncio.sleep(0)
         assert fut.cancelled()
 
     async def test_no_session_ready_with_zero_request_idx_still_completes(

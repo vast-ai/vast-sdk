@@ -9,7 +9,7 @@ Coverage notes (functionality-oriented):
 - ``_get_session``: ``TCPConnector(limit=connection_limit)``
 - ``get_ssl_context``: non-200 cert response
 - Session helpers: ``/session/get`` and ``/session/end`` success and error paths, ``TimeoutError`` passthrough
-- ``start_endpoint_session``: validation of queue result shape and error wrapping
+- ``start_endpoint_session``: validation of queue result shape, :class:`SessionCreateError` when ``response`` is absent, other error wrapping
 - ``queue_endpoint_request``: timeouts, retry branches, session shortcut, transport errors,
   non-OK worker responses, stream mode, task cancellation, ``latencies``, session without URL,
   ``_route`` failure → ``Errored``
@@ -27,7 +27,7 @@ import aiohttp
 import pytest
 
 from vastai.serverless.client import client as serverless_client_mod
-from vastai.serverless.client.client import Serverless, ServerlessRequest
+from vastai.serverless.client.client import Serverless, ServerlessRequest, SessionCreateError
 from vastai.serverless.client.endpoint import Endpoint
 from vastai.serverless.client.session import Session
 
@@ -1284,21 +1284,17 @@ class TestServerlessStartEndpointSession:
                 await client.start_endpoint_session(ep)
 
     @pytest.mark.asyncio
-    async def test_start_endpoint_session_wraps_attribute_error_when_response_none(
+    async def test_start_endpoint_session_raises_session_create_error_when_response_none(
         self,
         client,
         default_start_endpoint_session_ep,
         make_completed_serverless_request,
     ) -> None:
         """
-        Verifies buggy/empty queue payloads surface as wrapped Failed to create session.
+        Verifies ok=True but ``response`` is None raises :class:`SessionCreateError` (not wrapped).
 
-        This test verifies by:
-        1. Returning ok=True with response=None (implementation then touches response incorrectly)
-        2. Asserting Exception mentions Failed to create session
-
-        Assumptions:
-        - Current client code raises AttributeError when response is None; test documents behavior
+        Callers can catch ``SessionCreateError`` for this contract violation; it is not folded
+        into ``Failed to create session: ...``.
         """
         ep = default_start_endpoint_session_ep
         done = make_completed_serverless_request(
@@ -1310,7 +1306,7 @@ class TestServerlessStartEndpointSession:
             }
         )
         with patch.object(client, "queue_endpoint_request", return_value=done):
-            with pytest.raises(Exception, match="Failed to create session"):
+            with pytest.raises(SessionCreateError, match="No response from /session/create"):
                 await client.start_endpoint_session(ep)
 
     @pytest.mark.asyncio
