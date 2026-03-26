@@ -19,10 +19,14 @@ VAST_API_URL = os.environ.get("VAST_API_URL", "https://console.vast.ai")
 
 
 def get_api_key() -> str:
-    """Resolve an API key from the environment."""
-    key = os.environ.get("VAST_API_KEY") or os.environ.get("API_KEY")
+    """Resolve an API key from the container environment.
+
+    Inside a Vast instance, Kaalia sets CONTAINER_API_KEY with the
+    instance-level API key that has permissions to fetch deployment blobs.
+    """
+    key = os.environ.get("CONTAINER_API_KEY") or os.environ.get("VAST_API_KEY")
     if not key:
-        raise RuntimeError("No API key found in environment (VAST_API_KEY or API_KEY)")
+        raise RuntimeError("No API key found in environment (CONTAINER_API_KEY or VAST_API_KEY)")
     return key
 
 
@@ -54,9 +58,10 @@ def download_tarball(download_url: str) -> str:
 
 
 def extract_tarball(tarball_path: str):
-    """Extract the deployment tarball, preserving absolute paths."""
+    cwd = os.getcwd()
     with tarfile.open(tarball_path, "r:gz") as tf:
-        tf.extractall(path="/", filter=None)
+        for member in tf.getmembers():
+            tf.extract(member, filter='fully_trusted') # preserve absolute paths; deployment .tar files are created by client via deployments SDK and are trusted inside the container.
 
 
 def get_config(path: str):
@@ -171,6 +176,7 @@ if __name__ == "__main__":
 
     # Look up and start deployment
     from vastai.serverless.remote.serve import Deployment
+    import deployment
 
     deployment = Deployment.lookup(config.name)
     if deployment is None:
@@ -178,3 +184,4 @@ if __name__ == "__main__":
 
     print(f"Starting deployment worker: {config.name}")
     worker = deployment.into_worker()
+    worker.run()
