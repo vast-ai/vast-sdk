@@ -8,37 +8,15 @@ import os
 import re
 import tarfile
 import tempfile
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Tuple, BinaryIO
 
 if TYPE_CHECKING:
     from vastai.serverless.remote.base import Config
 
 
-def create_tarball(compress: bool = True) -> Tuple[str, tarfile.TarFile]:
-    """Create an empty tarball in /tmp with owner-only permissions (0o700).
-
-    Args:
-        compress: If True (default), gzip-compress the tarball (.tar.gz).
-            If False, create an uncompressed tarball (.tar).
-
-    Returns (path, tarfile_handle). The caller must close the handle when done.
-    """
-    suffix = ".tar.gz" if compress else ".tar"
-    mode = "w:gz" if compress else "w"
-    fd = os.open(
-        tempfile.mktemp(suffix=suffix, dir="/tmp"),
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        0o700,
-    )
-    path = os.readlink(f"/proc/self/fd/{fd}")
-    fileobj = os.fdopen(fd, "wb")
-    tf = tarfile.open(fileobj=fileobj, mode=mode)
-    tf._vast_path = path
-    tf._vast_fileobj = fileobj
-    return path, tf
-
-
-def _sanitize_info(info: tarfile.TarInfo, arcname: str | None = None) -> tarfile.TarInfo:
+def _sanitize_info(
+    info: tarfile.TarInfo, arcname: str | None = None
+) -> tarfile.TarInfo:
     """Set uid/gid to 0 on a TarInfo.
 
     If arcname is provided, override info.name. This is needed because
@@ -166,7 +144,8 @@ _PYTHON_TOKEN_RE = re.compile(
 
 
 def _scan_python_line(
-    line: bytes, in_multiline: bytes | None,
+    line: bytes,
+    in_multiline: bytes | None,
 ) -> tuple[bool, bytes | None]:
     """Scan a Python source line left-to-right, tracking string context.
 
@@ -260,7 +239,9 @@ def hash_update_path(
 ) -> None:
     """Feed a file or directory into the hasher, dispatching appropriately."""
     if os.path.isdir(src_path):
-        hash_update_directory(hasher, src_path, arcname, filter_comments=filter_comments)
+        hash_update_directory(
+            hasher, src_path, arcname, filter_comments=filter_comments
+        )
     elif os.path.isfile(src_path):
         hash_update_file(hasher, src_path, arcname, filter_comments=filter_comments)
     else:
@@ -286,18 +267,24 @@ def compute_deployment_hash(
     """
     hasher = hashlib.sha256()
     hasher.update(serialize_config(config).encode("utf-8"))
-    hash_update_path(hasher, deployment_path, deployment_arcname(deployment_path), filter_comments=True)
+    hash_update_path(
+        hasher,
+        deployment_path,
+        deployment_arcname(deployment_path),
+        filter_comments=True,
+    )
     for src, dest in extra_files or []:
         hash_update_path(hasher, src, dest)
     return hasher.hexdigest()
 
 
 def create_deployment_tarball(
+    tar_path: str,
     config: Config,
     deployment_path: str,
     extra_files: list[tuple[str, str]] | None = None,
     compress: bool = True,
-) -> str:
+):
     """Create a deployment tarball in /tmp and return its path.
 
     The tarball contains:
@@ -311,7 +298,7 @@ def create_deployment_tarball(
         extra_files: List of (source_path, dest_path) pairs. dest_path may be absolute.
         compress: If True (default), gzip-compress the tarball.
     """
-    path, tf = create_tarball(compress=compress)
+    tf = tarfile.TarFile.open(tar_path, mode="w:gz")
     try:
         add_string(tf, serialize_config(config), "./config.json")
         add_path(tf, deployment_path, deployment_arcname(deployment_path))
@@ -319,5 +306,3 @@ def create_deployment_tarball(
             add_path(tf, src, dest)
     finally:
         tf.close()
-        tf._vast_fileobj.close()
-    return path

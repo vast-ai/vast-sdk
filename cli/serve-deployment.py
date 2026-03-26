@@ -6,6 +6,7 @@ Downloads and extracts the deployment tarball, applies config.json
 (env vars, apt packages, pip packages, run scripts), then starts the
 deployment worker.
 """
+
 import json
 import os
 import subprocess
@@ -26,7 +27,9 @@ def get_api_key() -> str:
     """
     key = os.environ.get("CONTAINER_API_KEY") or os.environ.get("VAST_API_KEY")
     if not key:
-        raise RuntimeError("No API key found in environment (CONTAINER_API_KEY or VAST_API_KEY)")
+        raise RuntimeError(
+            "No API key found in environment (CONTAINER_API_KEY or VAST_API_KEY)"
+        )
     return key
 
 
@@ -61,7 +64,9 @@ def extract_tarball(tarball_path: str):
     cwd = os.getcwd()
     with tarfile.open(tarball_path, "r:gz") as tf:
         for member in tf.getmembers():
-            tf.extract(member, filter='fully_trusted') # preserve absolute paths; deployment .tar files are created by client via deployments SDK and are trusted inside the container.
+            tf.extract(
+                member, filter="fully_trusted"
+            )  # preserve absolute paths; deployment .tar files are created by client via deployments SDK and are trusted inside the container.
 
 
 def get_config(path: str):
@@ -134,14 +139,18 @@ if __name__ == "__main__":
     if not deployment_id:
         raise RuntimeError("DEPLOYMENT_ID environment variable not set")
 
-    api_key = get_api_key()
+    debug_deployment_tar = os.environ.get("DEBUG_DEPLOYMENT_TAR")
+    if debug_deployment_tar:
+        tarball_path = debug_deployment_tar
+    else:
+        api_key = get_api_key()
 
-    # Download deployment tarball
-    print(f"Fetching download URL for deployment {deployment_id}")
-    download_url = get_download_url(deployment_id, api_key)
+        # Download deployment tarball
+        print(f"Fetching download URL for deployment {deployment_id}")
+        download_url = get_download_url(deployment_id, api_key)
 
-    print("Downloading deployment tarball")
-    tarball_path = download_tarball(download_url)
+        print("Downloading deployment tarball")
+        tarball_path = download_tarball(download_url)
 
     # Extract preserving absolute paths — the deployment runs in a
     # container owned by the client, and we trust their path choices.
@@ -176,12 +185,16 @@ if __name__ == "__main__":
 
     # Look up and start deployment
     from vastai.serverless.remote.serve import Deployment
-    import deployment
 
-    deployment = Deployment.lookup(config.name)
-    if deployment is None:
+    # ensure deployment import time code is run in serve mode.
+    os.environ["IS_DEPLOYMENT"] = "1"
+    # deployment module/package is guaranteed from tarball
+    import deployment  # running this import has the side effect of registering deployments and remote functions with vastai.serverless.remote.serve.Deployment
+
+    our_deployment = Deployment.lookup(config.name)
+    if our_deployment is None:
         raise RuntimeError(f"Failed to lookup registered deployment: {config.name}")
 
     print(f"Starting deployment worker: {config.name}")
-    worker = deployment.into_worker()
+    worker = our_deployment.into_worker()
     worker.run()
