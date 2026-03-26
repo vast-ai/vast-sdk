@@ -189,6 +189,7 @@ def main():
     # ensure deployment import time code is run in serve mode.
     os.environ["IS_DEPLOYMENT"] = "1"
     # deployment module/package is guaranteed from tarball
+    sys.path.insert(0, os.getcwd())
     import deployment  # running this import has the side effect of registering deployments and remote functions with vastai.serverless.remote.serve.Deployment
 
     our_deployment = Deployment.lookup(config.name)
