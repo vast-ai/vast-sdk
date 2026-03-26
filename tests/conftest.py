@@ -12,7 +12,10 @@ One fixture name per *kind* of resource; use factory callables for variants
 ``make_backend_http_request``, ``make_mock_root_logger``, …) instead of parallel fixtures.
 
 Pyworker: ``pyworker_backend`` (Backend with Metrics mocked), ``patch_pyworker_backend_class``,
-``make_pyworker_session`` (server Session), ``valid_auth_data_dict`` (AuthData-shaped JSON).
+``make_pyworker_session`` (only factory for server ``Session``), ``valid_auth_data_dict`` (AuthData-shaped JSON).
+
+Serverless pyworker: ``serverless_backend_and_handler_default`` (default ``Backend`` + handler),
+``serverless_tracked_runner_and_tcp_site`` (AppRunner/TCPSite capture bundle for ``server.lib.server``).
 
 An autouse fixture restores the ``Serverless`` logger after each test so global
 logging state follows RAII and cannot leak between cases.
@@ -120,6 +123,7 @@ def make_mock_model_response():
         mock.status = status
         mock.headers = MagicMock()
         mock.headers.get = MagicMock(return_value=None)
+        mock.headers.copy = MagicMock(return_value={})
         if stream_chunks is not None:
             async def _iter():
                 for c in stream_chunks:
@@ -500,6 +504,28 @@ def serverless_backend_testkit(
 
 
 @pytest.fixture
+def serverless_backend_and_handler_default(make_serverless_backend_and_handler):
+    """Fresh ``(Backend, handler)`` with defaults for pyworker serverless unit tests."""
+    return make_serverless_backend_and_handler()
+
+
+@pytest.fixture
+def serverless_tracked_runner_and_tcp_site(
+    make_serverless_tracked_app_runner,
+    make_serverless_tracked_tcp_site,
+):
+    """Tracked ``AppRunner`` + ``TCPSite`` side effects for ``server.lib.server`` tests."""
+    apps_seen, app_runner = make_serverless_tracked_app_runner()
+    tcp_calls, tcp_site = make_serverless_tracked_tcp_site()
+    return SimpleNamespace(
+        apps_seen=apps_seen,
+        app_runner=app_runner,
+        tcp_calls=tcp_calls,
+        tcp_site=tcp_site,
+    )
+
+
+@pytest.fixture
 def make_serverless_tracked_app_runner():
     """Factory: returns (captured_apps_list, AppRunner side_effect) for patching web.AppRunner."""
 
@@ -603,17 +629,34 @@ def serverless_aiohttp_route_path_tuples():
 
 @pytest.fixture
 def attach_serverless_backend_mock_session_post():
-    """Replace backend.session with a mock ClientSession; post() returns async context manager."""
+    """Replace backend.session with a mock ClientSession for ``__run_session_on_close`` tests.
 
-    def _attach(backend: Backend, *, response_text: str = "ok") -> MagicMock:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.text = AsyncMock(return_value=response_text)
-        mock_post_cm = MagicMock()
-        mock_post_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_post_cm.__aexit__ = AsyncMock(return_value=None)
+    By default ``post()`` returns an async context manager with a successful response.
+    Use ``spy_only=True`` for a bare ``post`` mock (no HTTP). Use ``post_side_effect``
+    to simulate connection errors. Only one attachment pattern should be used per test.
+    """
+
+    def _attach(
+        backend: Backend,
+        *,
+        response_text: str = "ok",
+        response_status: int = 200,
+        post_side_effect: BaseException | None = None,
+        spy_only: bool = False,
+    ) -> MagicMock:
         mock_sess = MagicMock()
-        mock_sess.post = MagicMock(return_value=mock_post_cm)
+        if spy_only:
+            mock_sess.post = MagicMock()
+        elif post_side_effect is not None:
+            mock_sess.post = MagicMock(side_effect=post_side_effect)
+        else:
+            mock_resp = MagicMock()
+            mock_resp.status = response_status
+            mock_resp.text = AsyncMock(return_value=response_text)
+            mock_post_cm = MagicMock()
+            mock_post_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_post_cm.__aexit__ = AsyncMock(return_value=None)
+            mock_sess.post = MagicMock(return_value=mock_post_cm)
         object.__setattr__(backend, "session", mock_sess)
         return mock_sess
 
@@ -811,7 +854,7 @@ def make_pyworker_metrics():
 
 @pytest.fixture
 def make_pyworker_session():
-    """Factory: ``PyworkerSession`` for metrics tests (server ``Session``, not aiohttp)."""
+    """Factory: server ``Session`` (pyworker data type, not aiohttp) for all serverless tests."""
 
     def _make(**kwargs):
         defaults = dict(

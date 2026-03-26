@@ -17,10 +17,9 @@ from vastai.serverless.server.lib.server import start_server, start_server_async
 
 @pytest.mark.asyncio
 async def test_start_server_async_registers_session_routes_and_starts_sites(
-    make_serverless_backend_and_handler,
+    serverless_backend_and_handler_default,
     serverless_metrics_test_env,
-    make_serverless_tracked_app_runner,
-    make_serverless_tracked_tcp_site,
+    serverless_tracked_runner_and_tcp_site,
     serverless_gather_await_all,
     serverless_aiohttp_route_path_tuples,
 ) -> None:
@@ -36,10 +35,11 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
     Assumptions:
     - backend._start_tracking is mocked so gather completes; WORKER_PORT and related env are set
     """
-    backend, _ = make_serverless_backend_and_handler()
+    backend, _ = serverless_backend_and_handler_default
     routes: list = []
-    apps_seen, app_runner = make_serverless_tracked_app_runner()
-    _, tcp_site = make_serverless_tracked_tcp_site()
+    st = serverless_tracked_runner_and_tcp_site
+    apps_seen, app_runner = st.apps_seen, st.app_runner
+    tcp_site = st.tcp_site
     route_paths = serverless_aiohttp_route_path_tuples
 
     env = {**serverless_metrics_test_env, "WORKER_PORT": "9100", "WORKER_HTTP_PORT": "9101"}
@@ -66,11 +66,52 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
 
 
 @pytest.mark.asyncio
-async def test_start_server_async_ssl_branch_loads_cert_chain(
-    make_serverless_backend_and_handler,
+async def test_start_server_async_defaults_http_port_to_worker_plus_one(
+    serverless_backend_and_handler_default,
     serverless_metrics_test_env,
-    make_serverless_tracked_app_runner,
-    make_serverless_tracked_tcp_site,
+    serverless_tracked_runner_and_tcp_site,
+    serverless_gather_await_all,
+) -> None:
+    """
+    Verifies WORKER_HTTP_PORT defaults to int(WORKER_PORT) + 1 when unset.
+
+    This test verifies by:
+    1. Removing WORKER_HTTP_PORT from the environment for the duration of the call
+    2. Capturing TCPSite kwargs for the HTTP-only app
+    3. Asserting its port is WORKER_PORT + 1 while the TLS/plain worker uses WORKER_PORT
+
+    Assumptions:
+    - Same patched gather/runner path as other start_server_async tests
+    """
+    backend, _ = serverless_backend_and_handler_default
+    routes: list = []
+    st = serverless_tracked_runner_and_tcp_site
+    tcp_calls, tcp_site = st.tcp_calls, st.tcp_site
+    app_runner = st.app_runner
+
+    env = {**serverless_metrics_test_env, "WORKER_PORT": "7122"}
+    old_http = os.environ.pop("WORKER_HTTP_PORT", None)
+    try:
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(server_mod.web, "AppRunner", side_effect=app_runner):
+                with patch.object(server_mod.web, "TCPSite", side_effect=tcp_site):
+                    with patch.object(backend, "_start_tracking", new_callable=AsyncMock):
+                        with patch.object(
+                            server_mod, "gather", side_effect=serverless_gather_await_all
+                        ):
+                            await start_server_async(backend, routes)
+    finally:
+        if old_http is not None:
+            os.environ["WORKER_HTTP_PORT"] = old_http
+    assert tcp_calls[0]["port"] == 7122
+    assert tcp_calls[1]["port"] == 7123
+
+
+@pytest.mark.asyncio
+async def test_start_server_async_ssl_branch_loads_cert_chain(
+    serverless_backend_and_handler_default,
+    serverless_metrics_test_env,
+    serverless_tracked_runner_and_tcp_site,
     serverless_gather_await_all,
 ) -> None:
     """
@@ -83,10 +124,11 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
     Assumptions:
     - Certificate load succeeds under patch; second TCPSite remains plain HTTP
     """
-    backend, _ = make_serverless_backend_and_handler()
+    backend, _ = serverless_backend_and_handler_default
     routes: list = []
-    tcp_calls, tcp_site = make_serverless_tracked_tcp_site()
-    _, app_runner = make_serverless_tracked_app_runner()
+    st = serverless_tracked_runner_and_tcp_site
+    tcp_calls, tcp_site = st.tcp_calls, st.tcp_site
+    app_runner = st.app_runner
 
     mock_ctx = MagicMock()
     mock_ctx.load_cert_chain = MagicMock()
@@ -116,7 +158,7 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
 
 @pytest.mark.asyncio
 async def test_start_server_async_ssl_cert_load_failure_enters_error_beacon(
-    make_serverless_backend_and_handler,
+    serverless_backend_and_handler_default,
     serverless_metrics_test_env,
     serverless_error_beacon_mocks,
 ) -> None:
@@ -132,7 +174,7 @@ async def test_start_server_async_ssl_cert_load_failure_enters_error_beacon(
     - Outer try/except wraps all startup failures; beacon runs for any Exception
     """
     mock_err = serverless_error_beacon_mocks
-    backend, _ = make_serverless_backend_and_handler()
+    backend, _ = serverless_backend_and_handler_default
     routes: list = []
     mock_ctx = MagicMock()
     mock_ctx.load_cert_chain = MagicMock(side_effect=OSError("no cert file"))
@@ -149,10 +191,9 @@ async def test_start_server_async_ssl_cert_load_failure_enters_error_beacon(
 
 @pytest.mark.asyncio
 async def test_start_server_async_gather_failure_runs_beacon_until_sleep_stops(
-    make_serverless_backend_and_handler,
+    serverless_backend_and_handler_default,
     serverless_metrics_test_env,
-    make_serverless_tracked_app_runner,
-    make_serverless_tracked_tcp_site,
+    serverless_tracked_runner_and_tcp_site,
     serverless_error_beacon_mocks,
     serverless_gather_raise_bind_failed,
 ) -> None:
@@ -170,10 +211,10 @@ async def test_start_server_async_gather_failure_runs_beacon_until_sleep_stops(
     - Metrics in beacon needs CONTAINER_ID etc.; send_metrics_reset is mocked to avoid I/O
     """
     mock_err = serverless_error_beacon_mocks
-    backend, _ = make_serverless_backend_and_handler()
+    backend, _ = serverless_backend_and_handler_default
     routes: list = []
-    _, app_runner = make_serverless_tracked_app_runner()
-    _, tcp_site = make_serverless_tracked_tcp_site()
+    st = serverless_tracked_runner_and_tcp_site
+    app_runner, tcp_site = st.app_runner, st.tcp_site
 
     env = {**serverless_metrics_test_env, "WORKER_PORT": "9300"}
     with patch.dict(os.environ, env, clear=False):
@@ -192,7 +233,7 @@ async def test_start_server_async_gather_failure_runs_beacon_until_sleep_stops(
 
 
 def test_start_server_invokes_asyncio_run(
-    make_serverless_backend_and_handler,
+    serverless_backend_and_handler_default,
 ) -> None:
     """
     Verifies start_server delegates to asyncio.run(start_server_async(...)).
@@ -205,7 +246,7 @@ def test_start_server_invokes_asyncio_run(
     Assumptions:
     - kwargs are forwarded into the coroutine factory call before run() sees it
     """
-    backend, _ = make_serverless_backend_and_handler()
+    backend, _ = serverless_backend_and_handler_default
     routes: list = []
 
     async def fake_start_server_async(b, r, **kwargs):
