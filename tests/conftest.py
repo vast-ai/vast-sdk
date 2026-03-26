@@ -6,7 +6,9 @@ conftest.py for reuse across test files. Pyworker ``Metrics`` helpers live in th
 
 One fixture name per *kind* of resource; use factory callables for variants
 (``make_request_http_mocks``, ``make_route_response_mock``, ``server_worker_config``,
-``client_worker_dict``, ``make_session_mock``, ``make_test_endpoint``,
+``client_worker_dict``, ``make_session_mock``, ``make_client_session``, ``session_on_mock_endpoint``,
+``make_mock_endpoint_for_session``, ``make_delegate_endpoint``, ``make_serverless_bound_session``,
+``make_test_endpoint``,
 ``make_backend_http_request``, ``make_mock_root_logger``, …) instead of parallel fixtures.
 
 Pyworker: ``pyworker_backend`` (Backend with Metrics mocked), ``patch_pyworker_backend_class``,
@@ -21,6 +23,7 @@ import asyncio
 import logging
 from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -663,7 +666,7 @@ def make_metrics_client_session_instance():
 
 
 # ---------------------------------------------------------------------------
-# Serverless client (vastai.serverless.client.client) fixtures
+# Serverless client (Serverless, Endpoint, Session) fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -698,6 +701,73 @@ def make_serverless_endpoint():
         api_key: str = "ekey",
     ) -> Endpoint:
         return Endpoint(sl_client, name, endpoint_id, api_key)
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_bound_session(make_serverless_endpoint):
+    """Factory: :class:`Session` on a real :class:`Endpoint` (queue / Serverless client tests)."""
+
+    def _make(
+        sl_client: Serverless,
+        *,
+        endpoint: Endpoint | None = None,
+        session_id: str = "sid",
+        lifetime: float = 60.0,
+        expiration: str = "e",
+        url: str = "https://worker/u",
+        auth_data: dict | None = None,
+        **kwargs,
+    ) -> Session:
+        ep = endpoint if endpoint is not None else make_serverless_endpoint(sl_client)
+        ad = {"token": "t"} if auth_data is None else auth_data
+        return Session(ep, session_id, lifetime, expiration, url, ad, **kwargs)
+
+    return _make
+
+
+@pytest.fixture
+def mock_serverless_client():
+    """Minimal mock Serverless-like client for Endpoint delegation tests."""
+    c = MagicMock()
+    c.is_open = MagicMock(return_value=True)
+    c.autoscaler_url = "https://run.vast.ai"
+    c.queue_endpoint_request = MagicMock(return_value="queued")
+    c.end_endpoint_session = AsyncMock(return_value=None)
+    c.get_endpoint_session = AsyncMock(return_value=MagicMock())
+    c.start_endpoint_session = AsyncMock(return_value="started")
+    c.get_endpoint_workers = AsyncMock(return_value=[])
+    return c
+
+
+@pytest.fixture
+def make_delegate_endpoint(mock_serverless_client):
+    """Factory: :class:`Endpoint` on ``mock_serverless_client`` (delegation unit tests)."""
+
+    def _make(
+        *,
+        name: str = "e",
+        endpoint_id: int | None = 1,
+        api_key: str = "ek",
+        client: Any | None = None,
+    ) -> Endpoint:
+        c = mock_serverless_client if client is None else client
+        return Endpoint(c, name, endpoint_id, api_key)
+
+    return _make
+
+
+@pytest.fixture
+def make_mock_endpoint_for_session():
+    """Factory: new MagicMock endpoint with session_healthcheck, close_session, request."""
+
+    def _make() -> MagicMock:
+        ep = MagicMock()
+        ep.session_healthcheck = AsyncMock(return_value=True)
+        ep.close_session = AsyncMock(return_value=None)
+        ep.request = AsyncMock(return_value={"status": 200, "body": "ok"})
+        return ep
 
     return _make
 
@@ -813,21 +883,6 @@ def make_test_endpoint(client, make_serverless_endpoint):
 
 
 @pytest.fixture
-def bound_session(make_test_endpoint) -> tuple[Endpoint, Session]:
-    """Real :class:`Session` tied to a default test :class:`Endpoint`."""
-    ep = make_test_endpoint()
-    sess = Session(
-        ep,
-        session_id=99,
-        lifetime=60.0,
-        expiration="later",
-        url="https://worker/w",
-        auth_data={"t": 1},
-    )
-    return ep, sess
-
-
-@pytest.fixture
 def patch_serverless_queue_async_stubs():
     """Patch ``asyncio.sleep`` and ``random.uniform`` on the serverless client module.
 
@@ -846,3 +901,39 @@ def patch_serverless_queue_async_stubs():
         ),
     ):
         yield
+
+
+@pytest.fixture
+def make_client_session(make_mock_endpoint_for_session):
+    """Factory: build Session with default mock endpoint and typical test defaults."""
+
+    def _make(
+        endpoint=None,
+        *,
+        session_id: str = "sess-1",
+        lifetime: float = 60.0,
+        expiration: str = "2099-01-01T00:00:00Z",
+        url: str = "https://worker.example/session",
+        auth_data: dict | None = None,
+        **kwargs,
+    ):
+        ep = endpoint if endpoint is not None else make_mock_endpoint_for_session()
+        ad = auth_data if auth_data is not None else {"token": "t"}
+        return Session(
+            endpoint=ep,
+            session_id=session_id,
+            lifetime=lifetime,
+            expiration=expiration,
+            url=url,
+            auth_data=ad,
+            **kwargs,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def session_on_mock_endpoint(make_mock_endpoint_for_session, make_client_session):
+    """Single mock endpoint and :class:`Session` bound to it (configure ``ep`` attrs in tests as needed)."""
+    ep = make_mock_endpoint_for_session()
+    return ep, make_client_session(endpoint=ep)

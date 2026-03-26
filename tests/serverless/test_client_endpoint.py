@@ -1,7 +1,7 @@
 """Unit tests for vastai.serverless.client.endpoint (Endpoint, RouteResponse).
 
-Exercises thin delegation and routing logic not covered when only the Serverless
-client is tested directly.
+Uses the real ``client`` fixture and route/HTTP patches. For delegation-only tests against a
+minimal mock Serverless client, see ``test_endpoint_client.py``.
 """
 from __future__ import annotations
 
