@@ -8,9 +8,9 @@ from typing import (
     TypeVar,
     Type,
     AsyncContextManager,
-    Self,
     TypedDict,
     Unpack,
+    Generic,
 )
 from vastai.data import Query
 from dataclasses import dataclass
@@ -95,10 +95,11 @@ class Config:
 
 
 T = TypeVar("T")
+DeploymentT = TypeVar("DeploymentT", bound="Deployment_")
 
 
 class Deployment_(ABC):
-    by_name: dict[str, Self] = {}
+    by_name: dict[Type, dict[str, "Deployment_"]] = {}
 
     def __init__(
         self,
@@ -128,14 +129,19 @@ class Deployment_(ABC):
         return self.name_
 
     @name.setter
-    def name(self: Self, name: str | None):
+    def name(self, name: str | None):
         self.name_ = name
         if isinstance(name, str):
-            self.__class__.by_name[name] = self
+            if self.__class__ not in self.by_name:
+                self.by_name[self.__class__] = {}
+            self.by_name[self.__class__][name] = self
 
     @classmethod
-    def lookup(cls, name: str) -> Self | None:
-        return cls.by_name.get(name)
+    def lookup(cls: Type[DeploymentT], name: str) -> DeploymentT | None:
+        if cls not in cls.by_name:
+            return None
+        ret = cls.by_name[cls].get(name)
+        return ret  # type: ignore
 
     def relativize(self, f: Callable[..., Any]) -> tuple[str]:
         mod = f.__module__
@@ -162,7 +168,7 @@ class Deployment_(ABC):
     # TODO: add type checked version of remote
     @abstractmethod
     def remote(
-        self: Self,
+        self,
         f: Callable[P, Awaitable[Any]] | None = None,
         *,
         benchmark_dataset: list[dict] | None = None,
