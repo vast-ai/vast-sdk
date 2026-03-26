@@ -23,6 +23,7 @@ import asyncio
 import logging
 from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -735,7 +736,7 @@ def mock_serverless_client():
     c.queue_endpoint_request = MagicMock(return_value="queued")
     c.end_endpoint_session = AsyncMock(return_value=None)
     c.get_endpoint_session = AsyncMock(return_value=MagicMock())
-    c.start_endpoint_session = MagicMock(return_value="started")
+    c.start_endpoint_session = AsyncMock(return_value="started")
     c.get_endpoint_workers = AsyncMock(return_value=[])
     return c
 
@@ -749,7 +750,7 @@ def make_delegate_endpoint(mock_serverless_client):
         name: str = "e",
         endpoint_id: int | None = 1,
         api_key: str = "ek",
-        client=None,
+        client: Any | None = None,
     ) -> Endpoint:
         c = mock_serverless_client if client is None else client
         return Endpoint(c, name, endpoint_id, api_key)

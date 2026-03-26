@@ -1,4 +1,9 @@
-"""Unit tests for vastai.serverless.client.endpoint (Endpoint, RouteResponse)."""
+"""Unit tests for vastai.serverless.client.endpoint (Endpoint, RouteResponse).
+
+Uses ``mock_serverless_client`` / ``make_delegate_endpoint`` for fast delegation-only checks.
+``test_client_endpoint.py`` exercises the same surface with the real ``client`` fixture and
+HTTP/route patches; keep the split to avoid duplicating heavy setup in every delegation test.
+"""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -149,28 +154,30 @@ class TestEndpointDelegatesToClient:
             endpoint=ep, session_id=9, session_auth=auth, timeout=3.0
         )
 
-    def test_session_forwards_to_start_endpoint_session(
+    @pytest.mark.asyncio
+    async def test_session_forwards_to_start_endpoint_session(
         self, mock_serverless_client, make_delegate_endpoint
     ) -> None:
         """
-        Verifies session() delegates to client.start_endpoint_session.
+        Verifies session() awaits client.start_endpoint_session (coroutine from real client).
 
         This test verifies by:
-        1. Calling ep.session with cost, lifetime, on_close_* , timeout
-        2. Asserting start_endpoint_session kwargs
+        1. Awaiting ep.session with cost, lifetime, on_close_* , timeout
+        2. Asserting start_endpoint_session await kwargs
 
         Assumptions:
-        - session() is synchronous wrapper
+        - ``Endpoint.session`` returns the coroutine from ``start_endpoint_session``
         """
         ep = make_delegate_endpoint()
-        ep.session(
+        out = await ep.session(
             cost=20,
             lifetime=45.0,
             on_close_route="/bye",
             on_close_payload={"a": 1},
             timeout=99.0,
         )
-        mock_serverless_client.start_endpoint_session.assert_called_once_with(
+        assert out == "started"
+        mock_serverless_client.start_endpoint_session.assert_awaited_once_with(
             endpoint=ep,
             cost=20,
             lifetime=45.0,

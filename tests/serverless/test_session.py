@@ -441,6 +441,7 @@ class TestSessionRequest:
         ``_wrapped_request`` uses ``result.get``; non-mapping results surface as AttributeError.
 
         Endpoint.request is expected to return a mapping with optional ``status``.
+        This documents current behavior; a stricter API might raise ``ValueError`` instead.
         """
         ep, session = session_on_mock_endpoint
         ep.request = AsyncMock(return_value=bad_result)

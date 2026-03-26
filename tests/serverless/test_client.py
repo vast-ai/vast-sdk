@@ -9,7 +9,7 @@ Coverage notes (functionality-oriented):
 - ``_get_session``: ``TCPConnector(limit=connection_limit)``
 - ``get_ssl_context``: non-200 cert response
 - Session helpers: ``/session/get`` and ``/session/end`` success and error paths, ``TimeoutError`` passthrough
-- ``start_endpoint_session``: validation of queue result shape, :class:`SessionCreateError` when ``response`` is absent, other error wrapping
+- ``start_endpoint_session``: validation of queue result shape, :class:`SessionCreateError` when ``response`` is absent, wrapped error when ``response`` is not a mapping, other error wrapping
 - ``queue_endpoint_request``: timeouts, retry branches, session shortcut, transport errors,
   non-OK worker responses, stream mode, task cancellation, ``latencies``, session without URL,
   ``_route`` failure → ``Errored``

@@ -314,6 +314,8 @@ class Serverless:
             response = session_start_response.get("response")
             if response is None:
                 raise SessionCreateError("No response from /session/create")
+            if not isinstance(response, dict):
+                raise Exception("Invalid response from /session/create: expected mapping")
             session_id = response.get("session_id")
             if session_id is None:
                 raise Exception("Missing session id")

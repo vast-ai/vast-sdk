@@ -1,15 +1,19 @@
 """Unit tests for vastai.serverless.client.client (Serverless, ServerlessRequest).
 
 HTTP and routing are mocked via _make_request, queue_endpoint_request, or aiohttp session mocks.
+
+This module is the primary home for queue/session API coverage added for serverless client work.
+Broader tests (SSL, subprocess env, ``get_ssl_context``, extra debug branches) live in
+``test_client.py``; add new narrow queue/session behavior here first to avoid drift.
 """
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
-
-import aiohttp
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from vastai.serverless.client.client import Serverless, ServerlessRequest, SessionCreateError
@@ -568,6 +572,24 @@ class TestServerlessSessionApiErrors:
             with pytest.raises(SessionCreateError, match="No response from /session/create"):
                 await client.start_endpoint_session(ep)
 
+    async def test_start_endpoint_session_wraps_when_response_not_mapping(
+        self, client, make_serverless_endpoint
+    ) -> None:
+        """Non-dict ``response`` is rejected and wrapped as ``Failed to create session``."""
+        ep = make_serverless_endpoint(client)
+        fut = ServerlessRequest()
+        fut.set_result(
+            {
+                "ok": True,
+                "response": [],
+                "url": "https://w",
+                "auth_data": {"k": "v"},
+            }
+        )
+        with patch.object(client, "queue_endpoint_request", return_value=fut):
+            with pytest.raises(Exception, match="Failed to create session"):
+                await client.start_endpoint_session(ep)
+
 
 @pytest.mark.asyncio
 class TestStartEndpointSessionQueueContract:
@@ -671,9 +693,13 @@ class TestServerlessInitEdgeCases:
         - Non-debug path sets propagate=True; debug path sets it False
         """
         sl = Serverless(api_key="k", debug=True)
-        assert sl.logger.propagate is False
-        assert sl.logger.level == logging.DEBUG
-        assert any(isinstance(h, logging.StreamHandler) for h in sl.logger.handlers)
+        try:
+            assert sl.logger.propagate is False
+            assert sl.logger.level == logging.DEBUG
+            assert any(isinstance(h, logging.StreamHandler) for h in sl.logger.handlers)
+        finally:
+            while sl.logger.handlers:
+                sl.logger.removeHandler(sl.logger.handlers[0])
 
 
 class TestServerlessSessionLifecycle:
@@ -1045,15 +1071,23 @@ class TestQueueEndpointRequestRoutingPath:
 
         Assumptions:
         - Timeout check runs at top of while loop before calling _route
-        - time.time() is called in: ServerlessRequest.__init__, task start_time,
-          the if-condition, and the f-string in the raise statement (4 calls total)
+        - ``queue_endpoint_request`` logs ``Queued endpoint request`` synchronously; a LogRecord
+          calls ``time.time()`` unless ``info`` is stubbed, which would otherwise desynchronize
+          the clock mock (CI often enables logging where local runs skip ``info``).
         """
         ep = make_serverless_endpoint(client_with_session)
-        # Provide enough values: init(0.0) + start_time(0.0) + condition(999.0) +
-        # f-string(999.0) + any extra calls
-        times = iter([0.0, 0.0] + [999.0] * 5)
-        with patch("vastai.serverless.client.client.time.time", side_effect=lambda: next(times)):
-            fut = client_with_session.queue_endpoint_request(ep, "/predict", {"x": 1}, timeout=1.0)
+        time_seq = itertools.chain((0.0, 0.0), itertools.repeat(999.0))
+        with (
+            patch.object(client_with_session.logger, "info"),
+            patch.object(client_with_session.logger, "disabled", True),
+            patch(
+                "vastai.serverless.client.client.time.time",
+                side_effect=lambda: next(time_seq),
+            ),
+        ):
+            fut = client_with_session.queue_endpoint_request(
+                ep, "/predict", {"x": 1}, timeout=1.0
+            )
             with pytest.raises(asyncio.TimeoutError):
                 await fut
 
@@ -1249,10 +1283,12 @@ class TestQueueEndpointRequestRoutingPath:
             )
             await reached.wait()
             fut.cancel()
-            for _ in range(100):
-                if fut.cancelled():
-                    break
-                await asyncio.sleep(0)
+
+            async def _until_cancelled() -> None:
+                while not fut.cancelled():
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(_until_cancelled(), timeout=2.0)
         assert fut.cancelled()
 
     async def test_no_session_ready_with_zero_request_idx_still_completes(
@@ -1301,6 +1337,9 @@ class TestQueueEndpointRequestRoutingPath:
         fake_time.n = 0
 
         with (
+            patch.object(client_with_session.logger, "info"),
+            patch.object(client_with_session.logger, "debug"),
+            patch.object(client_with_session.logger, "disabled", True),
             patch.object(ep, "_route", new_callable=AsyncMock, return_value=waiting),
             patch("vastai.serverless.client.client.time.time", side_effect=fake_time),
         ):
@@ -1355,6 +1394,9 @@ class TestQueueEndpointRequestRoutingPath:
         fake_time.n = 0
 
         with (
+            patch.object(client_with_session.logger, "info"),
+            patch.object(client_with_session.logger, "debug"),
+            patch.object(client_with_session.logger, "disabled", True),
             patch("vastai.serverless.client.client.time.time", side_effect=fake_time),
             patch(
                 "vastai.serverless.client.client._make_request",
