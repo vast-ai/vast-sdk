@@ -118,7 +118,9 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         self._inner: _FullDeployment | None = None
 
     def _compile_env(self, checked_image: Image) -> str:
-        return " ".join(f"-p {port}/{type_}" for port, type_ in checked_image.ports)
+        return " ".join(
+            f"-p {port}:{port}/{type_}" for port, type_ in checked_image.ports
+        )
 
     def _into_deployment_config_and_tarball(self, tar_path: str) -> DeploymentConfig:
         # should error if _image, _autoscaling, file, or any other field needed to calculate DeploymentConfig is None
