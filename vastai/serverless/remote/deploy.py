@@ -1,7 +1,8 @@
 import inspect
 import json
 import os
-from typing import Optional, Any, Callable, Awaitable, ParamSpec, Unpack, BinaryIO
+from typing import Optional, Any, Callable, Awaitable, ParamSpec, BinaryIO
+from typing_extensions import Unpack
 from dataclasses import asdict, dataclass
 from vastai.data import query
 from vastai import AsyncClient

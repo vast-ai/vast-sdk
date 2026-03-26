@@ -9,9 +9,8 @@ from typing import (
     Type,
     AsyncContextManager,
     TypedDict,
-    Unpack,
-    Generic,
 )
+from typing_extensions import Unpack
 from vastai.data import Query
 from dataclasses import dataclass
 
