@@ -13,6 +13,7 @@ from .base import Deployment_, Config, Image, Autoscaling
 from .utils import create_deployment_tarball, compute_deployment_hash
 from os.path import getsize
 import tempfile
+import asyncio
 
 # TODO: implement heartbeat, sync ready.
 
@@ -182,7 +183,7 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         size = getsize(tar_path)
         return (hash, size)
 
-    async def ensure_ready(self):
+    async def async_ensure_ready(self):
         if not isinstance(self.root_module, str):
             raise Exception(
                 "Trying to deploy a deployment not yet bound to a Python module. Have any remote functions been registered?"
@@ -198,6 +199,9 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             if deployment.needs_upload:
                 await deployment.upload(tar_path)
             self._inner = _FullDeployment(self.root_module, deployment)
+
+    def ensure_ready(self):
+        asyncio.run(self.async_ensure_ready())
 
     async def _dispatch(self, f_name, globals, sig, args, kwargs) -> Any:
         if not isinstance(self._inner, _FullDeployment):

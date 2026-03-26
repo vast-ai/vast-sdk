@@ -180,5 +180,5 @@ class Deployment_(ABC):
     def image(self, from_image: str, storage: int) -> Image:
         return Image("")
 
-    async def ensure_ready(self):  # NO-OP in serve mode
+    def ensure_ready(self):  # NO-OP in serve mode
         pass
