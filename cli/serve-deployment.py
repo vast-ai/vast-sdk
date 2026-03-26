@@ -1,24 +1,180 @@
 #!/usr/bin/python
+"""
+Deployment bootstrap script invoked by start_server.sh when IS_DEPLOYMENT=true.
+
+Downloads and extracts the deployment tarball, applies config.json
+(env vars, apt packages, pip packages, run scripts), then starts the
+deployment worker.
+"""
+import json
 import os
-from vastai.serverless.remote.base import Config
-from vastai.serverless.remote.serve import Deployment
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+
+
+VAST_API_URL = os.environ.get("VAST_API_URL", "https://console.vast.ai")
+
+
+def get_api_key() -> str:
+    """Resolve an API key from the environment."""
+    key = os.environ.get("VAST_API_KEY") or os.environ.get("API_KEY")
+    if not key:
+        raise RuntimeError("No API key found in environment (VAST_API_KEY or API_KEY)")
+    return key
+
+
+def get_download_url(deployment_id: str, api_key: str) -> str:
+    """Fetch the presigned S3 download URL for the deployment blob."""
+    url = f"{VAST_API_URL}/api/v0/deployment/{deployment_id}/download_url/"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read())
+    if not data.get("success"):
+        raise RuntimeError(f"Failed to get download URL: {data}")
+    return data["download_url"]
+
+
+def download_tarball(download_url: str) -> str:
+    """Download the deployment tarball to a temp file, returning its path."""
+    fd, path = tempfile.mkstemp(suffix=".tar.gz")
+    try:
+        with urllib.request.urlopen(download_url) as resp, os.fdopen(fd, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 20)  # 1 MB
+                if not chunk:
+                    break
+                f.write(chunk)
+    except Exception:
+        os.unlink(path)
+        raise
+    return path
+
+
+def extract_tarball(tarball_path: str):
+    """Extract the deployment tarball, preserving absolute paths."""
+    with tarfile.open(tarball_path, "r:gz") as tf:
+        tf.extractall(path="/", filter=None)
+
+
+def get_config(path: str):
+    """Load and return config.json as a Config dataclass."""
+    from vastai.serverless.remote.base import Config
+
+    with open(path) as f:
+        raw = json.load(f)
+    return Config(
+        name=raw["name"],
+        pip_installs=raw.get("pip_installs", []),
+        apt_gets=raw.get("apt_gets", []),
+        envs=raw.get("envs", []),
+        runs=raw.get("runs", []),
+    )
+
+
+def export_envs(envs: list):
+    """Export environment variables and append to /etc/environment."""
+    etc_lines = []
+    for entry in envs:
+        key, value = entry[0], entry[1]
+        os.environ[key] = value
+        etc_lines.append(f'{key}="{value}"\n')
+    if etc_lines:
+        with open("/etc/environment", "a") as f:
+            f.writelines(etc_lines)
+
+
+def run_apt_gets(packages: list[str]):
+    """Install apt packages."""
+    if not packages:
+        return
+    subprocess.run(
+        ["apt-get", "update", "-qq"],
+        check=True,
+    )
+    subprocess.run(
+        ["apt-get", "install", "-y", "-qq"] + packages,
+        check=True,
+    )
+
+
+def run_pip_installs(packages: list[str]):
+    """Install pip packages."""
+    if not packages:
+        return
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install"] + packages,
+        check=True,
+    )
+
+
+def run_scripts(runs: list):
+    """Run scripts from config.
+
+    Each entry is either a string (passed to sh -c) or a list of args (execvp style).
+    """
+    for entry in runs:
+        if isinstance(entry, str):
+            subprocess.run(["sh", "-c", entry], check=True)
+        elif isinstance(entry, (list, tuple)):
+            subprocess.run(list(entry), check=True)
+        else:
+            raise ValueError(f"Invalid run entry: {entry!r}")
+
 
 if __name__ == "__main__":
     deployment_id = os.environ.get("DEPLOYMENT_ID")
+    if not deployment_id:
+        raise RuntimeError("DEPLOYMENT_ID environment variable not set")
 
-    # TODO: download deployment tarball
+    api_key = get_api_key()
 
-    # TODO extract deployment tarball in current working directory, allowing absolute paths
-    # We expect the deployment tarball to extract config.json into current working directory, as well as either deployment/ (if deployment is a package) or deployment.py
+    # Download deployment tarball
+    print(f"Fetching download URL for deployment {deployment_id}")
+    download_url = get_download_url(deployment_id, api_key)
 
-    def get_config(path: str) -> Config:
-        raise NotImplementedError("complete me")
+    print("Downloading deployment tarball")
+    tarball_path = download_tarball(download_url)
 
-    config: Config = get_config("config.json")
+    # Extract preserving absolute paths — the deployment runs in a
+    # container owned by the client, and we trust their path choices.
+    print("Extracting deployment tarball")
+    try:
+        extract_tarball(tarball_path)
+    finally:
+        os.unlink(tarball_path)
+
+    # Load config
+    config = get_config("config.json")
+    print(f"Loaded config for deployment: {config.name}")
+
+    # (1) Export envs
+    if config.envs:
+        print(f"Exporting {len(config.envs)} environment variables")
+        export_envs(config.envs)
+
+    # (2) Install packages
+    if config.apt_gets:
+        print(f"Installing {len(config.apt_gets)} apt packages")
+        run_apt_gets(config.apt_gets)
+
+    if config.pip_installs:
+        print(f"Installing {len(config.pip_installs)} pip packages")
+        run_pip_installs(config.pip_installs)
+
+    # (3) Run scripts
+    if config.runs:
+        print(f"Running {len(config.runs)} setup scripts")
+        run_scripts(config.runs)
+
+    # Look up and start deployment
+    from vastai.serverless.remote.serve import Deployment
+
     deployment = Deployment.lookup(config.name)
     if deployment is None:
-        raise Exception(f"Failed to lookup registered deployment: {config.name}")
+        raise RuntimeError(f"Failed to lookup registered deployment: {config.name}")
 
-    # (1) Export ENVs that config defines, both for us and our subprocesses; also save to /etc/environment as courtesy for debuggers
-    # (2) Run apt gets from config; run pip installs from config
-    # (3) run scripts from config; `sh -c` if string or execvp style if list of args
+    print(f"Starting deployment worker: {config.name}")
+    worker = deployment.into_worker()
