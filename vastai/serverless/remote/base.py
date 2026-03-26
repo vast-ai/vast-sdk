@@ -36,13 +36,6 @@ class Image:
         self.storage_ = storage
         self.copies: list[tuple[str, str]] = []
 
-    def post_deployment_kwargs(self) -> dict[str, str]:
-        ret = {
-            "image": self.image_,
-            "search_params": self.requires_.query,
-        }
-        return ret
-
     def pip_install(self, *args: str) -> "Image":
         for arg in args:
             self.pip_installs_.append(arg)
@@ -179,6 +172,13 @@ class Deployment_(ABC):
         Callable[P, Awaitable[Any]]
         | Callable[[Callable[P, Awaitable[Any]]], Callable[P, Awaitable[Any]]]
     ): ...
+
+    # Stubs for methods that are expected to be present in serve mode, but shouldn't do anything.
+    def configure_autoscaling(self, **kwargs: Unpack[Autoscaling]):
+        pass
+
+    def image(self, from_image: str, storage: int) -> Image:
+        return Image("")
 
     async def ensure_ready(self):  # NO-OP in serve mode
         pass
