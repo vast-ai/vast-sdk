@@ -1,4 +1,4 @@
-from base import Config, Deployment_
+from .base import Config, Deployment_
 from ..server.worker import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig
 from .serialization import deserialize, serialize_ok, serialize_err
 from typing import (
