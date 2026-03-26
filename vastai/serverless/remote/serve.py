@@ -13,14 +13,15 @@ from typing import (
 import asyncio
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 
-class Deployment(Deployment_["Deployment"], AsyncContextManager):
+class Deployment(Deployment_, AsyncContextManager):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.contexts: dict[Type, Any] = {}
         self.context_managers: dict[Type, AsyncContextManager] = {}
-        self.remote_funcs: dict[tuple[str], Callable[..., Awaitable]] = {}
+        self.remote_funcs: dict[tuple[str], dict[str, Any]] = {}
 
     def context(
         self, *args, **kwargs
@@ -57,17 +58,22 @@ class Deployment(Deployment_["Deployment"], AsyncContextManager):
         )
         self.contexts = {}  # invalidate contexts
 
-    def _wrap_remote_func(self, func: Callable[..., Awaitable[Any]], func_globals: dict) -> Callable[..., Awaitable[Any]]:
+    def _wrap_remote_func(
+        self, root_module: str, func: Callable[..., Awaitable[Any]], func_globals: dict
+    ) -> Callable[..., Awaitable[Any]]:
         """Wrap a remote function with serialization/deserialization.
 
         Expects payload: {"args": [serialized_args], "kwargs": {serialized_kwargs}}
         Returns: {"ok": serialized_result} on success, {"err": serialized_exception} on failure.
         """
-        root_module = self.root_module
 
         async def wrapper(*, args: list = [], kwargs: dict = {}) -> dict:
-            deserialized_args = [deserialize(a, root_module, func_globals) for a in args]
-            deserialized_kwargs = {k: deserialize(v, root_module, func_globals) for k, v in kwargs.items()}
+            deserialized_args = [
+                deserialize(a, root_module, func_globals) for a in args
+            ]
+            deserialized_kwargs = {
+                k: deserialize(v, root_module, func_globals) for k, v in kwargs.items()
+            }
             try:
                 result = await func(*deserialized_args, **deserialized_kwargs)
                 return serialize_ok(result, root_module)
@@ -78,36 +84,41 @@ class Deployment(Deployment_["Deployment"], AsyncContextManager):
 
     def into_worker(self) -> Worker:
         handlers: list[HandlerConfig] = []
-        for key, entry in self.remote_funcs.items():
-            route = "/remote/" + "/".join(key)
+        if isinstance(self.root_module, str):
+            for key, entry in self.remote_funcs.items():
+                route = "/remote/" + "/".join(key)
 
-            benchmark_config = None
-            if entry["benchmark_dataset"] is not None or entry["benchmark_generator"] is not None:
-                benchmark_config = BenchmarkConfig(
-                    dataset=entry["benchmark_dataset"],
-                    generator=entry["benchmark_generator"],
-                    runs=entry["benchmark_runs"],
+                benchmark_config = None
+                if (
+                    entry["benchmark_dataset"] is not None
+                    or entry["benchmark_generator"] is not None
+                ):
+                    benchmark_config = BenchmarkConfig(
+                        dataset=entry["benchmark_dataset"],
+                        generator=entry["benchmark_generator"],
+                        runs=entry["benchmark_runs"],
+                    )
+
+                wrapped = self._wrap_remote_func(
+                    self.root_module, entry["func"], entry["globals"]
                 )
 
-            wrapped = self._wrap_remote_func(entry["func"], entry["globals"])
-
-            handlers.append(
-                HandlerConfig(
-                    route=route,
-                    remote_function=wrapped,
-                    allow_parallel_requests=False,
-                    benchmark_config=benchmark_config,
-                    max_queue_time=30.0,
+                handlers.append(
+                    HandlerConfig(
+                        route=route,
+                        remote_function=wrapped,
+                        allow_parallel_requests=False,
+                        benchmark_config=benchmark_config,
+                        max_queue_time=30.0,
+                    )
                 )
+
+            config = WorkerConfig(
+                handlers=handlers,
+                lifecycle=self,
             )
-
-        config = WorkerConfig(
-            handlers=handlers,
-            lifecycle=self,
-        )
-        return Worker(config)
-
-    P = ParamSpec("P")
+            return Worker(config)
+        raise TypeError("Refusing to create empty Worker!")
 
     def remote(
         self,
@@ -116,7 +127,10 @@ class Deployment(Deployment_["Deployment"], AsyncContextManager):
         benchmark_dataset: list[dict] | None = None,
         benchmark_generator: Callable[[], dict] | None = None,
         benchmark_runs: int = 10,
-    ) -> Callable[P, Awaitable[Any]] | Callable[[Callable[P, Awaitable[Any]]], Callable[P, Awaitable[Any]]]:
+    ) -> (
+        Callable[P, Awaitable[Any]]
+        | Callable[[Callable[P, Awaitable[Any]]], Callable[P, Awaitable[Any]]]
+    ):
         def decorator(f: Callable[P, Awaitable[Any]]) -> Callable[P, Awaitable[Any]]:
             key = self.relativize(f)
             self.remote_funcs[key] = {

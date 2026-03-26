@@ -12,7 +12,7 @@ import tempfile
 import pytest
 
 from vastai.serverless.remote.base import Config
-from vastai.serverless.client.utils import (
+from vastai.serverless.remote.utils import (
     _sanitize_info,
     _scan_python_line,
     add_file,
@@ -34,6 +34,7 @@ from vastai.serverless.client.utils import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_config():
@@ -80,6 +81,7 @@ def package_path(tmp_path):
 # create_tarball
 # ---------------------------------------------------------------------------
 
+
 class TestCreateTarball:
     def test_compressed_path_and_suffix(self):
         path, tf = create_tarball(compress=True)
@@ -121,6 +123,7 @@ class TestCreateTarball:
 # _sanitize_info
 # ---------------------------------------------------------------------------
 
+
 class TestSanitizeInfo:
     def test_sets_root_ownership(self):
         info = tarfile.TarInfo(name="test")
@@ -139,6 +142,7 @@ class TestSanitizeInfo:
 # ---------------------------------------------------------------------------
 # add_file / add_folder / add_string / add_path
 # ---------------------------------------------------------------------------
+
 
 def _open_tar_from_path(path: str) -> tarfile.TarFile:
     """Open a tarball for reading (detect compression)."""
@@ -273,6 +277,7 @@ class TestAddPath:
 # serialize_config
 # ---------------------------------------------------------------------------
 
+
 class TestSerializeConfig:
     def test_roundtrips_through_json(self, sample_config):
         s = serialize_config(sample_config)
@@ -299,6 +304,7 @@ class TestSerializeConfig:
 # ---------------------------------------------------------------------------
 # is_python_package / is_python_module / deployment_arcname
 # ---------------------------------------------------------------------------
+
 
 class TestIsPythonPackage:
     def test_true_for_package(self, package_path):
@@ -355,6 +361,7 @@ class TestDeploymentArcname:
 # ---------------------------------------------------------------------------
 # _scan_python_line / filter_ignored_lines
 # ---------------------------------------------------------------------------
+
 
 class TestScanPythonLine:
     def test_bare_marker(self):
@@ -470,14 +477,16 @@ class TestFilterIgnoredLines:
         result = filter_ignored_lines(data)
         # The marker inside the triple-quoted string is kept;
         # the marker after the string closes is stripped.
-        expected = b"\n".join([
-            b"before",
-            b'x = """',
-            b"#!VAST_IGNORE_CHANGES",
-            b"still in string",
-            b'"""',
-            b"end",
-        ])
+        expected = b"\n".join(
+            [
+                b"before",
+                b'x = """',
+                b"#!VAST_IGNORE_CHANGES",
+                b"still in string",
+                b'"""',
+                b"end",
+            ]
+        )
         assert result == expected
 
 
@@ -485,11 +494,15 @@ class TestFilterIgnoredLines:
 # read_file_for_hash
 # ---------------------------------------------------------------------------
 
+
 class TestReadFileForHash:
     def test_no_filter_returns_raw(self, tmp_path):
         p = tmp_path / "test.py"
         p.write_bytes(b"x = 1  #!VAST_IGNORE_CHANGES\n")
-        assert read_file_for_hash(str(p), filter_comments=False) == b"x = 1  #!VAST_IGNORE_CHANGES\n"
+        assert (
+            read_file_for_hash(str(p), filter_comments=False)
+            == b"x = 1  #!VAST_IGNORE_CHANGES\n"
+        )
 
     def test_filter_on_py_file(self, tmp_path):
         p = tmp_path / "test.py"
@@ -499,24 +512,30 @@ class TestReadFileForHash:
     def test_filter_ignored_on_non_py(self, tmp_path):
         p = tmp_path / "data.txt"
         p.write_bytes(b"#!VAST_IGNORE_CHANGES\n")
-        assert read_file_for_hash(str(p), filter_comments=True) == b"#!VAST_IGNORE_CHANGES\n"
+        assert (
+            read_file_for_hash(str(p), filter_comments=True)
+            == b"#!VAST_IGNORE_CHANGES\n"
+        )
 
 
 # ---------------------------------------------------------------------------
 # hash determinism and sensitivity
 # ---------------------------------------------------------------------------
 
+
 class TestHashUpdateDirectory:
     def test_deterministic(self, package_path):
         h1 = hashlib.sha256()
         h2 = hashlib.sha256()
         from vastai.serverless.client.utils import hash_update_directory
+
         hash_update_directory(h1, package_path, "pkg")
         hash_update_directory(h2, package_path, "pkg")
         assert h1.hexdigest() == h2.hexdigest()
 
     def test_content_change_changes_hash(self, package_path):
         from vastai.serverless.client.utils import hash_update_directory
+
         h1 = hashlib.sha256()
         hash_update_directory(h1, package_path, "pkg")
         # Modify a file
@@ -530,6 +549,7 @@ class TestHashUpdateDirectory:
 # ---------------------------------------------------------------------------
 # compute_deployment_hash
 # ---------------------------------------------------------------------------
+
 
 class TestComputeDeploymentHash:
     def test_deterministic(self, sample_config, module_path):
@@ -553,12 +573,18 @@ class TestComputeDeploymentHash:
     def test_extra_file_change_changes_hash(self, sample_config, module_path, tmp_path):
         extra = tmp_path / "extra.txt"
         extra.write_text("v1")
-        h1 = compute_deployment_hash(sample_config, module_path, [(str(extra), "/opt/extra.txt")])
+        h1 = compute_deployment_hash(
+            sample_config, module_path, [(str(extra), "/opt/extra.txt")]
+        )
         extra.write_text("v2")
-        h2 = compute_deployment_hash(sample_config, module_path, [(str(extra), "/opt/extra.txt")])
+        h2 = compute_deployment_hash(
+            sample_config, module_path, [(str(extra), "/opt/extra.txt")]
+        )
         assert h1 != h2
 
-    def test_ignore_marker_in_deployment_does_not_change_hash(self, sample_config, tmp_path):
+    def test_ignore_marker_in_deployment_does_not_change_hash(
+        self, sample_config, tmp_path
+    ):
         p = tmp_path / "deploy.py"
         p.write_text("x = 1  #!VAST_IGNORE_CHANGES\ndef handler(): pass\n")
         h1 = compute_deployment_hash(sample_config, str(p))
@@ -566,12 +592,18 @@ class TestComputeDeploymentHash:
         h2 = compute_deployment_hash(sample_config, str(p))
         assert h1 == h2
 
-    def test_ignore_marker_in_extra_py_still_changes_hash(self, sample_config, module_path, tmp_path):
+    def test_ignore_marker_in_extra_py_still_changes_hash(
+        self, sample_config, module_path, tmp_path
+    ):
         extra = tmp_path / "lib.py"
         extra.write_text("x = 1  #!VAST_IGNORE_CHANGES\n")
-        h1 = compute_deployment_hash(sample_config, module_path, [(str(extra), "/opt/lib.py")])
+        h1 = compute_deployment_hash(
+            sample_config, module_path, [(str(extra), "/opt/lib.py")]
+        )
         extra.write_text("x = 999  #!VAST_IGNORE_CHANGES\n")
-        h2 = compute_deployment_hash(sample_config, module_path, [(str(extra), "/opt/lib.py")])
+        h2 = compute_deployment_hash(
+            sample_config, module_path, [(str(extra), "/opt/lib.py")]
+        )
         assert h1 != h2
 
     def test_works_with_package(self, sample_config, package_path):
@@ -582,6 +614,7 @@ class TestComputeDeploymentHash:
 # ---------------------------------------------------------------------------
 # create_deployment_tarball
 # ---------------------------------------------------------------------------
+
 
 class TestCreateDeploymentTarball:
     def test_contains_config_json(self, sample_config, module_path):
@@ -620,7 +653,9 @@ class TestCreateDeploymentTarball:
             (str(tmp_dir / "hello.txt"), "/opt/data/hello.txt"),
             (str(tmp_dir / "script.py"), "/opt/scripts/run.py"),
         ]
-        path = create_deployment_tarball(sample_config, module_path, extras, compress=False)
+        path = create_deployment_tarball(
+            sample_config, module_path, extras, compress=False
+        )
         try:
             with _open_tar_from_path(path) as rtf:
                 names = rtf.getnames()
@@ -634,7 +669,9 @@ class TestCreateDeploymentTarball:
             (str(tmp_dir / "hello.txt"), "data/hello.txt"),
             (str(tmp_dir / "script.py"), "./scripts/run.py"),
         ]
-        path = create_deployment_tarball(sample_config, module_path, extras, compress=False)
+        path = create_deployment_tarball(
+            sample_config, module_path, extras, compress=False
+        )
         try:
             with _open_tar_from_path(path) as rtf:
                 names = rtf.getnames()
@@ -678,7 +715,9 @@ class TestCreateDeploymentTarball:
         finally:
             os.unlink(tarball)
 
-    def test_tar_extract_package_deployment(self, sample_config, package_path, tmp_path):
+    def test_tar_extract_package_deployment(
+        self, sample_config, package_path, tmp_path
+    ):
         tarball = create_deployment_tarball(sample_config, package_path, compress=False)
         extract_dir = tmp_path / "extract"
         extract_dir.mkdir()
@@ -693,12 +732,16 @@ class TestCreateDeploymentTarball:
         finally:
             os.unlink(tarball)
 
-    def test_tar_extract_absolute_extra_files(self, sample_config, module_path, tmp_dir, tmp_path):
+    def test_tar_extract_absolute_extra_files(
+        self, sample_config, module_path, tmp_dir, tmp_path
+    ):
         abs_dest = str(tmp_path / "abs_output" / "data" / "hello.txt")
         extras = [
             (str(tmp_dir / "hello.txt"), abs_dest),
         ]
-        tarball = create_deployment_tarball(sample_config, module_path, extras, compress=False)
+        tarball = create_deployment_tarball(
+            sample_config, module_path, extras, compress=False
+        )
         try:
             subprocess.run(["tar", "-xPf", tarball], check=True)
             assert os.path.isfile(abs_dest)
@@ -708,11 +751,15 @@ class TestCreateDeploymentTarball:
             os.unlink(tarball)
             os.unlink(abs_dest)
 
-    def test_tar_extract_relative_extra_files(self, sample_config, module_path, tmp_dir, tmp_path):
+    def test_tar_extract_relative_extra_files(
+        self, sample_config, module_path, tmp_dir, tmp_path
+    ):
         extras = [
             (str(tmp_dir / "hello.txt"), "data/hello.txt"),
         ]
-        tarball = create_deployment_tarball(sample_config, module_path, extras, compress=False)
+        tarball = create_deployment_tarball(
+            sample_config, module_path, extras, compress=False
+        )
         extract_dir = tmp_path / "extract"
         extract_dir.mkdir()
         try:
