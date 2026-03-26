@@ -1,5 +1,5 @@
 import base64
-from typing import Any
+from typing import Any, TypeAlias
 from importlib import import_module
 
 
@@ -23,7 +23,7 @@ def derelativize_module(mod, root_module: str):
         return ".".join(mod["path"])
 
 
-type JSON = int | str | float | list[JSON] | dict[str, JSON]
+JSON: TypeAlias = int | str | float | list["JSON"] | dict[str, "JSON"]
 
 
 def serialize(obj, root_module: str) -> JSON:
