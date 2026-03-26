@@ -14,6 +14,8 @@ from .utils import create_deployment_tarball, compute_deployment_hash
 from os.path import getsize
 import tempfile
 
+# TODO: implement heartbeat, sync ready.
+
 """
 Design:
 

@@ -1,4 +1,5 @@
 # endpoint.py
+import os
 from .connection import _make_request
 from typing import Awaitable, Generic, Optional, TypeVar, Union, TYPE_CHECKING
 
@@ -8,6 +9,7 @@ if TYPE_CHECKING:
     from .session import Session
 
 R = TypeVar("R", bound=Awaitable)
+
 
 class Endpoint_(Generic[R]):
     name: str
@@ -33,7 +35,9 @@ class Endpoint_(Generic[R]):
         self,
         route,
         payload,
-        serverless_request: Optional[Union["ServerlessRequest", "RequestStatus"]] = None,
+        serverless_request: Optional[
+            Union["ServerlessRequest", "RequestStatus"]
+        ] = None,
         cost: int = 100,
         retry: bool = True,
         stream: bool = False,
@@ -57,9 +61,7 @@ class Endpoint_(Generic[R]):
 
     async def session_healthcheck(self, session: "Session"):
         result = await self.client.get_endpoint_session(
-            endpoint=self,
-            session_id=session.session_id,
-            session_auth=session.auth_data
+            endpoint=self, session_id=session.session_id, session_auth=session.auth_data
         )
         return result is not None
 
@@ -68,23 +70,35 @@ class Endpoint_(Generic[R]):
             endpoint=self,
             session_id=session_id,
             session_auth=session_auth,
-            timeout=timeout
+            timeout=timeout,
         )
 
-    def session(self, cost: int = 100, lifetime: float = 60, on_close_route: str = None, on_close_payload: dict = None, timeout: float = None) -> "Session":
+    def session(
+        self,
+        cost: int = 100,
+        lifetime: float = 60,
+        on_close_route: str = None,
+        on_close_payload: dict = None,
+        timeout: float = None,
+    ) -> "Session":
         return self.client.start_endpoint_session(
             endpoint=self,
             cost=cost,
             lifetime=lifetime,
             on_close_route=on_close_route,
             on_close_payload=on_close_payload,
-            timeout=timeout
+            timeout=timeout,
         )
 
     def get_workers(self):
         return self.client.get_endpoint_workers(self)
 
-    async def _route(self, cost: float = 0.0, req_idx: int = 0, timeout: float = 60.0) -> "RouteResponse":
+    async def _route(
+        self, cost: float = 0.0, req_idx: int = 0, timeout: float = 60.0
+    ) -> "RouteResponse":
+        VAST_DEBUG_WORKER_URL = os.environ.get("VAST_DEBUG_WORKER_URL")
+        if VAST_DEBUG_WORKER_URL:
+            return RouteResponse({"request_idx": 1, "url": VAST_DEBUG_WORKER_URL})
         if self.client is None or not self.client.is_open():
             raise ValueError("Client is invalid")
         try:
@@ -109,10 +123,13 @@ class Endpoint_(Generic[R]):
             raise RuntimeError(f"Failed to route endpoint: {ex}") from ex
 
         if not result.get("ok"):
-            raise RuntimeError(f"Failed to route endpoint: HTTP {result.get('status')} - {result.get('text','')[:512]}")
+            raise RuntimeError(
+                f"Failed to route endpoint: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
 
         return RouteResponse(result.get("json") or {})
-    
+
+
 class RouteResponse:
     status: str
     body: dict
