@@ -11,6 +11,9 @@ from typing import (
     AsyncContextManager,
 )
 import asyncio
+from vastai.logging import log_debug, log_critical, log_info, log_error, log_warning
+
+log_debug("mode: serve")
 
 T = TypeVar("T")
 P = ParamSpec("P")

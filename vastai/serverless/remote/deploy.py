@@ -14,7 +14,9 @@ from .utils import create_deployment_tarball, compute_deployment_hash
 from os.path import getsize
 import tempfile
 import asyncio
+from vastai.logging import log_debug, log_critical, log_info, log_error, log_warning
 
+log_debug("mode: deploy")
 # TODO: implement heartbeat, sync ready.
 
 """
@@ -112,11 +114,10 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         self._image: Image | None = None
         self._autoscaling: Autoscaling | None = None
         self._ttl = ttl
-        self._deployment_file: str | None = None
         self._inner: _FullDeployment | None = None
 
     def _into_deployment_config_and_tarball(self, tar_path: str) -> DeploymentConfig:
-        # should error if _image, _autoscaling, _deployment_file, or any other field needed to calculate DeploymentConfig is None
+        # should error if _image, _autoscaling, file, or any other field needed to calculate DeploymentConfig is None
         if not isinstance(self._image, Image):
             raise Exception(
                 "Trying to deploy a deployment without an image configured."
@@ -138,7 +139,7 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             file_hash=hash,
             file_size=size,
             tag=self.tag,
-            search_params=json.dumps(self._image.requires_.query),
+            search_params=self._image.requires_.unparse_query(),
             storage=self._image.storage_,
             ttl=self._ttl,
             version_label=self.version_label,
@@ -169,17 +170,13 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
     def _compute_hash_and_filesize_and_make_tar(
         self, tar_path: str, checked_name: str, checked_image: Image
     ) -> tuple[str, int]:
-        if not isinstance(self._deployment_file, str):
+        if not isinstance(self.file, str):
             raise Exception(
                 "Trying to deploy a deployment not yet bound to a Python module. Have any remote functions been registered?"
             )
         config = self._collate_config(checked_name, checked_image)
-        hash = compute_deployment_hash(
-            config, self._deployment_file, checked_image.copies
-        )
-        create_deployment_tarball(
-            tar_path, config, self._deployment_file, checked_image.copies
-        )
+        hash = compute_deployment_hash(config, self.file, checked_image.copies)
+        create_deployment_tarball(tar_path, config, self.file, checked_image.copies)
         size = getsize(tar_path)
         return (hash, size)
 
