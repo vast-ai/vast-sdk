@@ -213,6 +213,7 @@ class AsyncClient(_BaseClient):
             api_key=self._api_key,
             instance=instance,
             autoscaler_url=autoscaler_url,
+            webserver_url=self._vast_server,
             debug=debug,
             connection_limit=self._connection_limit,
             default_request_timeout=default_request_timeout,

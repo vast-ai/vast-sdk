@@ -114,6 +114,7 @@ class Deployment_(ABC):
         name: Optional[str] = None,
         tag: str = "default",
         version_label: Optional[str] = None,
+        **kwargs,
     ):
         self.name = name
         self.tag = tag
