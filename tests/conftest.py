@@ -12,7 +12,13 @@ One fixture name per *kind* of resource; use factory callables for variants
 ``make_backend_http_request``, ``make_mock_root_logger``, …) instead of parallel fixtures.
 
 Pyworker: ``pyworker_backend`` (Backend with Metrics mocked), ``patch_pyworker_backend_class``,
-``make_pyworker_session`` (server Session), ``valid_auth_data_dict`` (AuthData-shaped JSON).
+``make_pyworker_session`` (only factory for server ``Session``), ``valid_auth_data_dict`` (AuthData-shaped JSON).
+
+Serverless pyworker: ``serverless_backend_and_handler_default`` (default ``Backend`` + handler),
+``serverless_tracked_runner_and_tcp_site`` (AppRunner/TCPSite capture bundle for ``server.lib.server``),
+``run_serverless_start_server_async_patched`` (async helper applying standard start_server_async patches),
+``make_patch_skip_backend_run_session_on_close`` / ``make_patch_mock_backend_close_session``,
+``make_serverless_test_rsa_key`` (RSA key factory for signature tests).
 
 An autouse fixture restores the ``Serverless`` logger after each test so global
 logging state follows RAII and cannot leak between cases.
@@ -20,23 +26,35 @@ logging state follows RAII and cannot leak between cases.
 from __future__ import annotations
 
 import asyncio
+import base64
+import dataclasses
+import inspect
+import json
 import logging
-from contextlib import contextmanager
+import os
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiohttp import ClientResponseError
+from aiohttp import ClientResponseError, web
+from Crypto.Hash import SHA256
+from Crypto.PublicKey import RSA
+from Crypto.Signature import pkcs1_15
 
 from vastai.serverless.client.client import Serverless, ServerlessRequest
 from vastai.serverless.client.endpoint import Endpoint
 from vastai.serverless.client.session import Session
+from vastai.serverless.server.lib.backend import Backend
+from vastai.serverless.server.lib import server as vast_serverless_server_mod
+from vastai.serverless.server.lib.metrics import get_url
 from vastai.serverless.server.lib.data_types import RequestMetrics, Session as PyworkerSession
 from vastai.serverless.server.worker import (
     WorkerConfig,
     HandlerConfig,
     BenchmarkConfig,
+    EndpointHandlerFactory,
 )
 
 
@@ -110,6 +128,7 @@ def make_mock_model_response():
         mock.status = status
         mock.headers = MagicMock()
         mock.headers.get = MagicMock(return_value=None)
+        mock.headers.copy = MagicMock(return_value={})
         if stream_chunks is not None:
             async def _iter():
                 for c in stream_chunks:
@@ -311,6 +330,426 @@ def valid_auth_data_dict():
 
 
 # ---------------------------------------------------------------------------
+# Serverless pyworker (Backend, server.lib.server) fixtures
+# ---------------------------------------------------------------------------
+
+# Metrics() reads container/network env at Backend init; use with patch.dict in factories.
+SERVERLESS_METRICS_TEST_ENV = {
+    "CONTAINER_ID": "1",
+    "REPORT_ADDR": "https://run.vast.ai",
+    "WORKER_PORT": "8080",
+    "PUBLIC_IPADDR": "127.0.0.1",
+    "VAST_TCP_PORT_8080": "8080",
+}
+
+
+@pytest.fixture
+def serverless_metrics_test_env() -> dict:
+    """Copy of env vars required to construct Metrics inside Backend for unit tests."""
+    return dict(SERVERLESS_METRICS_TEST_ENV)
+
+
+def _serverless_worker_config_one_handler(
+    route: str = "/predict",
+    *,
+    allow_parallel: bool = True,
+    max_queue_time: float | None = None,
+) -> WorkerConfig:
+    return WorkerConfig(
+        model_server_url="http://localhost",
+        model_server_port=8000,
+        model_log_file="/tmp/nonexistent-model.log",
+        handlers=[
+            HandlerConfig(
+                route=route,
+                benchmark_config=BenchmarkConfig(dataset=[{"input": {}}]),
+                allow_parallel_requests=allow_parallel,
+                max_queue_time=max_queue_time,
+            ),
+        ],
+        max_sessions=None,
+    )
+
+
+@pytest.fixture
+def make_serverless_backend_and_handler():
+    """Factory: build Backend + generic EndpointHandler for /predict (see EndpointHandlerFactory).
+
+    ``WorkerConfig.max_sessions`` of ``None`` is mapped to ``Backend(max_sessions=0)`` because
+    ``session_create_handler`` treats ``0`` and ``None`` as unlimited (no cap).
+    """
+
+    def _make(
+        *,
+        unsecured: bool = True,
+        max_sessions: int | None = None,
+        allow_parallel: bool = True,
+        max_queue_time: float | None = None,
+        remote_function=None,
+    ) -> tuple[Backend, object]:
+        config = _serverless_worker_config_one_handler(
+            allow_parallel=allow_parallel,
+            max_queue_time=max_queue_time,
+        )
+        if remote_function is not None:
+            config.handlers[0] = dataclasses.replace(
+                config.handlers[0], remote_function=remote_function
+            )
+        if max_sessions is not None:
+            config = WorkerConfig(
+                model_server_url=config.model_server_url,
+                model_server_port=config.model_server_port,
+                model_log_file=config.model_log_file,
+                handlers=config.handlers,
+                max_sessions=max_sessions,
+            )
+        factory = EndpointHandlerFactory(config)
+        benchmark = factory.get_benchmark_handler()
+        handler = factory.get_handler("/predict")
+        assert handler is not None
+        effective_max = max_sessions if max_sessions is not None else config.max_sessions
+        if effective_max is None:
+            effective_max = 0
+        with patch.dict(os.environ, SERVERLESS_METRICS_TEST_ENV, clear=False):
+            get_url.cache_clear()
+            backend = Backend(
+                model_server_url="http://localhost:8000",
+                model_log_file=config.model_log_file,
+                benchmark_handler=benchmark,
+                log_actions=[],
+                max_sessions=effective_max,
+                unsecured=unsecured,
+            )
+            get_url.cache_clear()
+        return backend, handler
+
+    return _make
+
+
+@pytest.fixture
+def parse_serverless_aiohttp_json():
+    """Factory: decode JSON body from aiohttp web.Response in synchronous tests.
+
+    When ``resp.body`` is ``None``, returns ``{}`` (same as empty JSON object) so
+    status-only tests need not branch; use explicit ``resp.body`` checks if you
+    must distinguish missing body from ``{}``.
+    """
+
+    def _parse(resp: web.StreamResponse) -> dict | list:
+        raw = resp.body
+        if raw is None:
+            return {}
+        return json.loads(raw.decode())
+
+    return _parse
+
+
+@pytest.fixture
+def make_serverless_json_http_request():
+    """Factory: mock aiohttp Request; pass str body to simulate JSON decode errors."""
+
+    def _make(data: dict | str) -> MagicMock:
+        req = MagicMock(spec=web.Request)
+        if isinstance(data, str):
+            req.json = AsyncMock(side_effect=json.JSONDecodeError("err", data, 0))
+        else:
+            req.json = AsyncMock(return_value=data)
+        return req
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_auth_payload():
+    """Factory: minimal valid auth_data + payload dict for generic pyworker handler tests."""
+
+    def _make(
+        *,
+        url: str = "http://example.com/predict",
+        signature: str = "unused-in-unsecured",
+        reqnum: int = 1,
+    ) -> dict:
+        return {
+            "auth_data": {
+                "cost": "1",
+                "endpoint": "/predict",
+                "reqnum": reqnum,
+                "request_idx": 42,
+                "signature": signature,
+                "url": url,
+            },
+            "payload": {"input": {}},
+        }
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_signed_auth_payload(make_serverless_auth_payload):
+    """Factory: auth payload with PKCS1-v1.5 signature matching Backend.__check_signature."""
+
+    def _signed(url: str, rsa_key) -> dict:
+        message = json.dumps({"url": url}, indent=4, sort_keys=True)
+        h = SHA256.new(message.encode())
+        sig = pkcs1_15.new(rsa_key).sign(h)
+        return make_serverless_auth_payload(
+            url=url,
+            signature=base64.b64encode(sig).decode("ascii"),
+            reqnum=7,
+        )
+
+    return _signed
+
+
+@pytest.fixture
+def serverless_backend_testkit(
+    make_serverless_backend_and_handler,
+    parse_serverless_aiohttp_json,
+    make_serverless_json_http_request,
+    make_serverless_auth_payload,
+    make_serverless_signed_auth_payload,
+):
+    """Bundle common pyworker Backend test helpers (single parameter for test methods)."""
+    return SimpleNamespace(
+        make_backend=make_serverless_backend_and_handler,
+        response_json=parse_serverless_aiohttp_json,
+        json_request=make_serverless_json_http_request,
+        auth_payload=make_serverless_auth_payload,
+        signed_auth=make_serverless_signed_auth_payload,
+    )
+
+
+@pytest.fixture
+def serverless_backend_and_handler_default(make_serverless_backend_and_handler):
+    """Fresh ``(Backend, handler)`` with defaults for pyworker serverless unit tests."""
+    return make_serverless_backend_and_handler()
+
+
+@pytest.fixture
+def serverless_tracked_runner_and_tcp_site(
+    make_serverless_tracked_app_runner,
+    make_serverless_tracked_tcp_site,
+):
+    """Tracked ``AppRunner`` + ``TCPSite`` side effects for ``server.lib.server`` tests."""
+    apps_seen, app_runner = make_serverless_tracked_app_runner()
+    tcp_calls, tcp_site = make_serverless_tracked_tcp_site()
+    return SimpleNamespace(
+        apps_seen=apps_seen,
+        app_runner=app_runner,
+        tcp_calls=tcp_calls,
+        tcp_site=tcp_site,
+    )
+
+
+@pytest.fixture
+def make_serverless_tracked_app_runner():
+    """Factory: returns (captured_apps_list, AppRunner side_effect) for patching web.AppRunner."""
+
+    def _make():
+        captured: list = []
+
+        def app_runner(app: web.Application, **kwargs):
+            captured.append(app)
+            m = MagicMock()
+            m.setup = AsyncMock()
+            return m
+
+        return captured, app_runner
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_tracked_tcp_site():
+    """Factory: returns (captured_kwargs_per_call, TCPSite side_effect) for patching web.TCPSite."""
+
+    def _make():
+        captured: list = []
+
+        def tcp_site(*args, **kwargs):
+            captured.append(kwargs)
+            m = MagicMock()
+            m.start = AsyncMock()
+            return m
+
+        return captured, tcp_site
+
+    return _make
+
+
+@pytest.fixture
+def serverless_gather_await_all():
+    """Async gather replacement that awaits each passed awaitable (for mocked site.start())."""
+
+    async def _gather(*aws, **kwargs):
+        for aw in aws:
+            await aw
+        return None
+
+    return _gather
+
+
+@pytest.fixture
+def serverless_gather_raise_bind_failed():
+    """Simulate gather() failing without leaking un-awaited coroutine objects.
+
+    ``start_server_async`` does ``await gather(site.start(), http_site.start(),
+    backend._start_tracking())``. Those three call expressions run before ``gather``;
+    if the patched ``gather`` raises without consuming them, CPython warns on GC.
+    This replacement closes each awaitable then raises like a failed bind.
+    """
+
+    async def _gather(*aws, **kwargs):
+        for aw in aws:
+            if inspect.isawaitable(aw):
+                if isinstance(aw, asyncio.Task):
+                    aw.cancel()
+                else:
+                    closer = getattr(aw, "close", None)
+                    if callable(closer):
+                        closer()
+        raise RuntimeError("bind failed")
+
+    return _gather
+
+
+@pytest.fixture
+def serverless_error_beacon_mocks():
+    """Patches Metrics + sleep so server error beacon runs then exits on second sleep.
+
+    Yields the MagicMock for Metrics._model_errored.
+    """
+    sm = vast_serverless_server_mod
+    with patch.object(sm.Metrics, "_Metrics__send_metrics_and_reset", new_callable=AsyncMock):
+        with patch.object(sm.Metrics, "_model_errored") as mock_model_errored:
+            with patch.object(sm.Metrics, "aclose", new_callable=AsyncMock):
+                sleep_mock = AsyncMock(
+                    side_effect=[None, RuntimeError("stop-beacon")]
+                )
+                with patch.object(sm.asyncio, "sleep", sleep_mock):
+                    yield mock_model_errored
+
+
+@pytest.fixture
+def serverless_aiohttp_route_path_tuples():
+    """Factory: list (method, path_string) for each route on an aiohttp Application."""
+
+    def _paths(app: web.Application) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for r in app.router.routes():
+            resource = getattr(r, "resource", None)
+            canonical = getattr(resource, "canonical", None) if resource else None
+            path = str(canonical) if canonical is not None else str(r)
+            out.append((r.method, path))
+        return out
+
+    return _paths
+
+
+@pytest.fixture
+def attach_serverless_backend_mock_session_post():
+    """Replace backend.session with a mock ClientSession for ``__run_session_on_close`` tests.
+
+    Call before any code path reads ``backend.session`` so the real ``cached_property``
+    is never evaluated (avoids opening a real ``TCPConnector`` / ``ClientSession``).
+
+    By default ``post()`` returns an async context manager with a successful response.
+    Use ``spy_only=True`` for a bare ``post`` mock (no HTTP). Use ``post_side_effect``
+    to simulate connection errors. Only one attachment pattern should be used per test.
+    """
+
+    def _attach(
+        backend: Backend,
+        *,
+        response_text: str = "ok",
+        response_status: int = 200,
+        post_side_effect: BaseException | None = None,
+        spy_only: bool = False,
+    ) -> MagicMock:
+        mock_sess = MagicMock()
+        if spy_only:
+            mock_sess.post = MagicMock()
+        elif post_side_effect is not None:
+            mock_sess.post = MagicMock(side_effect=post_side_effect)
+        else:
+            mock_resp = MagicMock()
+            mock_resp.status = response_status
+            mock_resp.text = AsyncMock(return_value=response_text)
+            mock_post_cm = MagicMock()
+            mock_post_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_post_cm.__aexit__ = AsyncMock(return_value=None)
+            mock_sess.post = MagicMock(return_value=mock_post_cm)
+        object.__setattr__(backend, "session", mock_sess)
+        return mock_sess
+
+    return _attach
+
+
+@pytest.fixture
+def make_patch_skip_backend_run_session_on_close():
+    """Return ``patch.object(backend, _Backend__run_session_on_close, AsyncMock)`` context manager."""
+
+    def _patch(backend: Backend):
+        return patch.object(backend, "_Backend__run_session_on_close", new_callable=AsyncMock)
+
+    return _patch
+
+
+@pytest.fixture
+def make_patch_mock_backend_close_session():
+    """Return ``patch.object(backend, _Backend__close_session, AsyncMock)`` context manager."""
+
+    def _patch(backend: Backend):
+        return patch.object(backend, "_Backend__close_session", new_callable=AsyncMock)
+
+    return _patch
+
+
+@pytest.fixture
+def make_serverless_test_rsa_key():
+    """Factory: small RSA key for Backend signature tests (not for production crypto)."""
+
+    def _make(bits: int = 1024):
+        return RSA.generate(bits)
+
+    return _make
+
+
+@pytest.fixture
+def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_site):
+    """Async callable: apply env + AppRunner + TCPSite + _start_tracking + gather patches, then ``start_server_async``.
+
+    Returns the ``_start_tracking`` AsyncMock.
+    """
+
+    async def _run(
+        backend: Backend,
+        routes: list,
+        env: dict,
+        *,
+        gather_side_effect,
+        ssl_create_default_context_patch=None,
+    ) -> MagicMock:
+        sm = vast_serverless_server_mod
+        st = serverless_tracked_runner_and_tcp_site
+        app_runner, tcp_site = st.app_runner, st.tcp_site
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, env, clear=False))
+            if ssl_create_default_context_patch is not None:
+                stack.enter_context(ssl_create_default_context_patch)
+            stack.enter_context(patch.object(sm.web, "AppRunner", side_effect=app_runner))
+            stack.enter_context(patch.object(sm.web, "TCPSite", side_effect=tcp_site))
+            mock_track = stack.enter_context(
+                patch.object(backend, "_start_tracking", new_callable=AsyncMock)
+            )
+            stack.enter_context(patch.object(sm, "gather", side_effect=gather_side_effect))
+            await sm.start_server_async(backend, routes)
+        return mock_track
+
+    return _run
+
+
+# ---------------------------------------------------------------------------
 # Connection (vastai.serverless.client.connection) fixtures
 # ---------------------------------------------------------------------------
 
@@ -501,7 +940,7 @@ def make_pyworker_metrics():
 
 @pytest.fixture
 def make_pyworker_session():
-    """Factory: ``PyworkerSession`` for metrics tests (server ``Session``, not aiohttp)."""
+    """Factory: server ``Session`` (pyworker data type, not aiohttp) for all serverless tests."""
 
     def _make(**kwargs):
         defaults = dict(
