@@ -111,7 +111,8 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.client = AsyncClient(api_key).serverless()
+        self.async_client = AsyncClient(api_key)
+        self.client = self.async_client.serverless()
         self._image: Image | None = None
         self._autoscaling: Autoscaling | None = None
         self._ttl = ttl
@@ -210,8 +211,16 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
                 await deployment.upload(tar_path)
             self._inner = _FullDeployment(self.root_module, deployment)
 
+    # ensure_ready will often be called at import time, before we have access to the end client's async event loop,
+    # in an isolated temporary async event loop
+    # so we need to close our connection after, since aiohttp connections are bound to an async event loop,
+    # and will error if reused after the event loop has closed.
+    async def _ensure_ready_isolated_connection(self):
+        async with self.async_client:
+            await self.async_ensure_ready()
+
     def ensure_ready(self):
-        asyncio.run(self.async_ensure_ready())
+        asyncio.run(self._ensure_ready_isolated_connection())
 
     async def _dispatch(self, f_name, globals, sig, args, kwargs) -> Any:
         if not isinstance(self._inner, _FullDeployment):
