@@ -594,6 +594,7 @@ class TestBackendSessionEnd:
         serverless_backend_and_handler_default,
         serverless_backend_testkit,
         make_pyworker_session,
+        register_pyworker_backend_session_with_metrics,
         make_patch_skip_backend_run_session_on_close,
     ) -> None:
         """
@@ -610,7 +611,7 @@ class TestBackendSessionEnd:
         backend, _ = serverless_backend_and_handler_default
         auth = {"t": 1}
         sid = "to-close"
-        backend.sessions[sid] = make_pyworker_session(
+        sess = make_pyworker_session(
             session_id=sid,
             lifetime=60.0,
             auth_data=auth,
@@ -618,7 +619,7 @@ class TestBackendSessionEnd:
             on_close_route=None,
             on_close_payload=None,
         )
-        backend.session_metrics[sid] = MagicMock()
+        register_pyworker_backend_session_with_metrics(backend, sess)
         req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": auth})
         with make_patch_skip_backend_run_session_on_close(backend):
             resp = await backend.session_end_handler(req)
@@ -675,6 +676,7 @@ class TestBackendCloseSession:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
+        register_pyworker_backend_session_with_metrics,
         make_patch_skip_backend_run_session_on_close,
     ) -> None:
         """
@@ -694,7 +696,7 @@ class TestBackendCloseSession:
         mock_req = MagicMock()
         mock_req.transport = mock_tr
         sid = "sess-transport"
-        backend.sessions[sid] = make_pyworker_session(
+        sess = make_pyworker_session(
             session_id=sid,
             lifetime=1.0,
             auth_data={},
@@ -703,12 +705,177 @@ class TestBackendCloseSession:
             on_close_payload=None,
             requests=[mock_req],
         )
-        backend.session_metrics[sid] = MagicMock()
+        register_pyworker_backend_session_with_metrics(backend, sess)
         with make_patch_skip_backend_run_session_on_close(backend):
             removed = await backend._Backend__close_session(sid)
         assert removed is True
         assert sid not in backend.sessions
         mock_tr.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_close_session_swallows_exception_when_transport_close_fails(
+        self,
+        serverless_backend_and_handler_default,
+        make_pyworker_session,
+        register_pyworker_backend_session_with_metrics,
+        make_patch_skip_backend_run_session_on_close,
+    ) -> None:
+        """
+        Verifies errors from ``transport.close()`` are ignored so shutdown continues.
+
+        This test verifies by:
+        1. Making ``close`` raise ``OSError`` while ``is_closing`` is False
+        2. Asserting the session is still removed and __close_session returns True
+
+        Assumptions:
+        - Per-request teardown must not abort the whole session close on transport errors
+        """
+        backend, _ = serverless_backend_and_handler_default
+        mock_tr = MagicMock()
+        mock_tr.is_closing.return_value = False
+        mock_tr.close.side_effect = OSError("close failed")
+        mock_req = MagicMock()
+        mock_req.transport = mock_tr
+        sid = "sess-tr-close-err"
+        sess = make_pyworker_session(
+            session_id=sid,
+            lifetime=1.0,
+            auth_data={},
+            expiration=time.time() + 60,
+            on_close_route=None,
+            on_close_payload=None,
+            requests=[mock_req],
+        )
+        register_pyworker_backend_session_with_metrics(backend, sess)
+        with make_patch_skip_backend_run_session_on_close(backend):
+            removed = await backend._Backend__close_session(sid)
+        assert removed is True
+        assert sid not in backend.sessions
+
+    @pytest.mark.asyncio
+    async def test_close_session_unknown_session_returns_false(
+        self, serverless_backend_and_handler_default
+    ) -> None:
+        """
+        Verifies __close_session returns False when the session id is not present.
+
+        This test verifies by:
+        1. Calling ``_Backend__close_session`` with an id that was never inserted
+        2. Asserting the return value is False and no exception is raised
+
+        Assumptions:
+        - ``pop(session_id, None)`` is the source of truth for absence
+        """
+        backend, _ = serverless_backend_and_handler_default
+        removed = await backend._Backend__close_session("no-such-session")
+        assert removed is False
+
+    @pytest.mark.asyncio
+    async def test_close_session_skips_transport_close_when_already_closing(
+        self,
+        serverless_backend_and_handler_default,
+        make_pyworker_session,
+        register_pyworker_backend_session_with_metrics,
+        make_patch_skip_backend_run_session_on_close,
+    ) -> None:
+        """
+        Verifies transports that report ``is_closing()`` are not closed again.
+
+        This test verifies by:
+        1. Using a mock transport with ``is_closing`` returning True
+        2. Awaiting __close_session and asserting ``close`` was never called
+
+        Assumptions:
+        - Branch matches ``tr is not None and not tr.is_closing()`` in __close_session
+        """
+        backend, _ = serverless_backend_and_handler_default
+        mock_tr = MagicMock()
+        mock_tr.is_closing.return_value = True
+        mock_req = MagicMock()
+        mock_req.transport = mock_tr
+        sid = "sess-tr-closing"
+        sess = make_pyworker_session(
+            session_id=sid,
+            lifetime=1.0,
+            auth_data={},
+            expiration=time.time() + 60,
+            on_close_route=None,
+            on_close_payload=None,
+            requests=[mock_req],
+        )
+        register_pyworker_backend_session_with_metrics(backend, sess)
+        with make_patch_skip_backend_run_session_on_close(backend):
+            await backend._Backend__close_session(sid)
+        mock_tr.close.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_close_session_skips_transport_when_request_has_no_transport(
+        self,
+        serverless_backend_and_handler_default,
+        make_pyworker_session,
+        register_pyworker_backend_session_with_metrics,
+        make_patch_skip_backend_run_session_on_close,
+    ) -> None:
+        """
+        Verifies in-flight aiohttp requests without a transport do not trigger close.
+
+        This test verifies by:
+        1. Storing a session whose ``requests`` entry has ``transport`` set to None
+        2. Completing __close_session without error
+
+        Assumptions:
+        - ``getattr(req, "transport", None)`` yields None and the inner branch is skipped
+        """
+        backend, _ = serverless_backend_and_handler_default
+        mock_req = MagicMock(spec=[])  # no transport attribute
+        sid = "sess-no-tr"
+        sess = make_pyworker_session(
+            session_id=sid,
+            lifetime=1.0,
+            auth_data={},
+            expiration=time.time() + 60,
+            on_close_route=None,
+            on_close_payload=None,
+            requests=[mock_req],
+        )
+        register_pyworker_backend_session_with_metrics(backend, sess)
+        with make_patch_skip_backend_run_session_on_close(backend):
+            removed = await backend._Backend__close_session(sid)
+        assert removed is True
+
+    @pytest.mark.asyncio
+    async def test_close_session_swallows_exception_from_run_session_on_close(
+        self,
+        serverless_backend_and_handler_default,
+        make_pyworker_session,
+        register_pyworker_backend_session_with_metrics,
+    ) -> None:
+        """
+        Verifies exceptions from __run_session_on_close do not escape __close_session.
+
+        This test verifies by:
+        1. Patching ``_Backend__run_session_on_close`` to raise ``RuntimeError``
+        2. Asserting __close_session still returns True and removes the session
+
+        Assumptions:
+        - The broad ``except Exception: pass`` around the on_close await is intentional
+        """
+        backend, _ = serverless_backend_and_handler_default
+        sid = "sess-on-close-err"
+        sess = make_pyworker_session(
+            session_id=sid,
+            lifetime=1.0,
+            auth_data={},
+            expiration=time.time() + 60,
+            on_close_route=None,
+            on_close_payload=None,
+        )
+        register_pyworker_backend_session_with_metrics(backend, sess)
+        with patch.object(backend, "_Backend__run_session_on_close", new_callable=AsyncMock) as mock_on_close:
+            mock_on_close.side_effect = RuntimeError("callback exploded")
+            removed = await backend._Backend__close_session(sid)
+        assert removed is True
+        assert sid not in backend.sessions
 
 
 # ---------------------------------------------------------------------------
@@ -1067,6 +1234,67 @@ class TestBackendHandleRequest:
         assert r2.status == 200
 
     @pytest.mark.asyncio
+    async def test_handle_request_fifo_cancelled_during_queue_wait_returns_499(
+        self, serverless_backend_testkit, vast_serverless_backend_module
+    ) -> None:
+        """
+        Verifies FIFO mode maps client disconnect (CancelledError) to HTTP 499.
+
+        This test verifies by:
+        1. Patching ``asyncio.Event`` in the backend module so ``wait`` raises ``CancelledError``
+        2. Invoking the wrapped handler in non-parallel mode
+        3. Asserting status 499 and ``_request_canceled`` on metrics
+
+        Assumptions:
+        - aiohttp handler cancellation surfaces as ``CancelledError`` from ``event.wait()``
+        """
+        backend, handler = serverless_backend_testkit.make_backend(allow_parallel=False)
+        fn = backend.create_handler(handler)
+        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+
+        mock_ev = MagicMock()
+        mock_ev.wait = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_ev.set = MagicMock()
+
+        with patch.object(vast_serverless_backend_module.asyncio, "Event", return_value=mock_ev):
+            with patch.object(backend.metrics, "_request_canceled") as mock_cancel:
+                resp = await fn(req)
+
+        assert resp.status == 499
+        mock_cancel.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_request_fifo_create_task_failure_returns_500(
+        self,
+        serverless_backend_testkit,
+        vast_serverless_backend_module,
+        serverless_create_task_side_effect_close_coro,
+    ) -> None:
+        """
+        Verifies unexpected errors after the queue wait yield HTTP 500 from the outer handler.
+
+        This test verifies by:
+        1. Using a single FIFO request so ``event.wait`` resolves immediately
+        2. Patching ``create_task`` in the backend module to raise ``RuntimeError``
+        3. Asserting response status 500
+
+        Assumptions:
+        - The ``except Exception`` block in ``__handle_request`` covers failures between wait and work completion
+        """
+        backend, handler = serverless_backend_testkit.make_backend(allow_parallel=False)
+        fn = backend.create_handler(handler)
+        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+
+        with patch.object(
+            vast_serverless_backend_module,
+            "create_task",
+            side_effect=serverless_create_task_side_effect_close_coro(),
+        ):
+            resp = await fn(req)
+
+        assert resp.status == 500
+
+    @pytest.mark.asyncio
     async def test_handle_request_invalid_signature_returns_401(
         self, serverless_backend_testkit, make_serverless_test_rsa_key
     ) -> None:
@@ -1157,6 +1385,8 @@ class TestBackendSessionGc:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
+        register_pyworker_backend_session_with_metrics,
+        vast_serverless_backend_module,
         make_patch_skip_backend_run_session_on_close,
     ) -> None:
         """
@@ -1172,7 +1402,7 @@ class TestBackendSessionGc:
         """
         backend, _ = serverless_backend_and_handler_default
         sid = "expired-gc"
-        backend.sessions[sid] = make_pyworker_session(
+        sess = make_pyworker_session(
             session_id=sid,
             lifetime=10.0,
             auth_data={},
@@ -1180,7 +1410,7 @@ class TestBackendSessionGc:
             on_close_route=None,
             on_close_payload=None,
         )
-        backend.session_metrics[sid] = MagicMock()
+        register_pyworker_backend_session_with_metrics(backend, sess)
         session_removed = asyncio.Event()
         orig_close = backend._Backend__close_session
 
@@ -1194,7 +1424,7 @@ class TestBackendSessionGc:
         async def _yield_only(_delay: float = 0) -> None:
             await asyncio.sleep(0)
 
-        with patch("vastai.serverless.server.lib.backend.sleep", side_effect=_yield_only):
+        with patch.object(vast_serverless_backend_module, "sleep", side_effect=_yield_only):
             with make_patch_skip_backend_run_session_on_close(backend):
                 with patch.object(backend, "_Backend__close_session", _close_then_signal):
                     task = asyncio.create_task(backend._Backend__session_gc_loop())
@@ -1206,6 +1436,29 @@ class TestBackendSessionGc:
                         pass
 
         assert sid not in backend.sessions
+
+    @pytest.mark.asyncio
+    async def test_session_gc_loop_propagates_cancellation(
+        self, serverless_backend_and_handler_default, vast_serverless_backend_module
+    ) -> None:
+        """
+        Verifies ``CancelledError`` from the GC sleep exits the loop (task teardown).
+
+        This test verifies by:
+        1. Patching ``sleep`` to raise ``CancelledError`` on the first iteration
+        2. Awaiting ``__session_gc_loop`` and expecting ``CancelledError`` to propagate
+
+        Assumptions:
+        - The loop re-raises cancellation so asyncio can retire the background task
+        """
+        backend, _ = serverless_backend_and_handler_default
+
+        async def sleep_raises_cancelled(_delay: float) -> None:
+            raise asyncio.CancelledError()
+
+        with patch.object(vast_serverless_backend_module, "sleep", side_effect=sleep_raises_cancelled):
+            with pytest.raises(asyncio.CancelledError):
+                await backend._Backend__session_gc_loop()
 
 
 # ---------------------------------------------------------------------------
@@ -1447,3 +1700,371 @@ class TestBackendHelpers:
         )
         await backend._Backend__run_session_on_close(session)
         mock_sess.post.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Public key fetch, start_tracking, healthcheck loop
+# ---------------------------------------------------------------------------
+
+
+class TestBackendFetchPubkey:
+    """Tests for Backend._fetch_pubkey (retry + RSA import)."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_pubkey_success_sets_key_and_event(
+        self,
+        serverless_backend_and_handler_default,
+        make_serverless_test_rsa_key,
+        vast_serverless_backend_module,
+        make_serverless_pubkey_fetch_client_session_cm,
+    ) -> None:
+        """
+        Verifies a successful HTTP fetch imports the PEM and sets __pubkey_fetch_complete.
+
+        This test verifies by:
+        1. Patching ``ClientSession`` in ``backend`` module to return a mock GET with PEM body
+        2. Awaiting ``_fetch_pubkey`` and asserting ``_pubkey`` is non-None and the event is set
+
+        Assumptions:
+        - First GET attempt succeeds; no backoff sleep path is exercised
+        """
+        backend, _ = serverless_backend_and_handler_default
+        backend._Backend__pubkey_fetch_complete.clear()
+        pem = make_serverless_test_rsa_key().export_key(format="PEM").decode()
+        sess_cm = make_serverless_pubkey_fetch_client_session_cm(response_text=pem)
+
+        with patch.object(vast_serverless_backend_module, "ClientSession", return_value=sess_cm):
+            await backend._fetch_pubkey()
+
+        assert backend._pubkey is not None
+        assert backend._Backend__pubkey_fetch_complete.is_set()
+        assert backend._Backend__pubkey_failed is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_pubkey_exhausts_retries_sets_failed_and_signals_complete(
+        self,
+        serverless_backend_and_handler_default,
+        vast_serverless_backend_module,
+        make_serverless_pubkey_fetch_client_session_cm,
+    ) -> None:
+        """
+        Verifies repeated failures mark pubkey fetch as failed and call backend_errored.
+
+        This test verifies by:
+        1. Making every ``client.get`` raise ``ClientConnectorError``
+        2. Patching ``asyncio.sleep`` in the backend module to avoid real delays
+        3. Patching ``backend_errored`` and asserting failure state after all attempts
+
+        Assumptions:
+        - ``MAX_PUBKEY_FETCH_ATTEMPTS`` attempts run; final state matches the error path
+        """
+        backend, _ = serverless_backend_and_handler_default
+        backend._Backend__pubkey_fetch_complete.clear()
+        backend._Backend__pubkey_failed = False
+
+        sess_cm = make_serverless_pubkey_fetch_client_session_cm(
+            get_aenter_error=vast_serverless_backend_module.ClientConnectorError(
+                MagicMock(), MagicMock()
+            ),
+        )
+
+        with patch.object(vast_serverless_backend_module, "ClientSession", return_value=sess_cm):
+            with patch.object(vast_serverless_backend_module.asyncio, "sleep", new_callable=AsyncMock):
+                with patch.object(backend, "backend_errored") as mock_errored:
+                    await backend._fetch_pubkey()
+
+        assert backend._Backend__pubkey_failed is True
+        assert backend._Backend__pubkey_fetch_complete.is_set()
+        mock_errored.assert_called_once()
+        assert "public key" in mock_errored.call_args[0][0].lower()
+
+    @pytest.mark.asyncio
+    async def test_fetch_pubkey_succeeds_on_second_attempt_after_invalid_pem(
+        self,
+        serverless_backend_and_handler_default,
+        make_serverless_test_rsa_key,
+        vast_serverless_backend_module,
+        make_serverless_pubkey_fetch_client_session_cm,
+    ) -> None:
+        """
+        Verifies a failed RSA import on the first attempt retries after backoff sleep.
+
+        This test verifies by:
+        1. Returning invalid PEM text on the first HTTP response and valid PEM on the second
+        2. Patching ``asyncio.sleep`` in the backend module so backoff is instant
+        3. Asserting ``_pubkey`` is set and sleep was awaited between attempts
+
+        Assumptions:
+        - ``RSA.import_key`` raises ``ValueError`` for the first body, which hits the retry path
+        """
+        backend, _ = serverless_backend_and_handler_default
+        backend._Backend__pubkey_fetch_complete.clear()
+        good_pem = make_serverless_test_rsa_key().export_key(format="PEM").decode()
+        bodies = iter(["-----BEGIN NOT REAL-----\nxx\n-----END NOT REAL-----\n", good_pem])
+        build = make_serverless_pubkey_fetch_client_session_cm
+
+        with patch.object(
+            vast_serverless_backend_module,
+            "ClientSession",
+            side_effect=lambda *a, **k: build(response_text=next(bodies)),
+        ):
+            with patch.object(vast_serverless_backend_module.asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+                await backend._fetch_pubkey()
+
+        mock_sleep.assert_awaited()
+        assert backend._pubkey is not None
+        assert backend._Backend__pubkey_fetch_complete.is_set()
+        assert backend._Backend__pubkey_failed is False
+
+
+class TestBackendStartTracking:
+    """Tests for Backend._start_tracking orchestration."""
+
+    @pytest.mark.asyncio
+    async def test_start_tracking_gathers_six_background_coroutines(
+        self, serverless_backend_and_handler_default, vast_serverless_backend_module
+    ) -> None:
+        """
+        Verifies _start_tracking awaits gather with six concurrent background tasks.
+
+        This test verifies by:
+        1. Replacing ``gather`` in ``vastai.serverless.server.lib.backend`` with a spy
+           that records arity then delegates to ``asyncio.gather``
+        2. Patching each spawned coroutine source so none block on I/O
+
+        Assumptions:
+        - Implementation continues to pass exactly six awaitables to ``gather``
+        """
+        backend, _ = serverless_backend_and_handler_default
+        captured: list[int] = []
+
+        async def spy_gather(*aws, **kwargs):
+            captured.append(len(aws))
+            return await asyncio.gather(*aws, **kwargs)
+
+        with patch.object(vast_serverless_backend_module, "gather", side_effect=spy_gather):
+            with patch.object(backend, "_fetch_pubkey", new_callable=AsyncMock):
+                with patch.object(backend, "_Backend__read_logs", new_callable=AsyncMock):
+                    with patch.object(backend.metrics, "_send_metrics_loop", new_callable=AsyncMock):
+                        with patch.object(backend, "_Backend__healthcheck", new_callable=AsyncMock):
+                            with patch.object(
+                                backend.metrics, "_send_delete_requests_loop", new_callable=AsyncMock
+                            ):
+                                with patch.object(
+                                    backend, "_Backend__session_gc_loop", new_callable=AsyncMock
+                                ):
+                                    await backend._start_tracking()
+
+        assert captured == [6]
+
+
+class TestBackendHealthcheck:
+    """Tests for Backend.__healthcheck."""
+
+    @pytest.mark.asyncio
+    async def test_healthcheck_no_endpoint_returns_immediately(
+        self,
+        serverless_backend_and_handler_default,
+        attach_serverless_backend_aiohttp_session_get_spy,
+    ) -> None:
+        """
+        Verifies __healthcheck exits without looping when MODEL_HEALTH_ENDPOINT is unset.
+
+        This test verifies by:
+        1. Ensuring ``healthcheck_url`` is empty on the backend instance
+        2. Awaiting ``__healthcheck`` and asserting it returns without touching ``session.get``
+
+        Assumptions:
+        - Early return happens before the infinite loop and before any sleep
+        """
+        backend, _ = serverless_backend_and_handler_default
+        object.__setattr__(backend, "healthcheck_url", "")
+        mock_sess = attach_serverless_backend_aiohttp_session_get_spy(backend)
+
+        await backend._Backend__healthcheck()
+
+        mock_sess.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_healthcheck_skips_http_until_start_healthcheck_enabled(
+        self,
+        serverless_backend_and_handler_default,
+        vast_serverless_backend_module,
+        attach_serverless_backend_aiohttp_session_get_spy,
+    ) -> None:
+        """
+        Verifies the loop continues without GET while ``__start_healthcheck`` is false.
+
+        This test verifies by:
+        1. Setting a non-empty ``healthcheck_url`` but leaving ``__start_healthcheck`` false
+        2. Patching ``sleep`` to run several iterations then raise ``CancelledError``
+        3. Asserting ``session.get`` was never called
+
+        Assumptions:
+        - Production sets ``__start_healthcheck`` after model load; until then health probes are skipped
+        """
+        backend, _ = serverless_backend_and_handler_default
+        backend._Backend__start_healthcheck = False
+        object.__setattr__(backend, "healthcheck_url", "http://model/pending")
+
+        mock_sess = attach_serverless_backend_aiohttp_session_get_spy(backend)
+
+        phase = {"n": 0}
+
+        async def sleep_then_cancel(_delay: float) -> None:
+            phase["n"] += 1
+            if phase["n"] >= 3:
+                raise asyncio.CancelledError()
+
+        with patch.object(vast_serverless_backend_module, "sleep", side_effect=sleep_then_cancel):
+            await backend._Backend__healthcheck()
+
+        mock_sess.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_healthcheck_first_success_sets_ready_event(
+        self,
+        serverless_backend_and_handler_default,
+        vast_serverless_backend_module,
+        attach_serverless_backend_aiohttp_session_get_spy,
+        make_serverless_aiohttp_get_context_manager,
+    ) -> None:
+        """
+        Verifies the first HTTP 200 healthcheck sets __healthcheck_ready when startup flag is on.
+
+        This test verifies by:
+        1. Setting ``healthcheck_url``, ``__start_healthcheck``, and a mock ``session.get`` returning 200
+        2. Patching ``sleep`` so the first iteration runs then CancelledError ends the loop
+        3. Asserting ``__healthcheck_ready`` is set and ``get`` was used
+
+        Assumptions:
+        - CancelledError from ``sleep`` on the second iteration exits the loop cleanly
+        """
+        backend, _ = serverless_backend_and_handler_default
+        backend._Backend__healthcheck_ready = asyncio.Event()
+        backend._Backend__healthcheck_succeeded = False
+        backend._Backend__start_healthcheck = True
+        object.__setattr__(backend, "healthcheck_url", "http://model/ready")
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_sess = attach_serverless_backend_aiohttp_session_get_spy(backend)
+        mock_sess.get = MagicMock(return_value=make_serverless_aiohttp_get_context_manager(mock_resp))
+
+        sleep_phase = {"n": 0}
+
+        async def sleep_then_stop(_delay: float) -> None:
+            sleep_phase["n"] += 1
+            if sleep_phase["n"] > 1:
+                raise asyncio.CancelledError()
+
+        with patch.object(vast_serverless_backend_module, "sleep", side_effect=sleep_then_stop):
+            await backend._Backend__healthcheck()
+
+        assert backend._Backend__healthcheck_ready.is_set()
+        assert backend._Backend__healthcheck_succeeded is True
+        mock_sess.get.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_healthcheck_non_200_after_success_calls_backend_errored(
+        self,
+        serverless_backend_and_handler_default,
+        vast_serverless_backend_module,
+        attach_serverless_backend_aiohttp_session_get_spy,
+        make_serverless_aiohttp_get_context_manager,
+    ) -> None:
+        """
+        Verifies a failing status after a prior success reports via backend_errored.
+
+        This test verifies by:
+        1. Simulating one 200 response then a 503 on the next iteration
+        2. Patching sleep to advance iterations then cancel
+        3. Asserting ``backend_errored`` was called with a status message
+
+        Assumptions:
+        - ``__healthcheck_succeeded`` is only True after the first 200; second GET is 503
+        """
+        backend, _ = serverless_backend_and_handler_default
+        backend._Backend__healthcheck_ready = asyncio.Event()
+        backend._Backend__healthcheck_succeeded = False
+        backend._Backend__start_healthcheck = True
+        object.__setattr__(backend, "healthcheck_url", "http://model/hc")
+
+        wrap = make_serverless_aiohttp_get_context_manager
+        responses = [
+            MagicMock(status=200),
+            MagicMock(status=503),
+        ]
+
+        def next_get_cm():
+            return wrap(responses.pop(0))
+
+        mock_sess = attach_serverless_backend_aiohttp_session_get_spy(backend)
+        mock_sess.get = MagicMock(side_effect=lambda *a, **k: next_get_cm())
+
+        sleep_phase = {"n": 0}
+
+        async def sleep_then_stop(_delay: float) -> None:
+            sleep_phase["n"] += 1
+            if sleep_phase["n"] > 2:
+                raise asyncio.CancelledError()
+
+        with patch.object(vast_serverless_backend_module, "sleep", side_effect=sleep_then_stop):
+            with patch.object(backend, "backend_errored") as mock_err:
+                await backend._Backend__healthcheck()
+
+        mock_err.assert_called_once()
+        assert "503" in mock_err.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_healthcheck_exception_after_success_calls_backend_errored(
+        self,
+        serverless_backend_and_handler_default,
+        vast_serverless_backend_module,
+        attach_serverless_backend_aiohttp_session_get_spy,
+        make_serverless_aiohttp_get_context_manager,
+    ) -> None:
+        """
+        Verifies connection errors after a successful check invoke backend_errored.
+
+        This test verifies by:
+        1. First GET succeeds (200), second ``session.get`` raises RuntimeError
+        2. Patching sleep between iterations
+        3. Asserting backend_errored receives the exception string
+
+        Assumptions:
+        - Exception path uses the same ``if self.__healthcheck_succeeded`` guard as HTTP errors
+        """
+        backend, _ = serverless_backend_and_handler_default
+        backend._Backend__healthcheck_ready = asyncio.Event()
+        backend._Backend__healthcheck_succeeded = False
+        backend._Backend__start_healthcheck = True
+        object.__setattr__(backend, "healthcheck_url", "http://model/hc")
+
+        ok_resp = MagicMock(status=200)
+        ok_cm = make_serverless_aiohttp_get_context_manager(ok_resp)
+
+        call_count = {"n": 0}
+
+        def get_side_effect(*a, **k):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return ok_cm
+            raise RuntimeError("connection reset")
+
+        mock_sess = attach_serverless_backend_aiohttp_session_get_spy(backend)
+        mock_sess.get = MagicMock(side_effect=get_side_effect)
+
+        sleep_phase = {"n": 0}
+
+        async def sleep_then_stop(_delay: float) -> None:
+            sleep_phase["n"] += 1
+            if sleep_phase["n"] > 2:
+                raise asyncio.CancelledError()
+
+        with patch.object(vast_serverless_backend_module, "sleep", side_effect=sleep_then_stop):
+            with patch.object(backend, "backend_errored") as mock_err:
+                await backend._Backend__healthcheck()
+
+        mock_err.assert_called_once()
+        assert "connection reset" in mock_err.call_args[0][0]
