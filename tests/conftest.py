@@ -7,7 +7,8 @@ conftest.py for reuse across test files. Pyworker ``Metrics`` helpers live in th
 One fixture name per *kind* of resource; use factory callables for variants
 (``make_request_http_mocks``, ``make_route_response_mock``, ``server_worker_config``,
 ``client_worker_dict``, ``make_session_mock``, ``make_client_session``, ``session_on_mock_endpoint``,
-``make_mock_endpoint_for_session``, ``make_delegate_endpoint``, ``make_serverless_bound_session``,
+``make_mock_endpoint_for_session``, ``make_delegate_endpoint`` (only factory for ``Endpoint`` on
+``mock_serverless_client``), ``make_serverless_bound_session``,
 ``make_test_endpoint``,
 ``make_backend_http_request``, ``make_mock_root_logger``, …) instead of parallel fixtures.
 
@@ -18,7 +19,13 @@ Serverless pyworker: ``serverless_backend_and_handler_default`` (default ``Backe
 ``serverless_tracked_runner_and_tcp_site`` (AppRunner/TCPSite capture bundle for ``server.lib.server``),
 ``run_serverless_start_server_async_patched`` (async helper applying standard start_server_async patches),
 ``make_patch_skip_backend_run_session_on_close`` / ``make_patch_mock_backend_close_session``,
+``attach_serverless_backend_mock_aiohttp_session`` (single mock ``ClientSession`` on ``backend.session``),
+``make_serverless_fetch_pubkey_client_session_return_value``, ``make_serverless_backend_session_get_steps``,
+``serverless_backend_ok_json_response_chain``, ``make_serverless_mock_request_with_transport``,
 ``make_serverless_test_rsa_key`` (RSA key factory for signature tests).
+
+Serverless SSL: ``serverless_ssl_self_signed_cert_pem``, ``serverless_ssl_ca_chain_without_key_cert_sign``,
+``patch_serverless_ssl_cert_download`` (callable returning a ``ClientSession`` download patch).
 
 An autouse fixture restores the ``Serverless`` logger after each test so global
 logging state follows RAII and cannot leak between cases.
@@ -28,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import dataclasses
+import datetime
 import inspect
 import json
 import logging
@@ -39,6 +47,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import ClientResponseError, web
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
@@ -579,12 +591,39 @@ def make_serverless_tracked_tcp_site():
 
 @pytest.fixture
 def serverless_gather_await_all():
-    """Async gather replacement that awaits each passed awaitable (for mocked site.start())."""
+    """Async gather replacement that awaits each awaitable (for mocked ``site.start()``).
+
+    If an early awaitable raises :class:`Exception`, remaining awaitables are cleaned up:
+    :class:`asyncio.Task` / :class:`asyncio.Future` are cancelled; bare coroutines are
+    closed via ``.close()``; other awaitables get ``.close()`` when present (same idea as
+    ``serverless_gather_raise_bind_failed``). Uses ``Exception`` (not ``BaseException``)
+    so ``KeyboardInterrupt`` / ``SystemExit`` propagate for local debugging.
+
+    ``**kwargs`` are accepted for call-shape parity with :func:`asyncio.gather` but ignored
+    (this stub does not implement ``return_exceptions`` etc.).
+    """
 
     async def _gather(*aws, **kwargs):
-        for aw in aws:
-            await aw
-        return None
+        pending = list(aws)
+        idx = -1
+        try:
+            for idx in range(len(pending)):
+                await pending[idx]
+            return None
+        except Exception:
+            for j in range(idx + 1, len(pending)):
+                aw = pending[j]
+                if isinstance(aw, asyncio.Task):
+                    aw.cancel()
+                elif isinstance(aw, asyncio.Future):
+                    aw.cancel()
+                elif inspect.iscoroutine(aw):
+                    aw.close()
+                elif inspect.isawaitable(aw):
+                    closer = getattr(aw, "close", None)
+                    if callable(closer):
+                        closer()
+            raise
 
     return _gather
 
@@ -646,43 +685,182 @@ def serverless_aiohttp_route_path_tuples():
     return _paths
 
 
+def _serverless_aiohttp_async_enter_context(
+    enter_result: Any | None = None,
+    *,
+    enter_side_effect: BaseException | None = None,
+) -> MagicMock:
+    """``async with`` context manager mock (``__aenter__`` / ``__aexit__``)."""
+    cm = MagicMock()
+    if enter_side_effect is not None:
+        cm.__aenter__ = AsyncMock(side_effect=enter_side_effect)
+    else:
+        cm.__aenter__ = AsyncMock(return_value=enter_result)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
+def _attach_serverless_backend_mock_aiohttp_session(
+    backend: Backend,
+    *,
+    spy_only: bool = False,
+    post_side_effect: BaseException | None = None,
+    response_text: str = "ok",
+    response_status: int = 200,
+    get_context_return: MagicMock | None = None,
+    get_side_effect=None,
+) -> MagicMock:
+    """Attach one mock aiohttp session to ``backend.session`` (GET + POST)."""
+    mock_sess = MagicMock()
+    if get_side_effect is not None:
+        mock_sess.get = MagicMock(side_effect=get_side_effect)
+    elif get_context_return is not None:
+        mock_sess.get = MagicMock(return_value=get_context_return)
+    else:
+        mock_sess.get = MagicMock()
+
+    if spy_only:
+        mock_sess.post = MagicMock()
+    elif post_side_effect is not None:
+        mock_sess.post = MagicMock(side_effect=post_side_effect)
+    else:
+        mock_resp = MagicMock()
+        mock_resp.status = response_status
+        mock_resp.text = AsyncMock(return_value=response_text)
+        mock_sess.post = MagicMock(return_value=_serverless_aiohttp_async_enter_context(mock_resp))
+
+    object.__setattr__(backend, "session", mock_sess)
+    return mock_sess
+
+
 @pytest.fixture
-def attach_serverless_backend_mock_session_post():
-    """Replace backend.session with a mock ClientSession for ``__run_session_on_close`` tests.
+def attach_serverless_backend_mock_aiohttp_session():
+    """Attach a single mock aiohttp ``ClientSession`` on ``backend.session`` (GET + POST).
 
     Call before any code path reads ``backend.session`` so the real ``cached_property``
     is never evaluated (avoids opening a real ``TCPConnector`` / ``ClientSession``).
 
-    By default ``post()`` returns an async context manager with a successful response.
-    Use ``spy_only=True`` for a bare ``post`` mock (no HTTP). Use ``post_side_effect``
-    to simulate connection errors. Only one attachment pattern should be used per test.
+    Post: default successful JSON/text response; ``spy_only`` / ``post_side_effect`` for variants.
+    Get: ``get_context_return`` (static async CM from ``make_serverless_aiohttp_get_context_manager``)
+    or ``get_side_effect`` (e.g. from ``make_serverless_backend_session_get_steps``).
     """
+    return _attach_serverless_backend_mock_aiohttp_session
 
-    def _attach(
+
+@pytest.fixture
+def make_serverless_aiohttp_get_context_manager():
+    """Factory: build an async context manager for one aiohttp response object."""
+    return _serverless_aiohttp_async_enter_context
+
+
+@pytest.fixture
+def make_serverless_fetch_pubkey_client_session_return_value():
+    """Return value for ``patch(..., ClientSession, return_value=...)`` in ``Backend._fetch_pubkey`` tests."""
+
+    def _make(
+        *,
+        pem_text: str | None = None,
+        session_enter_error: BaseException | None = None,
+    ) -> MagicMock:
+        if session_enter_error is not None:
+            return _serverless_aiohttp_async_enter_context(enter_side_effect=session_enter_error)
+        if pem_text is None:
+            raise ValueError("pem_text is required when session_enter_error is None")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.text = AsyncMock(return_value=pem_text)
+        mock_client = MagicMock()
+        mock_client.get = MagicMock(return_value=_serverless_aiohttp_async_enter_context(mock_resp))
+        return _serverless_aiohttp_async_enter_context(mock_client)
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_sleep_cancel_on_nth_call():
+    """Async ``sleep`` replacement that raises ``CancelledError`` starting at the *n*-th invocation."""
+
+    def _make(n: int):
+        count = [0]
+
+        async def _sleep(_delay: float) -> None:
+            count[0] += 1
+            if count[0] >= n:
+                raise asyncio.CancelledError()
+
+        return _sleep
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_backend_healthcheck_attrs():
+    """Set ``healthcheck_url`` / ``_Backend__start_healthcheck`` / ``_Backend__healthcheck_succeeded``."""
+
+    def _apply(
         backend: Backend,
         *,
-        response_text: str = "ok",
-        response_status: int = 200,
-        post_side_effect: BaseException | None = None,
-        spy_only: bool = False,
-    ) -> MagicMock:
-        mock_sess = MagicMock()
-        if spy_only:
-            mock_sess.post = MagicMock()
-        elif post_side_effect is not None:
-            mock_sess.post = MagicMock(side_effect=post_side_effect)
-        else:
-            mock_resp = MagicMock()
-            mock_resp.status = response_status
-            mock_resp.text = AsyncMock(return_value=response_text)
-            mock_post_cm = MagicMock()
-            mock_post_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-            mock_post_cm.__aexit__ = AsyncMock(return_value=None)
-            mock_sess.post = MagicMock(return_value=mock_post_cm)
-        object.__setattr__(backend, "session", mock_sess)
-        return mock_sess
+        url: str,
+        start: bool = True,
+        succeeded: bool = False,
+    ) -> None:
+        object.__setattr__(backend, "healthcheck_url", url)
+        object.__setattr__(backend, "_Backend__start_healthcheck", start)
+        object.__setattr__(backend, "_Backend__healthcheck_succeeded", succeeded)
 
-    return _attach
+    return _apply
+
+
+@pytest.fixture
+def make_serverless_backend_session_get_steps():
+    """Build ``session.get`` side_effect: each call returns a CM for a response mock or raises."""
+
+    def _make(steps: list[Any]):
+        seq = iter(steps)
+
+        def _get(*_a, **_k):
+            step = next(seq)
+            if isinstance(step, BaseException):
+                raise step
+            return _serverless_aiohttp_async_enter_context(step)
+
+        return _get
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_mock_request_with_transport():
+    """Build ``(mock_request, mock_transport)`` for ``Session.requests`` transport tests."""
+
+    def _make(*, close_side_effect: BaseException | None = None):
+        mock_tr = MagicMock()
+        mock_tr.is_closing.return_value = False
+        if close_side_effect is not None:
+            mock_tr.close.side_effect = close_side_effect
+        mock_req = MagicMock()
+        mock_req.transport = mock_tr
+        return mock_req, mock_tr
+
+    return _make
+
+
+@pytest.fixture
+def serverless_backend_ok_json_response_chain():
+    """Shared ``MagicMock`` model + async stubs for successful ``__call_backend`` / ``generate_client_response``."""
+    mock_model = MagicMock()
+
+    async def call_backend(**kwargs):
+        return mock_model
+
+    async def gen_client_response(_client_request, _model_response):
+        return web.json_response({"ok": True})
+
+    return SimpleNamespace(
+        mock_model=mock_model,
+        call_backend=call_backend,
+        gen_client_response=gen_client_response,
+    )
 
 
 @pytest.fixture
@@ -1182,7 +1360,12 @@ def mock_serverless_client():
 
 @pytest.fixture
 def make_delegate_endpoint(mock_serverless_client):
-    """Factory: :class:`Endpoint` on ``mock_serverless_client`` (delegation unit tests)."""
+    """Factory: :class:`Endpoint` bound to ``mock_serverless_client`` (delegation / session tests).
+
+    This is the single factory for a real :class:`Endpoint` instance backed by the shared
+    minimal mock client. Use :func:`make_serverless_endpoint` for endpoints on a real
+    :class:`Serverless` client.
+    """
 
     def _make(
         *,
@@ -1267,7 +1450,12 @@ def make_completed_serverless_request():
 
 @pytest.fixture
 def make_session_mock():
-    """Single factory: ``MagicMock(spec=Session)`` for client session HTTP tests."""
+    """Factory: ``MagicMock(spec=Session)`` stub (not a real :class:`Session` instance).
+
+    For a real :class:`Session`, use ``make_client_session`` (mock endpoint),
+    ``make_session`` / ``sample_session`` (delegate :class:`Endpoint`), or
+    ``make_serverless_bound_session`` (real :class:`Serverless` client).
+    """
 
     def _make(
         *,
@@ -1379,36 +1567,24 @@ def session_on_mock_endpoint(make_mock_endpoint_for_session, make_client_session
 
 
 # ---------------------------------------------------------------------------
-# Fixtures for test_client_session.py (Endpoint/Session on mock client)
+# Client Session on delegate Endpoint (test_client_session.py)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def make_endpoint(mock_serverless_client):
-    """Factory: create Endpoint bound to mock_serverless_client."""
-
-    def _make(name="test-endpoint", id=1, api_key="ep-api-key"):
-        return Endpoint(
-            client=mock_serverless_client,
-            name=name,
-            id=id,
-            api_key=api_key,
-        )
-
-    return _make
+def sample_endpoint(make_delegate_endpoint):
+    """:class:`Endpoint` on ``mock_serverless_client`` with ``test_client_session`` defaults."""
+    return make_delegate_endpoint(
+        name="test-endpoint", endpoint_id=1, api_key="ep-api-key"
+    )
 
 
 @pytest.fixture
-def sample_endpoint(make_endpoint):
-    """A ready-to-use Endpoint instance with default values."""
-    return make_endpoint()
-
-
-@pytest.fixture
-def make_session(sample_endpoint):
-    """Factory: create Session bound to sample_endpoint."""
+def make_session(make_delegate_endpoint):
+    """Factory: :class:`Session` bound to a delegate :class:`Endpoint` (real type, mock client)."""
 
     def _make(
+        endpoint=None,
         session_id="sess-123",
         lifetime=60.0,
         expiration="2026-12-31T00:00:00Z",
@@ -1417,10 +1593,13 @@ def make_session(sample_endpoint):
         on_close_route=None,
         on_close_payload=None,
     ):
+        ep = endpoint if endpoint is not None else make_delegate_endpoint(
+            name="test-endpoint", endpoint_id=1, api_key="ep-api-key"
+        )
         if auth_data is None:
             auth_data = {"url": "https://worker1.vast.ai", "signature": "abc"}
         return Session(
-            endpoint=sample_endpoint,
+            endpoint=ep,
             session_id=session_id,
             lifetime=lifetime,
             expiration=expiration,
@@ -1435,5 +1614,126 @@ def make_session(sample_endpoint):
 
 @pytest.fixture
 def sample_session(make_session):
-    """A ready-to-use Session instance with default values."""
+    """A ready-to-use :class:`Session` on the default delegate endpoint."""
     return make_session()
+
+
+# ---------------------------------------------------------------------------
+# Serverless client SSL test helpers (test_client_ssl.py)
+# ---------------------------------------------------------------------------
+
+
+_NOW_SSL = datetime.datetime.now(datetime.UTC)
+
+
+def _serverless_ssl_generate_key():
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def _serverless_ssl_dummy_cert_pem() -> bytes:
+    """Self-signed PEM used only to satisfy ``load_verify_locations`` in SSL tests."""
+    key = _serverless_ssl_generate_key()
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(_NOW_SSL)
+        .not_valid_after(_NOW_SSL + datetime.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.PEM)
+
+
+def serverless_ssl_build_ca_chain_without_key_cert_sign() -> tuple[bytes, bytes, bytes]:
+    """CA + leaf PEM bytes mimicking a CA without keyCertSign (see test_client_ssl docstring)."""
+    ca_key = _serverless_ssl_generate_key()
+    ca_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Test CA (no keyCertSign)")]
+    )
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(_NOW_SSL)
+        .not_valid_after(_NOW_SSL + datetime.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    leaf_key = _serverless_ssl_generate_key()
+    leaf_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    leaf_cert = (
+        x509.CertificateBuilder()
+        .subject_name(leaf_name)
+        .issuer_name(ca_name)
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(_NOW_SSL)
+        .not_valid_after(_NOW_SSL + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("localhost")]),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM)
+    leaf_pem = leaf_cert.public_bytes(serialization.Encoding.PEM)
+    leaf_key_pem = leaf_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+    return ca_pem, leaf_pem, leaf_key_pem
+
+
+def patch_serverless_client_cert_download(cert_pem: bytes):
+    """Patch ``aiohttp.ClientSession`` so the trust-store GET returns ``cert_pem``."""
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.read = AsyncMock(return_value=cert_pem)
+
+    mock_session_ctx = AsyncMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_session_ctx)
+
+    mock_session_outer = AsyncMock()
+    mock_session_outer.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_outer.__aexit__ = AsyncMock(return_value=False)
+
+    return patch(
+        "vastai.serverless.client.client.aiohttp.ClientSession",
+        return_value=mock_session_outer,
+    )
+
+
+@pytest.fixture
+def serverless_ssl_self_signed_cert_pem():
+    """Dummy PEM leaf for ``get_ssl_context`` tests."""
+    return _serverless_ssl_dummy_cert_pem()
+
+
+@pytest.fixture
+def serverless_ssl_ca_chain_without_key_cert_sign():
+    """``(ca_pem, leaf_pem, leaf_key_pem)`` for OpenSSL strict-flag regression tests."""
+    return serverless_ssl_build_ca_chain_without_key_cert_sign()
+
+
+@pytest.fixture
+def patch_serverless_ssl_cert_download():
+    """Callable ``(cert_pem: bytes)`` returning an active ``patch`` for cert download."""
+    return patch_serverless_client_cert_download

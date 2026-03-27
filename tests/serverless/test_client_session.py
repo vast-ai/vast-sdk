@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from vastai.serverless.client.client import ServerlessRequest
 from vastai.serverless.client.session import Session
 
 
@@ -138,6 +139,30 @@ class TestSessionInit:
                 auth_data={},
             )
 
+    def test_accepts_empty_string_session_id(self, sample_endpoint) -> None:
+        """Documents that only ``None`` is rejected for ``session_id``, not ``""``."""
+        s = Session(
+            endpoint=sample_endpoint,
+            session_id="",
+            lifetime=60,
+            expiration="x",
+            url="https://w.vast.ai",
+            auth_data={},
+        )
+        assert s.session_id == ""
+
+    def test_accepts_empty_string_url(self, sample_endpoint) -> None:
+        """Documents that only ``None`` is rejected for ``url``, not ``""``."""
+        s = Session(
+            endpoint=sample_endpoint,
+            session_id="s1",
+            lifetime=60,
+            expiration="x",
+            url="",
+            auth_data={},
+        )
+        assert s.url == ""
+
 
 # ---------------------------------------------------------------------------
 # Session async context manager
@@ -211,12 +236,13 @@ class TestSessionIsOpen:
         Verifies that is_open returns True when healthcheck succeeds.
 
         This test verifies by:
-        1. Mocking endpoint.session_healthcheck to return True
+        1. Configuring ``mock_serverless_client.get_endpoint_session`` to return a session
+           object (what :meth:`~Endpoint.session_healthcheck` awaits internally)
         2. Calling is_open
         3. Asserting result is True and session.open is True
 
         Assumptions:
-        - is_open delegates to endpoint.session_healthcheck
+        - is_open delegates to endpoint.session_healthcheck → get_endpoint_session
         """
         mock_serverless_client.get_endpoint_session.return_value = MagicMock()
         result = await sample_session.is_open()
@@ -230,12 +256,12 @@ class TestSessionIsOpen:
         Verifies that is_open returns False and updates open when healthcheck fails.
 
         This test verifies by:
-        1. Mocking endpoint.session_healthcheck to return False
+        1. Configuring ``mock_serverless_client.get_endpoint_session`` to return ``None``
         2. Calling is_open
         3. Asserting result is False and session.open is False
 
         Assumptions:
-        - is_open sets self.open = result from healthcheck
+        - is_open sets self.open from session_healthcheck (non-None → healthy)
         """
         mock_serverless_client.get_endpoint_session.return_value = None
         result = await sample_session.is_open()
@@ -371,19 +397,22 @@ class TestSessionRequest:
         self, sample_session, mock_serverless_client
     ) -> None:
         """
-        Verifies that request calls endpoint.request with session=self.
+        Verifies that request forwards to the client via ``queue_endpoint_request``.
 
         This test verifies by:
-        1. Mocking queue_endpoint_request to return a completed future with result
-        2. Awaiting request
-        3. Asserting endpoint.request was called with correct params
+        1. Stubbing ``queue_endpoint_request`` with a resolved :class:`ServerlessRequest`
+           (sync API on :class:`Serverless`; return value is awaitable as a Future)
+        2. Awaiting ``session.request(...)``
+        3. Asserting ``queue_endpoint_request`` kwargs (worker_route, payload, session, …)
 
         Assumptions:
-        - _wrapped_request awaits endpoint.request with session=self
+        - _wrapped_request awaits the object returned by ``endpoint.request`` (a Future)
         """
-        mock_serverless_client.queue_endpoint_request = AsyncMock(
-            return_value={"ok": True, "status": 200, "response": {"result": "ok"}}
+        resolved = ServerlessRequest()
+        resolved.set_result(
+            {"ok": True, "status": 200, "response": {"result": "ok"}}
         )
+        mock_serverless_client.queue_endpoint_request = MagicMock(return_value=resolved)
         result = await sample_session.request(
             route="/predict",
             payload={"input": "test"},
