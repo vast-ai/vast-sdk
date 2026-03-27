@@ -335,7 +335,7 @@ class Backend:
     def session(self):
         log.debug(f"Starting TCP session with model server at {self.model_server_url}")
         connector = TCPConnector(
-            force_close=True, # Required for long running jobs
+            force_close=True,  # Required for long running jobs
             enable_cleanup_closed=True,
         )
         
@@ -464,7 +464,12 @@ class Backend:
 
         try:
             if handler.allow_parallel_requests:
-                work_task = create_task(make_request())
+                coro = make_request()
+                try:
+                    work_task = create_task(coro)
+                except Exception:
+                    coro.close()
+                    raise
                 # Handler cancellation will raise CancelledError on client disconnect
                 return await work_task
 
@@ -487,7 +492,12 @@ class Backend:
                     log.debug(f"Starting work on request {request_metrics.session_reqnum} in session {request_metrics.session.request_idx}")
 
                 # Execute the work task
-                work_task = create_task(make_request())
+                coro = make_request()
+                try:
+                    work_task = create_task(coro)
+                except Exception:
+                    coro.close()
+                    raise
                 return await work_task
 
         except asyncio.CancelledError:
@@ -765,8 +775,8 @@ class Backend:
                                 max_throughput=max_throughput,
                             )
                         except Exception as e:
-                            log.debug(f"Benchmark failed with errror: {e}")
-                            self.backend_errored(f"Benchmark failed with errror: {e}")
+                            log.debug(f"Benchmark failed with error: {e}")
+                            self.backend_errored(f"Benchmark failed with error: {e}")
                     case LogAction.ModelError if msg in log_line:
                         log.debug(f"Got log line indicating error: {log_line}")
                         self.backend_errored(msg)

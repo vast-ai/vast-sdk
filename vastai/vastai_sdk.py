@@ -1,7 +1,7 @@
 import importlib
 import types
 import argparse
-from typing import Optional, Any
+from typing import Any
 import io
 import contextlib
 import requests
@@ -10,7 +10,7 @@ import re
 import os
 import sys
 import logging
-from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore, quotedString, delimitedList, Suppress
+from pyparsing import Word, alphas, alphanums, one_of, Group, ZeroOrMore, quoted_string, DelimitedList, Suppress
 
 from .vastai_base import VastAIBase
 from .vast import parser, APIKEY_FILE
@@ -58,16 +58,16 @@ def queryParser(kwargs, instance):
     qstr = kwargs['query']
 
     key = Word(alphas + "_-")
-    operator = oneOf("= in != > < >= <=")
-    single_value = Word(alphanums + "_.-") | quotedString
+    operator = one_of("= in != > < >= <=")
+    single_value = Word(alphanums + "_.-") | quoted_string()
 
     array_value = (
-        Suppress("[") + delimitedList(quotedString) + Suppress("]")
-    ).setParseAction(lambda t: f"[{','.join(t)}]")
-    value = single_value | array_value 
+        Suppress("[") + DelimitedList(quoted_string()) + Suppress("]")
+    ).set_parse_action(lambda t: f"[{','.join(t)}]")
+    value = single_value | array_value
     expr = Group(key + operator + value)
     query = ZeroOrMore(expr)
-    parsed = query.parseString(qstr)
+    parsed = query.parse_string(qstr)
 
     toPass = []
 

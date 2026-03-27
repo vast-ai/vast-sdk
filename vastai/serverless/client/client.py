@@ -14,6 +14,11 @@ import time
 import collections
 from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Union, List
 
+
+class SessionCreateError(Exception):
+    """Queue returned ``ok`` for ``/session/create`` but no ``response`` body (see :meth:`Serverless.start_endpoint_session`)."""
+
+
 class ServerlessRequest(asyncio.Future):
     """A request to a Serverless endpoint managed by the client"""
     def __init__(self):
@@ -134,6 +139,11 @@ class Serverless:
 
             ctx = ssl.create_default_context()
             ctx.load_verify_locations(cafile=tmpfile.name)
+            # The Vast.ai root CA cert has pathlen set without keyCertSign in
+            # Key Usage.  OpenSSL 3.x (Python ≥3.10) rejects this by default.
+            # Clearing VERIFY_X509_STRICT relaxes that single check while
+            # keeping full chain-of-trust and signature verification intact.
+            ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
             self.logger.info("Loaded Vast.ai SSL certificate")
 
             self._ssl_context = ctx
@@ -303,11 +313,13 @@ class Serverless:
                 raise Exception(error_msg)
             response = session_start_response.get("response")
             if response is None:
-                raise Exception(f"No response from /session/create. Status {response.get('status')}")
-            session_id = session_start_response.get("response").get("session_id")
+                raise SessionCreateError("No response from /session/create")
+            if not isinstance(response, dict):
+                raise Exception("Invalid response from /session/create: expected mapping")
+            session_id = response.get("session_id")
             if session_id is None:
                 raise Exception("Missing session id")
-            expiration = session_start_response.get("response").get("expiration")
+            expiration = response.get("expiration")
             url = session_start_response.get("url")
             if url is None:
                 raise Exception("Missing URL")
@@ -316,6 +328,8 @@ class Serverless:
                 raise Exception("Missing auth data")
             return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, expiration=expiration, url=url, auth_data=auth_data)
         except asyncio.TimeoutError:
+            raise
+        except SessionCreateError:
             raise
         except Exception as ex:
             error_msg = f"Failed to create session: {ex}"
@@ -388,7 +402,7 @@ class Serverless:
                             request_idx = route.request_idx or request_idx
 
                             attempt += 1
-                            poll_interval = random.uniform(0.1, min((2 ** attempt) + random.uniform(0, 1), self.max_poll_interval))
+                            poll_interval = random.uniform(0.1, min(2 ** min(attempt, 20) + random.uniform(0, 1), self.max_poll_interval))
                             self.logger.debug(f"Polling route, attempt {attempt}")
 
                         worker_url = route.get_url()
@@ -448,7 +462,7 @@ class Serverless:
                                 raise asyncio.TimeoutError(f"Request timed out after {time.time() - start_time:.1f}s")
 
                             request.status = "Retrying"
-                            await asyncio.sleep(min((2 ** total_attempts) + random.uniform(0, 1), self.max_poll_interval))
+                            await asyncio.sleep(min(2 ** min(total_attempts, 20) + random.uniform(0, 1), self.max_poll_interval))
                             continue
 
                         # Return the raw HTTP result to the caller

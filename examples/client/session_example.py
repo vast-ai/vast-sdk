@@ -2,10 +2,13 @@ import asyncio
 import random
 from vastai import Serverless
 
-async def main():
-    async with Serverless() as client:
-        endpoint = await client.get_endpoint(name="my-comfy-endpoint")
+NUM_SESSIONS = 5
 
+
+async def run_with_session(endpoint, session_id):
+    """Run a single session with one request."""
+    session = await endpoint.session(cost=100, lifetime=30)
+    try:
         payload = {
             "input": {
                 "modifier": "Text2Image",
@@ -18,18 +21,21 @@ async def main():
                 },
             }
         }
+        response = await session.request("/generate/sync", payload, cost=100)
+        print(f"[Session {session_id}] {response['response']['output'][0]['local_path']}")
+    finally:
+        await session.close()
 
-        # Creating a session ensures all requests are routed to a single worker
-        # for the lifetime of the session.
-        # Use this for asynchronous jobs
-        session = await endpoint.session(cost=100, lifetime=30)
-        try:
-            response_a = await session.request("/generate/sync", payload, cost=100)
-            response_b = await session.request("/generate/sync", payload)
-            print(response_a["response"]["output"][0]["local_path"])
-            print(response_b["response"]["output"][0]["local_path"])
-        finally:
-            await session.close()
+
+async def main():
+    async with Serverless() as client:
+        endpoint = await client.get_endpoint(name="my-comfy-endpoint")
+
+        # Launch all sessions concurrently and gather results
+        await asyncio.gather(*(
+            run_with_session(endpoint, i) for i in range(NUM_SESSIONS)
+        ))
+
 
 if __name__ == "__main__":
     asyncio.run(main())
