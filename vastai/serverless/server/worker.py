@@ -228,7 +228,7 @@ class EndpointHandlerFactory:
                     raise RuntimeError(f"remote_function is not configured for route {self._route}")
 
                 try:
-                    return await self.remote_function(**params)
+                    return await self.remote_function(kwargs=params)
                 except Exception as ex:
                     raise RuntimeError(f"Error calling remote function for route {self._route}: {ex}") from ex
 
