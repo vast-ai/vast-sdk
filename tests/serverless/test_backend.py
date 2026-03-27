@@ -5,18 +5,19 @@ All I/O and crypto verification are mocked per unit-test-requirements (no real n
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiohttp import web
-from Crypto.PublicKey import RSA
+from aiohttp import ClientTimeout, web
 
 from vastai.serverless.server.lib.data_types import (
     JsonDataException,
     RequestMetrics,
 )
 
+pytestmark = pytest.mark.usefixtures("clear_get_url_cache")
 
 # ---------------------------------------------------------------------------
 # Session: health
@@ -32,7 +33,7 @@ class TestBackendSessionHealth:
         Verifies session_health_handler returns 422 when request body is not valid JSON.
 
         This test verifies by:
-        1. Building Backend via serverless_backend_testkit.make_backend
+        1. Using ``serverless_backend_and_handler_default`` for the Backend instance
         2. Calling session_health_handler with a mock request whose json() raises JSONDecodeError
         3. Asserting status 422 and error payload
 
@@ -302,6 +303,7 @@ class TestBackendSessionCreate:
         req = serverless_backend_testkit.json_request("not-json")
         resp = await backend.session_create_handler(req)
         assert resp.status == 422
+        assert serverless_backend_testkit.response_json(resp).get("error") == "invalid JSON"
 
     @pytest.mark.asyncio
     async def test_session_create_at_max_sessions_returns_429(
@@ -335,6 +337,103 @@ class TestBackendSessionCreate:
         )
         resp = await backend.session_create_handler(req)
         assert resp.status == 429
+
+    @pytest.mark.asyncio
+    async def test_session_create_max_sessions_negative_one_empty_sessions_returns_429(
+        self, serverless_backend_testkit
+    ) -> None:
+        """
+        Documents dataclass default ``max_sessions=-1``: cap logic treats only ``None``/``0``
+        as unlimited, so ``len(sessions) >= -1`` is true immediately and the first create
+        gets 429 (pre-existing product semantics; see peer-review consensus).
+        """
+        backend, _ = serverless_backend_testkit.make_backend(max_sessions=-1)
+        assert len(backend.sessions) == 0
+        req = serverless_backend_testkit.json_request(
+            {
+                "auth_data": {"request_idx": 0, "reqnum": 1, "cost": 1.0},
+                "payload": {"lifetime": 10.0},
+            },
+        )
+        resp = await backend.session_create_handler(req)
+        assert resp.status == 429
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"auth_data": None, "payload": {"lifetime": 10.0}}, id="auth_null"),
+            pytest.param({"payload": {"lifetime": 10.0}}, id="auth_omitted"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_session_create_null_or_missing_auth_data_raises_attribute_error(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit, body
+    ) -> None:
+        """
+        Documents current behavior: ``auth_data`` must be a mapping; ``null`` or a missing
+        key yields ``None`` and ``auth_data.get`` raises (not a structured 4xx).
+        """
+        backend, _ = serverless_backend_and_handler_default
+        req = serverless_backend_testkit.json_request(body)
+        with pytest.raises(AttributeError):
+            await backend.session_create_handler(req)
+
+    @pytest.mark.asyncio
+    async def test_session_create_null_payload_raises_attribute_error(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
+        """Documents current behavior when ``payload`` JSON is ``null``."""
+        backend, _ = serverless_backend_and_handler_default
+        req = serverless_backend_testkit.json_request(
+            {
+                "auth_data": {"request_idx": 0, "reqnum": 1, "cost": 1.0},
+                "payload": None,
+            },
+        )
+        with pytest.raises(AttributeError):
+            await backend.session_create_handler(req)
+
+    @pytest.mark.asyncio
+    async def test_session_create_on_close_route_without_on_close_payload(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
+        """``on_close_route`` set without ``on_close_payload`` leaves session callback payload None."""
+        backend, _ = serverless_backend_and_handler_default
+        fixed_id = "sess-route-only"
+        body = {
+            "auth_data": {"request_idx": 3, "reqnum": 4, "cost": 1.0},
+            "payload": {
+                "lifetime": 12.0,
+                "on_close_route": "http://notify/only-route",
+            },
+        }
+        req = serverless_backend_testkit.json_request(body)
+        with patch.object(backend, "generate_session_id", return_value=fixed_id):
+            resp = await backend.session_create_handler(req)
+        assert resp.status == 201
+        stored = backend.sessions[fixed_id]
+        assert stored.on_close_route == "http://notify/only-route"
+        assert stored.on_close_payload is None
+
+    @pytest.mark.asyncio
+    async def test_session_create_omitted_lifetime_defaults_to_sixty(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
+        """Omitting ``lifetime`` uses default ``60.0`` for ``Session.lifetime`` and expiration."""
+        backend, _ = serverless_backend_and_handler_default
+        fixed_id = "sess-default-life"
+        body = {
+            "auth_data": {"request_idx": 4, "reqnum": 5, "cost": 1.0},
+            "payload": {},
+        }
+        req = serverless_backend_testkit.json_request(body)
+        before = time.time()
+        with patch.object(backend, "generate_session_id", return_value=fixed_id):
+            resp = await backend.session_create_handler(req)
+        assert resp.status == 201
+        stored = backend.sessions[fixed_id]
+        assert stored.lifetime == 60.0
+        assert stored.expiration == pytest.approx(before + 60.0, abs=2.0)
 
     @pytest.mark.asyncio
     async def test_session_create_returns_201_with_session_id(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
@@ -456,7 +555,11 @@ class TestBackendSessionEnd:
 
     @pytest.mark.asyncio
     async def test_session_end_wrong_auth_returns_401(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_pyworker_session
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_pyworker_session,
+        make_patch_mock_backend_close_session,
     ) -> None:
         """
         Verifies session_end_handler returns 401 when session_auth does not match.
@@ -480,14 +583,18 @@ class TestBackendSessionEnd:
             on_close_payload=None,
         )
         req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": {"ok": False}})
-        with patch.object(backend, "_Backend__close_session", new_callable=AsyncMock) as mock_close:
+        with make_patch_mock_backend_close_session(backend) as mock_close:
             resp = await backend.session_end_handler(req)
         mock_close.assert_not_awaited()
         assert resp.status == 401
 
     @pytest.mark.asyncio
     async def test_session_end_success_removes_session(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_pyworker_session
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_pyworker_session,
+        make_patch_skip_backend_run_session_on_close,
     ) -> None:
         """
         Verifies session_end_handler closes session and returns 200 ended true.
@@ -513,7 +620,7 @@ class TestBackendSessionEnd:
         )
         backend.session_metrics[sid] = MagicMock()
         req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": auth})
-        with patch.object(backend, "_Backend__run_session_on_close", new_callable=AsyncMock):
+        with make_patch_skip_backend_run_session_on_close(backend):
             resp = await backend.session_end_handler(req)
         assert resp.status == 200
         data = serverless_backend_testkit.response_json(resp)
@@ -523,7 +630,11 @@ class TestBackendSessionEnd:
 
     @pytest.mark.asyncio
     async def test_session_end_returns_410_when_close_returns_false(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_pyworker_session
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_pyworker_session,
+        make_patch_mock_backend_close_session,
     ) -> None:
         """
         Verifies session_end_handler returns 410 if the session vanishes before __close_session.
@@ -548,12 +659,56 @@ class TestBackendSessionEnd:
             on_close_payload=None,
         )
         req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": auth})
-        with patch.object(backend, "_Backend__close_session", new_callable=AsyncMock) as mock_close:
+        with make_patch_mock_backend_close_session(backend) as mock_close:
             mock_close.return_value = False
             resp = await backend.session_end_handler(req)
         assert resp.status == 410
         err = serverless_backend_testkit.response_json(resp).get("error", "")
         assert "already closed" in err
+
+
+class TestBackendCloseSession:
+    """Direct tests for Backend.__close_session (transport teardown, removal)."""
+
+    @pytest.mark.asyncio
+    async def test_close_session_closes_open_request_transports(
+        self,
+        serverless_backend_and_handler_default,
+        make_pyworker_session,
+        make_patch_skip_backend_run_session_on_close,
+    ) -> None:
+        """
+        Verifies __close_session closes each in-flight request transport when open.
+
+        This test verifies by:
+        1. Building a session whose requests list holds a mock with transport.is_closing False
+        2. Awaiting __close_session and asserting transport.close() was called
+        3. Asserting the session is removed from backend.sessions
+
+        Assumptions:
+        - Transport close failures are swallowed inside __close_session
+        """
+        backend, _ = serverless_backend_and_handler_default
+        mock_tr = MagicMock()
+        mock_tr.is_closing.return_value = False
+        mock_req = MagicMock()
+        mock_req.transport = mock_tr
+        sid = "sess-transport"
+        backend.sessions[sid] = make_pyworker_session(
+            session_id=sid,
+            lifetime=1.0,
+            auth_data={},
+            expiration=time.time() + 60,
+            on_close_route=None,
+            on_close_payload=None,
+            requests=[mock_req],
+        )
+        backend.session_metrics[sid] = MagicMock()
+        with make_patch_skip_backend_run_session_on_close(backend):
+            removed = await backend._Backend__close_session(sid)
+        assert removed is True
+        assert sid not in backend.sessions
+        mock_tr.close.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +765,7 @@ class TestBackendHandleRequest:
         ):
             resp = await fn(req)
         assert resp.status == 422
+        assert serverless_backend_testkit.response_json(resp) == {"field": "bad"}
 
     @pytest.mark.asyncio
     async def test_handle_request_invalid_session_returns_410(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
@@ -706,10 +862,12 @@ class TestBackendHandleRequest:
         backend.metrics.model_metrics.requests_working[99] = rm
         backend.metrics.model_metrics.max_throughput = 0.00001
         req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
-        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
-            resp = await fn(req)
+        with patch.object(backend.metrics, "_request_reject") as mock_reject:
+            with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+                resp = await fn(req)
         assert resp.status == 429
         mock_cb.assert_not_awaited()
+        mock_reject.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handle_request_model_error_returns_500(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
@@ -728,16 +886,19 @@ class TestBackendHandleRequest:
         fn = backend.create_handler(handler)
         req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
         mock_model = MagicMock()
-        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
-            mock_cb.return_value = mock_model
-            with patch.object(
-                handler,
-                "generate_client_response",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("model exploded"),
-            ):
-                resp = await fn(req)
+        with patch.object(backend.metrics, "_request_errored") as mock_errored:
+            with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+                mock_cb.return_value = mock_model
+                with patch.object(
+                    handler,
+                    "generate_client_response",
+                    new_callable=AsyncMock,
+                    side_effect=RuntimeError("model exploded"),
+                ):
+                    resp = await fn(req)
         assert resp.status == 500
+        mock_errored.assert_called_once()
+        assert "model exploded" in mock_errored.call_args[0][1]
 
     @pytest.mark.asyncio
     async def test_handle_request_call_api_uses_session_post(
@@ -795,7 +956,9 @@ class TestBackendHandleRequest:
         assert body["result"]["params"] == {"input": {}}
 
     @pytest.mark.asyncio
-    async def test_handle_request_verified_signature_allows_request(self, serverless_backend_testkit) -> None:
+    async def test_handle_request_verified_signature_allows_request(
+        self, serverless_backend_testkit, make_serverless_test_rsa_key
+    ) -> None:
         """
         Verifies secured mode accepts a correctly signed auth_data payload.
 
@@ -807,7 +970,7 @@ class TestBackendHandleRequest:
         Assumptions:
         - Message format matches __check_signature (json.dumps with indent=4, sort_keys=True)
         """
-        key = RSA.generate(1024)
+        key = make_serverless_test_rsa_key()
         url = "https://tenant.example/v1/predict"
         backend, handler = serverless_backend_testkit.make_backend(unsecured=False)
         backend._pubkey = key.publickey()
@@ -855,6 +1018,194 @@ class TestBackendHandleRequest:
                 resp = await fn(req)
         assert resp.status == 200
         assert serverless_backend_testkit.response_json(resp) == {"queued": False}
+
+    @pytest.mark.asyncio
+    async def test_handle_request_fifo_two_concurrent_requests_both_succeed(
+        self, serverless_backend_testkit
+    ) -> None:
+        """
+        Verifies FIFO mode processes a second request after the first completes.
+
+        This test verifies by:
+        1. Starting the first handler call so it begins model work
+        2. Starting the second (waits on queue) before the first finishes
+        3. Asserting both return 200 in some order
+
+        Assumptions:
+        - advance_queue_after_completion wakes the next waiter when the head finishes
+        """
+        backend, handler = serverless_backend_testkit.make_backend(allow_parallel=False)
+        fn = backend.create_handler(handler)
+        mock_model = MagicMock()
+        first_in_backend = asyncio.Event()
+        release_first = asyncio.Event()
+        call_count = {"n": 0}
+
+        async def _gated_backend(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                first_in_backend.set()
+                await release_first.wait()
+            return mock_model
+
+        req1 = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload(reqnum=1))
+        req2 = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload(reqnum=2))
+        with patch.object(backend, "_Backend__call_backend", side_effect=_gated_backend):
+            with patch.object(
+                handler,
+                "generate_client_response",
+                new_callable=AsyncMock,
+                return_value=web.json_response({"ok": True}),
+            ):
+                t1 = asyncio.create_task(fn(req1))
+                await first_in_backend.wait()
+                t2 = asyncio.create_task(fn(req2))
+                await asyncio.sleep(0)
+                release_first.set()
+                r1, r2 = await asyncio.gather(t1, t2)
+        assert r1.status == 200
+        assert r2.status == 200
+
+    @pytest.mark.asyncio
+    async def test_handle_request_invalid_signature_returns_401(
+        self, serverless_backend_testkit, make_serverless_test_rsa_key
+    ) -> None:
+        """
+        Verifies secured mode rejects when the signature does not match the claimed URL.
+
+        This test verifies by:
+        1. Setting a real RSA public key on the backend
+        2. Sending a PKCS1 signature over a different URL than ``auth_data.url``
+        3. Asserting 401 without calling the model
+
+        Assumptions:
+        - ``__check_signature`` returns False when verify fails (cryptographically wrong sig)
+        """
+        key = make_serverless_test_rsa_key()
+        backend, handler = serverless_backend_testkit.make_backend(unsecured=False)
+        backend._pubkey = key.publickey()
+        fn = backend.create_handler(handler)
+        signed_url = "https://tenant.example/v1/predict"
+        body = serverless_backend_testkit.signed_auth(signed_url, key)
+        body["auth_data"]["url"] = "https://other.example/different"
+        req = serverless_backend_testkit.json_request(body)
+        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+            resp = await fn(req)
+        assert resp.status == 401
+        mock_cb.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_handle_request_session_request_extends_expiration(
+        self,
+        serverless_backend_testkit,
+        make_pyworker_session,
+    ) -> None:
+        """
+        Verifies an authenticated session request extends expiration and counts reqnums.
+
+        This test verifies by:
+        1. Seeding backend.sessions with a known session_id and lifetime
+        2. POSTing handler payload that includes that session_id
+        3. Asserting expiration increased by lifetime and session_reqnum incremented
+
+        Assumptions:
+        - Generic handler get_data_from_request passes session_id through from top-level JSON
+        """
+        backend, handler = serverless_backend_testkit.make_backend()
+        fn = backend.create_handler(handler)
+        sid = "live-sess"
+        exp_before = 1_700_000_000.0
+        sess = make_pyworker_session(
+            session_id=sid,
+            lifetime=30.0,
+            auth_data={},
+            expiration=exp_before,
+            on_close_route=None,
+            on_close_payload=None,
+            session_reqnum=0,
+        )
+        backend.sessions[sid] = sess
+        data = serverless_backend_testkit.auth_payload()
+        data["session_id"] = sid
+        req = serverless_backend_testkit.json_request(data)
+        mock_model = MagicMock()
+        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+            mock_cb.return_value = mock_model
+            with patch.object(
+                handler,
+                "generate_client_response",
+                new_callable=AsyncMock,
+                return_value=web.json_response({"s": "ok"}),
+            ):
+                resp = await fn(req)
+        assert resp.status == 200
+        assert sess.expiration == exp_before + sess.lifetime
+        assert sess.session_reqnum == 1
+        mock_cb.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Session garbage collection
+# ---------------------------------------------------------------------------
+
+
+class TestBackendSessionGc:
+    """Tests for Backend.__session_gc_loop periodic cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_session_gc_loop_closes_expired_sessions(
+        self,
+        serverless_backend_and_handler_default,
+        make_pyworker_session,
+        make_patch_skip_backend_run_session_on_close,
+    ) -> None:
+        """
+        Verifies the GC loop removes sessions whose expiration is in the past.
+
+        This test verifies by:
+        1. Inserting a session with expiration already elapsed
+        2. Patching backend.sleep to return immediately so the loop ticks
+        3. Running the loop briefly and asserting the session was closed/removed
+
+        Assumptions:
+        - __session_gc_loop uses module-level asyncio.sleep imported as sleep
+        """
+        backend, _ = serverless_backend_and_handler_default
+        sid = "expired-gc"
+        backend.sessions[sid] = make_pyworker_session(
+            session_id=sid,
+            lifetime=10.0,
+            auth_data={},
+            expiration=time.time() - 1.0,
+            on_close_route=None,
+            on_close_payload=None,
+        )
+        backend.session_metrics[sid] = MagicMock()
+        session_removed = asyncio.Event()
+        orig_close = backend._Backend__close_session
+
+        async def _close_then_signal(session_id: str):
+            try:
+                return await orig_close(session_id)
+            finally:
+                if session_id == sid:
+                    session_removed.set()
+
+        async def _yield_only(_delay: float = 0) -> None:
+            await asyncio.sleep(0)
+
+        with patch("vastai.serverless.server.lib.backend.sleep", side_effect=_yield_only):
+            with make_patch_skip_backend_run_session_on_close(backend):
+                with patch.object(backend, "_Backend__close_session", _close_then_signal):
+                    task = asyncio.create_task(backend._Backend__session_gc_loop())
+                    await asyncio.wait_for(session_removed.wait(), timeout=2.0)
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+        assert sid not in backend.sessions
 
 
 # ---------------------------------------------------------------------------
@@ -935,6 +1286,7 @@ class TestBackendHelpers:
         mock_sess.post.assert_called_once()
         call_kw = mock_sess.post.call_args.kwargs
         assert call_kw["url"] == "http://internal/hook"
+        assert call_kw["timeout"] == ClientTimeout(total=10)
         body = call_kw["json"]
         assert body["foo"] == "bar"
         assert body["session_id"] == "cb1"
@@ -1046,7 +1398,8 @@ class TestBackendHelpers:
         2. Awaiting __run_session_on_close successfully
 
         Assumptions:
-        - Errors are logged only; caller should not see an exception
+        - Failures are recorded at DEBUG via ``log.debug`` (invisible at INFO); caller
+          sees no exception
         """
         backend, _ = serverless_backend_and_handler_default
         mock_sess = attach_serverless_backend_mock_session_post(
@@ -1078,7 +1431,7 @@ class TestBackendHelpers:
         2. Asserting the await completes without propagating
 
         Assumptions:
-        - Broad except logs and returns
+        - Broad ``except`` logs at DEBUG and returns (not visible at INFO by default)
         """
         backend, _ = serverless_backend_and_handler_default
         mock_sess = attach_serverless_backend_mock_session_post(

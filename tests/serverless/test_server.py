@@ -22,6 +22,7 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
     serverless_tracked_runner_and_tcp_site,
     serverless_gather_await_all,
     serverless_aiohttp_route_path_tuples,
+    run_serverless_start_server_async_patched,
 ) -> None:
     """
     Verifies start_server_async builds apps with session endpoints and starts TCPSites.
@@ -38,21 +39,16 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
     backend, _ = serverless_backend_and_handler_default
     routes: list = []
     st = serverless_tracked_runner_and_tcp_site
-    apps_seen, app_runner = st.apps_seen, st.app_runner
-    tcp_site = st.tcp_site
+    apps_seen = st.apps_seen
     route_paths = serverless_aiohttp_route_path_tuples
 
     env = {**serverless_metrics_test_env, "WORKER_PORT": "9100", "WORKER_HTTP_PORT": "9101"}
-    with patch.dict(os.environ, env, clear=False):
-        with patch.object(server_mod.web, "AppRunner", side_effect=app_runner):
-            with patch.object(server_mod.web, "TCPSite", side_effect=tcp_site):
-                with patch.object(
-                    backend, "_start_tracking", new_callable=AsyncMock
-                ) as mock_track:
-                    with patch.object(
-                        server_mod, "gather", side_effect=serverless_gather_await_all
-                    ):
-                        await start_server_async(backend, routes)
+    mock_track = await run_serverless_start_server_async_patched(
+        backend,
+        routes,
+        env,
+        gather_side_effect=serverless_gather_await_all,
+    )
 
     mock_track.assert_awaited_once()
     assert len(apps_seen) >= 2
@@ -71,6 +67,7 @@ async def test_start_server_async_defaults_http_port_to_worker_plus_one(
     serverless_metrics_test_env,
     serverless_tracked_runner_and_tcp_site,
     serverless_gather_await_all,
+    run_serverless_start_server_async_patched,
 ) -> None:
     """
     Verifies WORKER_HTTP_PORT defaults to int(WORKER_PORT) + 1 when unset.
@@ -86,20 +83,17 @@ async def test_start_server_async_defaults_http_port_to_worker_plus_one(
     backend, _ = serverless_backend_and_handler_default
     routes: list = []
     st = serverless_tracked_runner_and_tcp_site
-    tcp_calls, tcp_site = st.tcp_calls, st.tcp_site
-    app_runner = st.app_runner
+    tcp_calls = st.tcp_calls
 
     env = {**serverless_metrics_test_env, "WORKER_PORT": "7122"}
     old_http = os.environ.pop("WORKER_HTTP_PORT", None)
     try:
-        with patch.dict(os.environ, env, clear=False):
-            with patch.object(server_mod.web, "AppRunner", side_effect=app_runner):
-                with patch.object(server_mod.web, "TCPSite", side_effect=tcp_site):
-                    with patch.object(backend, "_start_tracking", new_callable=AsyncMock):
-                        with patch.object(
-                            server_mod, "gather", side_effect=serverless_gather_await_all
-                        ):
-                            await start_server_async(backend, routes)
+        await run_serverless_start_server_async_patched(
+            backend,
+            routes,
+            env,
+            gather_side_effect=serverless_gather_await_all,
+        )
     finally:
         if old_http is not None:
             os.environ["WORKER_HTTP_PORT"] = old_http
@@ -113,6 +107,7 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
     serverless_metrics_test_env,
     serverless_tracked_runner_and_tcp_site,
     serverless_gather_await_all,
+    run_serverless_start_server_async_patched,
 ) -> None:
     """
     Verifies USE_SSL=true passes an ssl.SSLContext into TCPSite for the main listener.
@@ -127,8 +122,7 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
     backend, _ = serverless_backend_and_handler_default
     routes: list = []
     st = serverless_tracked_runner_and_tcp_site
-    tcp_calls, tcp_site = st.tcp_calls, st.tcp_site
-    app_runner = st.app_runner
+    tcp_calls = st.tcp_calls
 
     mock_ctx = MagicMock()
     mock_ctx.load_cert_chain = MagicMock()
@@ -138,15 +132,15 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
         "WORKER_PORT": "9200",
         "USE_SSL": "true",
     }
-    with patch.dict(os.environ, env, clear=False):
-        with patch.object(server_mod.ssl, "create_default_context", return_value=mock_ctx):
-            with patch.object(server_mod.web, "AppRunner", side_effect=app_runner):
-                with patch.object(server_mod.web, "TCPSite", side_effect=tcp_site):
-                    with patch.object(backend, "_start_tracking", new_callable=AsyncMock):
-                        with patch.object(
-                            server_mod, "gather", side_effect=serverless_gather_await_all
-                        ):
-                            await start_server_async(backend, routes)
+    await run_serverless_start_server_async_patched(
+        backend,
+        routes,
+        env,
+        gather_side_effect=serverless_gather_await_all,
+        ssl_create_default_context_patch=patch.object(
+            server_mod.ssl, "create_default_context", return_value=mock_ctx
+        ),
+    )
 
     mock_ctx.load_cert_chain.assert_called_once_with(
         certfile="/etc/instance.crt",
@@ -179,7 +173,12 @@ async def test_start_server_async_ssl_cert_load_failure_enters_error_beacon(
     mock_ctx = MagicMock()
     mock_ctx.load_cert_chain = MagicMock(side_effect=OSError("no cert file"))
 
-    env = {**serverless_metrics_test_env, "WORKER_PORT": "9201", "USE_SSL": "true"}
+    env = {
+        **serverless_metrics_test_env,
+        "WORKER_PORT": "9201",
+        "VAST_TCP_PORT_9201": "9201",
+        "USE_SSL": "true",
+    }
     with patch.dict(os.environ, env, clear=False):
         with patch.object(server_mod.ssl, "create_default_context", return_value=mock_ctx):
             with pytest.raises(RuntimeError, match="stop-beacon"):
@@ -216,7 +215,11 @@ async def test_start_server_async_gather_failure_runs_beacon_until_sleep_stops(
     st = serverless_tracked_runner_and_tcp_site
     app_runner, tcp_site = st.app_runner, st.tcp_site
 
-    env = {**serverless_metrics_test_env, "WORKER_PORT": "9300"}
+    env = {
+        **serverless_metrics_test_env,
+        "WORKER_PORT": "9300",
+        "VAST_TCP_PORT_9300": "9300",
+    }
     with patch.dict(os.environ, env, clear=False):
         with patch.object(server_mod.web, "AppRunner", side_effect=app_runner):
             with patch.object(server_mod.web, "TCPSite", side_effect=tcp_site):
