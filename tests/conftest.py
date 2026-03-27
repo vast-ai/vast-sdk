@@ -22,11 +22,17 @@ Serverless pyworker: ``serverless_backend_and_handler_default`` (default ``Backe
 ``vast_serverless_backend_module`` (imported ``server.lib.backend`` for patches),
 ``make_serverless_pubkey_fetch_client_session_cm`` (aiohttp ClientSession chain for ``_fetch_pubkey`` tests),
 ``attach_serverless_backend_aiohttp_session_get_spy`` (mock ``backend.session`` with ``get``),
-``register_pyworker_backend_session_with_metrics`` (sessions map + ``session_metrics`` slot),
+``register_serverless_backend_session_with_metrics`` (sessions map + ``session_metrics`` slot),
 ``make_serverless_tcp_worker_env`` (WORKER_PORT + VAST_TCP_PORT + optional HTTP port),
-``make_serverless_app_runner_first_setup_raises`` / ``make_serverless_app_runner_capture_kwargs``,
+``make_serverless_app_runner_first_setup_raises`` / ``make_serverless_app_runner_second_setup_raises`` / ``make_serverless_app_runner_capture_kwargs``,
 ``serverless_create_task_side_effect_close_coro`` (close coroutine then raise, for FIFO tests),
-``make_serverless_aiohttp_get_context_manager`` (wrap a mock response for ``session.get`` async-with).
+``make_serverless_aiohttp_get_context_manager`` (wrap a mock response for ``session.get`` async-with),
+``make_serverless_mock_transport`` (aiohttp transport ``MagicMock`` for close-session tests),
+``make_serverless_standard_pyworker_session`` (``Session`` with typical TTL/on_close defaults),
+``make_serverless_mock_ssl_context`` (``ssl.SSLContext`` stand-in for server SSL tests),
+``serverless_backend_model_mock`` (function-scoped ``MagicMock`` for ``__call_backend`` return value),
+``make_serverless_fifo_handle_request_harness`` (FIFO tests: gated ``__call_backend`` + instrumented ``asyncio.Event``),
+``serverless_start_tracking_spy`` (non-leaking awaitable for ``_start_tracking`` in hand-rolled server patches).
 
 An autouse fixture restores the ``Serverless`` logger after each test so global
 logging state follows RAII and cannot leak between cases.
@@ -40,6 +46,7 @@ import inspect
 import json
 import logging
 import os
+import time
 from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -54,8 +61,8 @@ from Crypto.Signature import pkcs1_15
 from vastai.serverless.client.client import Serverless, ServerlessRequest
 from vastai.serverless.client.endpoint import Endpoint
 from vastai.serverless.client.session import Session
+from vastai.serverless.server.lib import backend as _vast_serverless_backend_py
 from vastai.serverless.server.lib.backend import Backend
-import vastai.serverless.server.lib.backend as _vast_serverless_backend_py
 from vastai.serverless.server.lib import server as vast_serverless_server_mod
 from vastai.serverless.server.lib.metrics import get_url
 from vastai.serverless.server.lib.data_types import RequestMetrics, Session as PyworkerSession
@@ -534,6 +541,40 @@ def serverless_backend_and_handler_default(make_serverless_backend_and_handler):
     return make_serverless_backend_and_handler()
 
 
+class _ServerlessTrackedFakeAppRunner:
+    """Minimal stand-in for ``web.AppRunner`` so ``await runner.setup()`` has no mock coroutine leaks."""
+
+    async def setup(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+class _ServerlessTrackedFakeTCPSite:
+    """Minimal stand-in for ``web.TCPSite`` so ``await site.start()`` has no mock coroutine leaks."""
+
+    async def start(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+class _ServerlessStartTrackingSpy:
+    """Async callable with ``assert_awaited_once`` for ``run_serverless_start_server_async_patched``."""
+
+    def __init__(self) -> None:
+        self.await_count = 0
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> None:
+        self.await_count += 1
+        return None
+
+    def assert_awaited_once(self) -> None:
+        assert self.await_count == 1
+
+
+@pytest.fixture
+def serverless_start_tracking_spy():
+    """Fresh ``_ServerlessStartTrackingSpy`` for hand-rolled ``start_server_async`` patches (matches ``run_serverless_start_server_async_patched``)."""
+    return _ServerlessStartTrackingSpy()
+
+
 @pytest.fixture
 def serverless_tracked_runner_and_tcp_site(
     make_serverless_tracked_app_runner,
@@ -559,9 +600,7 @@ def make_serverless_tracked_app_runner():
 
         def app_runner(app: web.Application, **kwargs):
             captured.append(app)
-            m = MagicMock()
-            m.setup = AsyncMock()
-            return m
+            return _ServerlessTrackedFakeAppRunner()
 
         return captured, app_runner
 
@@ -577,9 +616,7 @@ def make_serverless_tracked_tcp_site():
 
         def tcp_site(*args, **kwargs):
             captured.append(kwargs)
-            m = MagicMock()
-            m.start = AsyncMock()
-            return m
+            return _ServerlessTrackedFakeTCPSite()
 
         return captured, tcp_site
 
@@ -588,12 +625,26 @@ def make_serverless_tracked_tcp_site():
 
 @pytest.fixture
 def serverless_gather_await_all():
-    """Async gather replacement that awaits each passed awaitable (for mocked site.start())."""
+    """Async gather replacement that awaits each awaitable (for mocked ``site.start()``).
+
+    If an early awaitable raises, closes remaining coroutine objects so CPython does not emit
+    ``RuntimeWarning: coroutine was never awaited`` during ``gc.collect()`` (mirrors partial
+    ``asyncio.gather`` cleanup for tasks not yet scheduled).
+    """
 
     async def _gather(*aws, **kwargs):
-        for aw in aws:
-            await aw
-        return None
+        pending = list(aws)
+        idx = -1
+        try:
+            for idx in range(len(pending)):
+                await pending[idx]
+            return None
+        except BaseException:
+            for j in range(idx + 1, len(pending)):
+                aw = pending[j]
+                if inspect.iscoroutine(aw):
+                    aw.close()
+            raise
 
     return _gather
 
@@ -726,21 +777,78 @@ def make_serverless_test_rsa_key():
 
 @pytest.fixture
 def vast_serverless_backend_module():
-    """The ``vastai.serverless.server.lib.backend`` module object (single patch target for tests)."""
+    """Imported ``vastai.serverless.server.lib.backend`` module; use with ``patch.object`` on its attributes."""
     return _vast_serverless_backend_py
 
 
 @pytest.fixture
+def make_serverless_fifo_handle_request_harness(vast_serverless_backend_module):
+    """Factory: FIFO ``__handle_request`` tests that block the first ``__call_backend`` and signal when the second hits ``Event.wait``.
+
+    Pass ``model_return`` (typically ``serverless_backend_model_mock``). Returns a ``SimpleNamespace`` with:
+
+    - ``first_in_backend`` / ``release_first`` / ``second_at_fifo_wait`` — coordination events
+    - ``call_count`` — dict with ``n`` incremented per ``__call_backend`` invocation
+    - ``instrumented_event_class`` — subclass of ``backend.asyncio.Event`` for ``patch.object(..., "Event", ...)``
+    - ``gated_backend`` — async callable for ``side_effect`` on ``_Backend__call_backend``
+    """
+
+    def _make(*, model_return: Any):
+        first_in_backend = asyncio.Event()
+        release_first = asyncio.Event()
+        second_at_fifo_wait = asyncio.Event()
+        call_count: dict[str, int] = {"n": 0}
+        base_ev = vast_serverless_backend_module.asyncio.Event
+
+        class _InstrumentedFifoEvent(base_ev):
+            async def wait(self):
+                if not self.is_set():
+                    second_at_fifo_wait.set()
+                return await super().wait()
+
+        async def gated_backend(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                first_in_backend.set()
+                await release_first.wait()
+            return model_return
+
+        return SimpleNamespace(
+            first_in_backend=first_in_backend,
+            release_first=release_first,
+            second_at_fifo_wait=second_at_fifo_wait,
+            call_count=call_count,
+            instrumented_event_class=_InstrumentedFifoEvent,
+            gated_backend=gated_backend,
+        )
+
+    return _make
+
+
+@pytest.fixture
 def make_serverless_pubkey_fetch_client_session_cm():
-    """Factory: nested ``ClientSession`` + ``get`` async context managers matching ``_fetch_pubkey`` I/O."""
+    """Factory: nested ``ClientSession`` + ``get`` async context managers matching ``_fetch_pubkey`` I/O.
+
+    Parameters:
+    - ``response_text`` / ``get_aenter_error`` — success body vs failing ``async with`` entry (GET CM ``__aenter__``).
+    - ``raise_for_status_error`` — exception from ``response.raise_for_status()`` inside the GET body.
+    - ``response_out`` — if given, the response ``MagicMock`` is appended for callers that need direct assertions.
+    """
 
     def _build(
         *,
         response_text: str | None = None,
         get_aenter_error: BaseException | None = None,
+        raise_for_status_error: BaseException | None = None,
+        response_out: list | None = None,
     ) -> MagicMock:
         mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
+        if raise_for_status_error is not None:
+            mock_resp.raise_for_status = MagicMock(side_effect=raise_for_status_error)
+        else:
+            mock_resp.raise_for_status = MagicMock()
+        if response_out is not None:
+            response_out.append(mock_resp)
         if response_text is not None:
             mock_resp.text = AsyncMock(return_value=response_text)
         get_cm = MagicMock()
@@ -775,7 +883,7 @@ def attach_serverless_backend_aiohttp_session_get_spy():
 
 
 @pytest.fixture
-def register_pyworker_backend_session_with_metrics():
+def register_serverless_backend_session_with_metrics():
     """Put ``session`` in ``backend.sessions`` and allocate ``session_metrics[session_id]``."""
 
     def _register(backend: Backend, session: PyworkerSession) -> None:
@@ -788,7 +896,11 @@ def register_pyworker_backend_session_with_metrics():
 
 @pytest.fixture
 def make_serverless_tcp_worker_env(serverless_metrics_test_env):
-    """Build env for ``start_server_async`` tests: metrics base + WORKER_PORT + VAST_TCP_PORT_* (+ optional HTTP)."""
+    """Build env for ``start_server_async`` tests: metrics base + WORKER_PORT + VAST_TCP_PORT_* (+ optional HTTP).
+
+    Merges ``serverless_metrics_test_env`` first, so template keys (e.g. ``VAST_TCP_PORT_8080`` from the
+    metrics fixture) can coexist with ``VAST_TCP_PORT_<worker_port>`` for the port under test.
+    """
 
     def _make(worker_port: int, *, http_port: int | None = None, **extra: Any) -> dict:
         wp = str(worker_port)
@@ -825,6 +937,28 @@ def make_serverless_app_runner_first_setup_raises():
 
 
 @pytest.fixture
+def make_serverless_app_runner_second_setup_raises():
+    """``web.AppRunner`` side_effect: first runner's ``setup`` succeeds; second raises."""
+
+    def _make(exc: BaseException | None = None):
+        err = exc if exc is not None else RuntimeError("http runner setup failed")
+        idx = [0]
+
+        def app_runner(app, **kwargs):
+            idx[0] += 1
+            m = MagicMock()
+            if idx[0] == 1:
+                m.setup = AsyncMock()
+            else:
+                m.setup = AsyncMock(side_effect=err)
+            return m
+
+        return app_runner
+
+    return _make
+
+
+@pytest.fixture
 def make_serverless_app_runner_capture_kwargs():
     """Return ``(captured_kwargs_list, app_runner_side_effect)`` for constructor assertions."""
 
@@ -850,6 +984,8 @@ def serverless_create_task_side_effect_close_coro():
         err = exc if exc is not None else RuntimeError("task spawn failed")
 
         def _fn(coro):
+            if not inspect.iscoroutine(coro):
+                raise TypeError("serverless_create_task_side_effect_close_coro expects a coroutine object")
             coro.close()
             raise err
 
@@ -872,12 +1008,71 @@ def make_serverless_aiohttp_get_context_manager():
 
 
 @pytest.fixture
+def make_serverless_mock_transport():
+    """Factory: aiohttp transport ``MagicMock`` with ``is_closing()`` and ``close()``."""
+
+    def _make(*, closing: bool = False, close_side_effect: BaseException | None = None) -> MagicMock:
+        m = MagicMock()
+        m.is_closing.return_value = closing
+        if close_side_effect is not None:
+            m.close.side_effect = close_side_effect
+        return m
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_standard_pyworker_session(make_pyworker_session):
+    """Factory: server ``Session`` with defaults used across Backend close/handler unit tests.
+
+    Override any field via keyword arguments (e.g. ``expiration``, ``requests``, ``session_reqnum``).
+    """
+
+    def _make(**kwargs):
+        defaults: dict = dict(
+            session_id="s-default",
+            lifetime=1.0,
+            auth_data={},
+            expiration=time.time() + 60.0,
+            on_close_route=None,
+            on_close_payload=None,
+        )
+        defaults.update(kwargs)
+        return make_pyworker_session(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def make_serverless_mock_ssl_context():
+    """Factory: mock ``ssl.SSLContext`` with ``load_cert_chain`` for ``start_server_async`` SSL tests."""
+
+    def _make(*, load_cert_chain_side_effect: BaseException | None = None) -> MagicMock:
+        mock_ctx = MagicMock()
+        if load_cert_chain_side_effect is not None:
+            mock_ctx.load_cert_chain = MagicMock(side_effect=load_cert_chain_side_effect)
+        else:
+            mock_ctx.load_cert_chain = MagicMock()
+        return mock_ctx
+
+    return _make
+
+
+@pytest.fixture
+def serverless_backend_model_mock():
+    """Single stand-in object per test for the model HTTP response passed to ``generate_client_response``."""
+    return MagicMock()
+
+
+@pytest.fixture
 def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_site):
-    """Async callable: apply env + AppRunner + TCPSite + gather patches, then ``start_server_async``.
+    """Async callable: patch env, ``AppRunner``, ``TCPSite``, ``backend._start_tracking``, ``gather``; run ``start_server_async``.
+
+    Also replaces ``backend._start_tracking`` with ``_ServerlessStartTrackingSpy`` (no ``AsyncMock`` coroutine leaks).
 
     Optional ``start_server_async_kwargs`` are forwarded to ``start_server_async`` (e.g. ``host`` for ``TCPSite``).
 
-    Returns the ``_start_tracking`` AsyncMock.
+    Returns the spy for ``assert_awaited_once``-style assertions.
     """
 
     async def _run(
@@ -888,7 +1083,7 @@ def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_
         gather_side_effect,
         ssl_create_default_context_patch=None,
         start_server_async_kwargs: dict | None = None,
-    ) -> MagicMock:
+    ) -> _ServerlessStartTrackingSpy:
         sm = vast_serverless_server_mod
         st = serverless_tracked_runner_and_tcp_site
         app_runner, tcp_site = st.app_runner, st.tcp_site
@@ -899,9 +1094,8 @@ def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_
                 stack.enter_context(ssl_create_default_context_patch)
             stack.enter_context(patch.object(sm.web, "AppRunner", side_effect=app_runner))
             stack.enter_context(patch.object(sm.web, "TCPSite", side_effect=tcp_site))
-            mock_track = stack.enter_context(
-                patch.object(backend, "_start_tracking", new_callable=AsyncMock)
-            )
+            mock_track = _ServerlessStartTrackingSpy()
+            stack.enter_context(patch.object(backend, "_start_tracking", new=mock_track))
             stack.enter_context(patch.object(sm, "gather", side_effect=gather_side_effect))
             await sm.start_server_async(backend, routes, **extra)
         return mock_track

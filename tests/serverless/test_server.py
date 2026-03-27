@@ -66,6 +66,7 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
 
 @pytest.mark.asyncio
 async def test_start_server_async_defaults_http_port_to_worker_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
     serverless_backend_and_handler_default,
     serverless_tracked_runner_and_tcp_site,
     serverless_gather_await_all,
@@ -89,17 +90,13 @@ async def test_start_server_async_defaults_http_port_to_worker_plus_one(
     tcp_calls = st.tcp_calls
 
     env = make_serverless_tcp_worker_env(7122)
-    old_http = os.environ.pop("WORKER_HTTP_PORT", None)
-    try:
-        await run_serverless_start_server_async_patched(
-            backend,
-            routes,
-            env,
-            gather_side_effect=serverless_gather_await_all,
-        )
-    finally:
-        if old_http is not None:
-            os.environ["WORKER_HTTP_PORT"] = old_http
+    monkeypatch.delenv("WORKER_HTTP_PORT", raising=False)
+    await run_serverless_start_server_async_patched(
+        backend,
+        routes,
+        env,
+        gather_side_effect=serverless_gather_await_all,
+    )
     assert tcp_calls[0]["port"] == 7122
     assert tcp_calls[1]["port"] == 7123
 
@@ -111,6 +108,7 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
     serverless_gather_await_all,
     run_serverless_start_server_async_patched,
     make_serverless_tcp_worker_env,
+    make_serverless_mock_ssl_context,
 ) -> None:
     """
     Verifies USE_SSL=true passes an ssl.SSLContext into TCPSite for the main listener.
@@ -127,8 +125,7 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
     st = serverless_tracked_runner_and_tcp_site
     tcp_calls = st.tcp_calls
 
-    mock_ctx = MagicMock()
-    mock_ctx.load_cert_chain = MagicMock()
+    mock_ctx = make_serverless_mock_ssl_context()
 
     env = make_serverless_tcp_worker_env(9200, USE_SSL="true")
     await run_serverless_start_server_async_patched(
@@ -154,6 +151,7 @@ async def test_start_server_async_ssl_cert_load_failure_enters_error_beacon(
     serverless_backend_and_handler_default,
     serverless_error_beacon_mocks,
     make_serverless_tcp_worker_env,
+    make_serverless_mock_ssl_context,
 ) -> None:
     """
     Verifies SSL certificate load errors are caught like other launch failures and enter the beacon.
@@ -169,8 +167,7 @@ async def test_start_server_async_ssl_cert_load_failure_enters_error_beacon(
     mock_err = serverless_error_beacon_mocks
     backend, _ = serverless_backend_and_handler_default
     routes: list = []
-    mock_ctx = MagicMock()
-    mock_ctx.load_cert_chain = MagicMock(side_effect=OSError("no cert file"))
+    mock_ctx = make_serverless_mock_ssl_context(load_cert_chain_side_effect=OSError("no cert file"))
 
     env = make_serverless_tcp_worker_env(9201, USE_SSL="true")
     with patch.dict(os.environ, env, clear=False):
@@ -306,6 +303,7 @@ async def test_start_server_async_main_app_runner_uses_handler_cancellation(
     serverless_gather_await_all,
     make_serverless_tcp_worker_env,
     make_serverless_app_runner_capture_kwargs,
+    serverless_start_tracking_spy,
 ) -> None:
     """
     Verifies the primary ``web.AppRunner`` enables client disconnect cancellation; the HTTP app does not.
@@ -327,7 +325,7 @@ async def test_start_server_async_main_app_runner_uses_handler_cancellation(
         stack.enter_context(patch.dict(os.environ, env, clear=False))
         stack.enter_context(patch.object(server_mod.web, "AppRunner", side_effect=capture_app_runner))
         stack.enter_context(patch.object(server_mod.web, "TCPSite", side_effect=tcp_site))
-        stack.enter_context(patch.object(backend, "_start_tracking", new_callable=AsyncMock))
+        stack.enter_context(patch.object(backend, "_start_tracking", new=serverless_start_tracking_spy))
         stack.enter_context(
             patch.object(server_mod, "gather", side_effect=serverless_gather_await_all),
         )
@@ -403,3 +401,166 @@ async def test_start_server_async_app_runner_setup_failure_triggers_error_beacon
 
     mock_err.assert_called()
     assert "runner setup failed" in mock_err.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_start_server_async_http_runner_setup_failure_triggers_error_beacon(
+    serverless_backend_and_handler_default,
+    serverless_tracked_runner_and_tcp_site,
+    serverless_gather_await_all,
+    serverless_error_beacon_mocks,
+    make_serverless_tcp_worker_env,
+    make_serverless_app_runner_second_setup_raises,
+    serverless_start_tracking_spy,
+) -> None:
+    """
+    Verifies failure on the internal HTTP ``AppRunner.setup`` hits the same beacon path.
+
+    This test verifies by:
+    1. Letting the main worker ``AppRunner``/``TCPSite`` wiring succeed under patches
+    2. Raising on the second ``AppRunner`` (HTTP-only ``/session/end`` app)
+    3. Asserting ``_model_errored`` includes that setup error
+
+    Assumptions:
+    - ``http_runner.setup`` runs after the primary listener's ``TCPSite`` is constructed
+    """
+    mock_err = serverless_error_beacon_mocks
+    backend, _ = serverless_backend_and_handler_default
+    routes: list = []
+    st = serverless_tracked_runner_and_tcp_site
+    tcp_site = st.tcp_site
+    env = make_serverless_tcp_worker_env(9502, http_port=9503)
+    app_runner = make_serverless_app_runner_second_setup_raises()
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, env, clear=False))
+        stack.enter_context(patch.object(server_mod.web, "AppRunner", side_effect=app_runner))
+        stack.enter_context(patch.object(server_mod.web, "TCPSite", side_effect=tcp_site))
+        stack.enter_context(patch.object(backend, "_start_tracking", new=serverless_start_tracking_spy))
+        stack.enter_context(
+            patch.object(server_mod, "gather", side_effect=serverless_gather_await_all),
+        )
+        with pytest.raises(RuntimeError, match="stop-beacon"):
+            await start_server_async(backend, routes)
+
+    mock_err.assert_called()
+    assert "http runner setup failed" in mock_err.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_start_server_async_main_tcp_site_start_failure_triggers_error_beacon(
+    serverless_backend_and_handler_default,
+    serverless_tracked_runner_and_tcp_site,
+    serverless_gather_await_all,
+    serverless_error_beacon_mocks,
+    make_serverless_tcp_worker_env,
+    serverless_start_tracking_spy,
+) -> None:
+    """
+    Verifies ``TCPSite.start`` failures on the primary listener enter the same error beacon path.
+
+    This test verifies by:
+    1. Completing ``AppRunner.setup`` for both apps under the usual patches
+    2. Making the first site's ``start`` coroutine raise ``RuntimeError``
+    3. Asserting ``_model_errored`` received a launch message containing that error
+
+    Assumptions:
+    - ``gather`` awaits ``site.start()`` before the HTTP site; the first failure surfaces as launch failure
+    """
+    mock_err = serverless_error_beacon_mocks
+    backend, _ = serverless_backend_and_handler_default
+    routes: list = []
+    st = serverless_tracked_runner_and_tcp_site
+    base_tcp_site = st.tcp_site
+    tcp_calls = st.tcp_calls
+
+    def tcp_site_first_start_fails(*args, **kwargs):
+        m = base_tcp_site(*args, **kwargs)
+        if len(tcp_calls) == 1:
+            m.start = AsyncMock(side_effect=RuntimeError("main site start failed"))
+        return m
+
+    env = make_serverless_tcp_worker_env(9504, http_port=9505)
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, env, clear=False))
+        stack.enter_context(patch.object(server_mod.web, "AppRunner", side_effect=st.app_runner))
+        stack.enter_context(patch.object(server_mod.web, "TCPSite", side_effect=tcp_site_first_start_fails))
+        stack.enter_context(patch.object(backend, "_start_tracking", new=serverless_start_tracking_spy))
+        stack.enter_context(
+            patch.object(server_mod, "gather", side_effect=serverless_gather_await_all),
+        )
+        with pytest.raises(RuntimeError, match="stop-beacon"):
+            await start_server_async(backend, routes)
+
+    mock_err.assert_called()
+    assert "main site start failed" in mock_err.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_start_server_async_ssl_and_kwargs_forwarded_to_both_tcp_sites(
+    serverless_backend_and_handler_default,
+    serverless_tracked_runner_and_tcp_site,
+    serverless_gather_await_all,
+    run_serverless_start_server_async_patched,
+    make_serverless_tcp_worker_env,
+    make_serverless_mock_ssl_context,
+) -> None:
+    """
+    Verifies SSL applies to the main ``TCPSite`` only while ``**kwargs`` reach both sites.
+
+    This test verifies by:
+    1. Enabling ``USE_SSL`` with a mocked ``ssl.create_default_context``
+    2. Passing ``host`` through ``start_server_async_kwargs``
+    3. Asserting the first site carries ``ssl_context`` and both sites share the host
+
+    Assumptions:
+    - Internal HTTP webhook listener stays plain TCP regardless of ``USE_SSL``
+    """
+    backend, _ = serverless_backend_and_handler_default
+    st = serverless_tracked_runner_and_tcp_site
+    tcp_calls = st.tcp_calls
+    mock_ctx = make_serverless_mock_ssl_context()
+    env = make_serverless_tcp_worker_env(9600, http_port=9601, USE_SSL="true")
+    await run_serverless_start_server_async_patched(
+        backend,
+        [],
+        env,
+        gather_side_effect=serverless_gather_await_all,
+        ssl_create_default_context_patch=patch.object(
+            server_mod.ssl, "create_default_context", return_value=mock_ctx
+        ),
+        start_server_async_kwargs={"host": "192.168.1.10"},
+    )
+    assert tcp_calls[0]["ssl_context"] is mock_ctx
+    assert tcp_calls[0]["host"] == "192.168.1.10"
+    assert tcp_calls[1].get("ssl_context") is None
+    assert tcp_calls[1]["host"] == "192.168.1.10"
+
+
+def test_make_serverless_tcp_worker_env_coerces_int_preserves_bool(
+    make_serverless_tcp_worker_env,
+) -> None:
+    """Plain ints in ``extra`` become strings; bools must not be stringified."""
+    env = make_serverless_tcp_worker_env(7000, N=42, FLAG=True, S="x")
+    assert env["N"] == "42"
+    assert env["FLAG"] is True
+    assert env["S"] == "x"
+
+
+def test_make_serverless_tcp_worker_env_merges_template_and_worker_tcp_keys(
+    make_serverless_tcp_worker_env,
+) -> None:
+    """Template ``VAST_TCP_PORT_*`` keys remain alongside the worker port entry."""
+    env = make_serverless_tcp_worker_env(9100, http_port=9101)
+    assert env["WORKER_PORT"] == "9100"
+    assert env["VAST_TCP_PORT_9100"] == "9100"
+    assert env["VAST_TCP_PORT_8080"] == "8080"
+
+
+def test_serverless_create_task_side_effect_rejects_non_coroutine(
+    serverless_create_task_side_effect_close_coro,
+) -> None:
+    """Guard rejects values that are not coroutine objects (see conftest helper)."""
+    fn = serverless_create_task_side_effect_close_coro()
+    with pytest.raises(TypeError, match="coroutine"):
+        fn("not-a-coroutine")
