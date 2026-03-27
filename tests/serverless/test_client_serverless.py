@@ -931,10 +931,10 @@ class TestServerlessStartEndpointSession:
 
         This test verifies by:
         1. Mocking queue_endpoint_request with response=None
-        2. Asserting Exception raised with status info
+        2. Asserting :class:`SessionCreateError` with "No response from /session/create"
 
         Assumptions:
-        - None response triggers "No response from /session/create"
+        - None response triggers :class:`SessionCreateError` (not a generic Exception)
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
@@ -1556,9 +1556,9 @@ class TestQueueEndpointRequestResilience:
         to "Cancelled".
 
         This test verifies by:
-        1. Mocking _route to block indefinitely (simulating a stuck poll)
-        2. Cancelling the ServerlessRequest future
-        3. Waiting briefly, then asserting status == "Cancelled"
+        1. Mocking _route to set an asyncio.Event when entered, then block
+        2. Waiting on that event so ordering is deterministic (no fixed sleeps)
+        3. Cancelling the ServerlessRequest and yielding until status is "Cancelled"
 
         Assumptions:
         - CancelledError is caught by the outer try/except
@@ -1569,20 +1569,26 @@ class TestQueueEndpointRequestResilience:
         client._get_session = AsyncMock()
         client.get_ssl_context = AsyncMock(return_value=None)
 
-        async def _block_forever(**kwargs):
+        route_entered = asyncio.Event()
+
+        async def _route_after_signal(**kwargs):
+            route_entered.set()
             await asyncio.sleep(999)
 
-        with patch.object(ep, "_route", new_callable=AsyncMock, side_effect=_block_forever):
+        with patch.object(ep, "_route", side_effect=_route_after_signal):
             req = client.queue_endpoint_request(
                 endpoint=ep,
                 worker_route="/predict",
                 worker_payload={},
             )
-            # Let the task start and hit the blocking _route
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(route_entered.wait(), timeout=5.0)
             req.cancel()
-            # Give the event loop time to process cancellation
-            await asyncio.sleep(0.05)
+            for _ in range(200):
+                if req.status == "Cancelled":
+                    break
+                await asyncio.sleep(0)
+            else:
+                pytest.fail("request status did not become Cancelled in time")
             assert req.status == "Cancelled"
 
 
@@ -1601,22 +1607,18 @@ class TestGetSslContext:
 
         This test verifies by:
         1. Mocking the aiohttp.ClientSession used inside get_ssl_context
-        2. Providing a self-signed cert as the response body
+        2. Providing opaque bytes as the HTTP body (real parsing is mocked via
+           ``ssl.create_default_context`` returning a MagicMock)
         3. Calling get_ssl_context twice
         4. Asserting the HTTP fetch only happens once (cached)
 
         Assumptions:
         - get_ssl_context uses a fresh aiohttp.ClientSession internally
-        - The cert is written to a temp file, loaded, then deleted
+        - Production writes PEM to a temp file and loads it; here ``load_verify_locations``
+          is never invoked on a real context because ``create_default_context`` is patched
         """
         import ssl as _ssl
-        import tempfile
 
-        # Generate a minimal self-signed cert for the test
-        from unittest.mock import call
-
-        # Use a real DER-encoded cert stub — we just need ssl.create_default_context
-        # to not crash. We'll mock the ssl calls instead.
         fake_cert_bytes = b"fake-cert-data"
 
         mock_response = AsyncMock()

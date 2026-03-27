@@ -219,11 +219,12 @@ class TestBackendSessionGet:
     @pytest.mark.asyncio
     async def test_session_get_missing_session_id_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
         """
-        Verifies session_get_handler returns 422 when session_id is missing.
+        Verifies session_get_handler returns 422 when session_id is missing or empty.
 
         This test verifies by:
-        1. Sending JSON with only session_auth and with ``session_id`` ``""``
-        2. Asserting 422 and missing session_id error
+        1. Sending JSON with only ``session_auth`` (missing ``session_id`` key)
+        2. Sending JSON with ``session_id`` ``""`` and ``session_auth``
+        3. Asserting 422 and missing session_id error for both
 
         Assumptions:
         - Same validation as other session handlers for session_id
@@ -690,6 +691,7 @@ class TestBackendCloseSession:
         serverless_backend_and_handler_default,
         make_pyworker_session,
         make_patch_skip_backend_run_session_on_close,
+        make_serverless_mock_request_with_transport,
     ) -> None:
         """
         Verifies __close_session closes each in-flight request transport when open.
@@ -703,10 +705,7 @@ class TestBackendCloseSession:
         - Transport close failures are swallowed inside __close_session
         """
         backend, _ = serverless_backend_and_handler_default
-        mock_tr = MagicMock()
-        mock_tr.is_closing.return_value = False
-        mock_req = MagicMock()
-        mock_req.transport = mock_tr
+        mock_req, mock_tr = make_serverless_mock_request_with_transport()
         sid = "sess-transport"
         backend.sessions[sid] = make_pyworker_session(
             session_id=sid,
@@ -914,6 +913,36 @@ class TestBackendHandleRequest:
         assert resp.body is None or resp.body == b""
         mock_errored.assert_called_once()
         assert "model exploded" in mock_errored.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_handle_request_call_backend_raises_returns_500(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
+        """
+        Verifies exceptions from __call_backend (before generate_client_response) become HTTP 500.
+
+        This test verifies by:
+        1. Patching __call_backend to raise RuntimeError
+        2. Asserting response status 500 and empty body
+
+        Assumptions:
+        - make_request except-branch returns web.Response(500) without body
+        """
+        backend, handler = serverless_backend_and_handler_default
+        fn = backend.create_handler(handler)
+        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        with patch.object(backend.metrics, "_request_errored") as mock_errored:
+            with patch.object(
+                backend,
+                "_Backend__call_backend",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("backend call failed"),
+            ):
+                resp = await fn(req)
+        assert resp.status == 500
+        assert resp.body is None or resp.body == b""
+        mock_errored.assert_called_once()
+        assert "backend call failed" in mock_errored.call_args[0][1]
 
     @pytest.mark.asyncio
     async def test_handle_request_call_api_uses_session_post(
@@ -1213,7 +1242,9 @@ class TestBackendSessionGc:
             with make_patch_skip_backend_run_session_on_close(backend):
                 with patch.object(backend, "_Backend__close_session", _close_then_signal):
                     task = asyncio.create_task(backend._Backend__session_gc_loop())
-                    await asyncio.wait_for(session_removed.wait(), timeout=15.0)
+                    t0 = asyncio.get_running_loop().time()
+                    await asyncio.wait_for(session_removed.wait(), timeout=5.0)
+                    assert asyncio.get_running_loop().time() - t0 < 1.0
                     task.cancel()
                     try:
                         await task
@@ -1274,7 +1305,7 @@ class TestBackendHelpers:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
-        attach_serverless_backend_mock_session_post,
+        attach_serverless_backend_mock_aiohttp_session,
     ) -> None:
         """
         Verifies __run_session_on_close POSTs merged body including session_id.
@@ -1296,7 +1327,7 @@ class TestBackendHelpers:
             on_close_route="http://internal/hook",
             on_close_payload={"foo": "bar"},
         )
-        mock_sess = attach_serverless_backend_mock_session_post(backend, response_text="ok")
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(backend, response_text="ok")
         await backend._Backend__run_session_on_close(session)
         mock_sess.post.assert_called_once()
         call_kw = mock_sess.post.call_args.kwargs
@@ -1311,7 +1342,7 @@ class TestBackendHelpers:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
-        attach_serverless_backend_mock_session_post,
+        attach_serverless_backend_mock_aiohttp_session,
     ) -> None:
         """
         Verifies __run_session_on_close wraps non-dict on_close_payload under 'payload'.
@@ -1332,7 +1363,7 @@ class TestBackendHelpers:
             on_close_route="http://hook/cb",
             on_close_payload="done",
         )
-        mock_sess = attach_serverless_backend_mock_session_post(backend, response_text="")
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(backend, response_text="")
         await backend._Backend__run_session_on_close(session)
         body = mock_sess.post.call_args.kwargs["json"]
         assert body == {"payload": "done", "session_id": "cb2"}
@@ -1342,7 +1373,7 @@ class TestBackendHelpers:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
-        attach_serverless_backend_mock_session_post,
+        attach_serverless_backend_mock_aiohttp_session,
     ) -> None:
         """
         Verifies __run_session_on_close returns immediately when on_close_route is falsy.
@@ -1356,7 +1387,7 @@ class TestBackendHelpers:
         - Early return happens before any HTTP
         """
         backend, _ = serverless_backend_and_handler_default
-        mock_sess = attach_serverless_backend_mock_session_post(backend, spy_only=True)
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(backend, spy_only=True)
         session = make_pyworker_session(
             session_id="no-cb",
             lifetime=1.0,
@@ -1373,7 +1404,7 @@ class TestBackendHelpers:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
-        attach_serverless_backend_mock_session_post,
+        attach_serverless_backend_mock_aiohttp_session,
     ) -> None:
         """
         Verifies __run_session_on_close uses an empty dict when on_close_payload is None.
@@ -1394,7 +1425,7 @@ class TestBackendHelpers:
             on_close_route="http://notify/",
             on_close_payload=None,
         )
-        mock_sess = attach_serverless_backend_mock_session_post(backend)
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(backend)
         await backend._Backend__run_session_on_close(session)
         assert mock_sess.post.call_args.kwargs["json"] == {"session_id": "cb-null-payload"}
 
@@ -1403,7 +1434,7 @@ class TestBackendHelpers:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
-        attach_serverless_backend_mock_session_post,
+        attach_serverless_backend_mock_aiohttp_session,
     ) -> None:
         """
         Verifies __run_session_on_close does not raise when the callback returns HTTP >= 400.
@@ -1417,7 +1448,7 @@ class TestBackendHelpers:
           sees no exception
         """
         backend, _ = serverless_backend_and_handler_default
-        mock_sess = attach_serverless_backend_mock_session_post(
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(
             backend, response_status=503, response_text="unavailable"
         )
         session = make_pyworker_session(
@@ -1439,7 +1470,7 @@ class TestBackendHelpers:
         self,
         serverless_backend_and_handler_default,
         make_pyworker_session,
-        attach_serverless_backend_mock_session_post,
+        attach_serverless_backend_mock_aiohttp_session,
     ) -> None:
         """
         Verifies __run_session_on_close catches exceptions from session.post.
@@ -1452,7 +1483,7 @@ class TestBackendHelpers:
         - Broad ``except`` logs at DEBUG and returns (not visible at INFO by default)
         """
         backend, _ = serverless_backend_and_handler_default
-        mock_sess = attach_serverless_backend_mock_session_post(
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(
             backend, post_side_effect=ConnectionError("refused")
         )
         session = make_pyworker_session(

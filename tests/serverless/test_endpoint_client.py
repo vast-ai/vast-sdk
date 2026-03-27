@@ -116,6 +116,21 @@ class TestEndpointDelegatesToClient:
         assert kw["timeout"] == 5.0
         assert kw["session"] is sess
 
+    def test_request_uses_defaults_for_optional_queue_kwargs(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
+        """Default ``cost``, ``retry``, ``stream``, ``timeout``, ``session``, ``serverless_request``."""
+        ep = make_delegate_endpoint()
+        ep.request("/r", {})
+        mock_serverless_client.queue_endpoint_request.assert_called_once()
+        kw = mock_serverless_client.queue_endpoint_request.call_args.kwargs
+        assert kw["cost"] == 100
+        assert kw["retry"] is True
+        assert kw["stream"] is False
+        assert kw["timeout"] is None
+        assert kw["session"] is None
+        assert kw["serverless_request"] is None
+
     @pytest.mark.asyncio
     async def test_close_session_forwards_to_client(
         self, mock_serverless_client, make_delegate_endpoint, make_session_mock
@@ -155,6 +170,19 @@ class TestEndpointDelegatesToClient:
         )
 
     @pytest.mark.asyncio
+    async def test_get_session_default_timeout_is_ten(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
+        ep = make_delegate_endpoint()
+        await ep.get_session(1, {"k": "v"})
+        mock_serverless_client.get_endpoint_session.assert_awaited_once_with(
+            endpoint=ep,
+            session_id=1,
+            session_auth={"k": "v"},
+            timeout=10.0,
+        )
+
+    @pytest.mark.asyncio
     async def test_session_forwards_to_start_endpoint_session(
         self, mock_serverless_client, make_delegate_endpoint
     ) -> None:
@@ -184,6 +212,21 @@ class TestEndpointDelegatesToClient:
             on_close_route="/bye",
             on_close_payload={"a": 1},
             timeout=99.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_session_uses_defaults_for_optional_start_kwargs(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
+        ep = make_delegate_endpoint()
+        await ep.session()
+        mock_serverless_client.start_endpoint_session.assert_awaited_once_with(
+            endpoint=ep,
+            cost=100,
+            lifetime=60,
+            on_close_route=None,
+            on_close_payload=None,
+            timeout=None,
         )
 
     @pytest.mark.asyncio
@@ -264,6 +307,76 @@ class TestEndpointRoute:
         ep = make_delegate_endpoint()
         with pytest.raises(ValueError, match="invalid"):
             await ep._route()
+
+    async def test_route_raises_when_client_reference_is_none(
+        self, make_delegate_endpoint
+    ) -> None:
+        """``_route`` treats missing client like a closed client (before ``_make_request``)."""
+        ep = make_delegate_endpoint()
+        ep.client = None  # type: ignore[assignment]
+        with pytest.raises(ValueError, match="invalid"):
+            await ep._route()
+
+    async def test_route_passes_default_body_fields_to_make_request(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
+        """No-arg ``_route()`` uses cost 0, request_idx 0, replay_timeout 60."""
+        ep = make_delegate_endpoint()
+        fake = {"ok": True, "json": {"url": "https://w"}}
+        with patch(
+            "vastai.serverless.client.endpoint._make_request",
+            new_callable=AsyncMock,
+            return_value=fake,
+        ) as m:
+            await ep._route()
+        body = m.call_args.kwargs["body"]
+        assert body["cost"] == 0.0
+        assert body["request_idx"] == 0
+        assert body["replay_timeout"] == 60.0
+
+    async def test_route_returns_waiting_when_json_payload_missing(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
+        """``ok`` with no ``json`` key → empty body → WAITING (no ``url``)."""
+        ep = make_delegate_endpoint()
+        with patch(
+            "vastai.serverless.client.endpoint._make_request",
+            new_callable=AsyncMock,
+            return_value={"ok": True},
+        ):
+            route = await ep._route()
+        assert route.status == "WAITING"
+        assert route.get_url() is None
+
+    async def test_route_returns_waiting_when_json_is_none(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
+        """``json: None`` normalizes to ``{}`` → WAITING."""
+        ep = make_delegate_endpoint()
+        with patch(
+            "vastai.serverless.client.endpoint._make_request",
+            new_callable=AsyncMock,
+            return_value={"ok": True, "json": None},
+        ):
+            route = await ep._route()
+        assert route.status == "WAITING"
+        assert route.get_url() is None
+
+    async def test_route_http_error_truncates_response_text_in_message(
+        self, mock_serverless_client, make_delegate_endpoint
+    ) -> None:
+        long = "E" * 700
+        ep = make_delegate_endpoint()
+        with patch(
+            "vastai.serverless.client.endpoint._make_request",
+            new_callable=AsyncMock,
+            return_value={"ok": False, "status": 503, "text": long},
+        ):
+            with pytest.raises(RuntimeError, match="HTTP 503") as ei:
+                await ep._route()
+        msg = str(ei.value)
+        assert "E" * 512 in msg
+        assert "E" * 513 not in msg
 
     async def test_route_returns_ready_route_response(
         self, mock_serverless_client, make_delegate_endpoint
@@ -377,3 +490,13 @@ class TestRouteResponse:
         """
         r = RouteResponse({"url": "u"})
         assert "READY" in repr(r)
+
+    def test_ready_with_url_defaults_request_idx_when_absent(self) -> None:
+        """URL present implies READY; missing ``request_idx`` uses 0."""
+        r = RouteResponse({"url": "https://worker"})
+        assert r.status == "READY"
+        assert r.request_idx == 0
+        assert r.get_url() == "https://worker"
+
+    def test_waiting_repr_contains_status(self) -> None:
+        assert "WAITING" in repr(RouteResponse({"pending": True}))

@@ -6,6 +6,7 @@ everything that would bind ports or loop forever heavily mocked.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -275,3 +276,108 @@ def test_start_server_invokes_asyncio_run(
 
     assert len(ran) == 1
     assert asyncio.iscoroutine(ran[0])
+
+
+# ---------------------------------------------------------------------------
+# serverless_gather_await_all (conftest stub semantics)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_serverless_gather_await_all_runs_awaitables_in_order(
+    serverless_gather_await_all,
+) -> None:
+    g = serverless_gather_await_all
+    order: list[int] = []
+
+    async def first() -> None:
+        order.append(1)
+
+    async def second() -> None:
+        order.append(2)
+
+    await g(first(), second())
+    assert order == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_serverless_gather_await_all_cancels_later_tasks_on_exception(
+    serverless_gather_await_all,
+) -> None:
+    g = serverless_gather_await_all
+
+    async def ok_coro() -> None:
+        await asyncio.sleep(0)
+
+    async def boom() -> None:
+        raise ValueError("stop")
+
+    t_late = asyncio.create_task(asyncio.sleep(999))
+    with pytest.raises(ValueError, match="stop"):
+        await g(ok_coro(), asyncio.create_task(boom()), t_late)
+    try:
+        await t_late
+    except asyncio.CancelledError:
+        pass
+    assert t_late.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_serverless_gather_await_all_closes_bare_coroutine_on_exception(
+    serverless_gather_await_all,
+) -> None:
+    g = serverless_gather_await_all
+
+    async def ok_coro() -> None:
+        await asyncio.sleep(0)
+
+    async def boom() -> None:
+        raise OSError("boom")
+
+    async def never_run() -> None:
+        await asyncio.sleep(999)
+
+    coro = never_run()
+    with pytest.raises(OSError, match="boom"):
+        await g(ok_coro(), boom(), coro)
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
+
+
+@pytest.mark.asyncio
+async def test_serverless_gather_await_all_cancels_pending_future_on_exception(
+    serverless_gather_await_all,
+) -> None:
+    g = serverless_gather_await_all
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+
+    async def boom() -> None:
+        raise RuntimeError("fail")
+
+    with pytest.raises(RuntimeError, match="fail"):
+        await g(boom(), fut)
+    assert fut.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_serverless_gather_await_all_accepts_ignored_gather_kwargs(
+    serverless_gather_await_all,
+) -> None:
+    g = serverless_gather_await_all
+
+    async def ok() -> None:
+        await asyncio.sleep(0)
+
+    await g(ok(), return_exceptions=True)
+
+
+def test_beacon_model_errored_assertion_requires_each_call_contains_marker() -> None:
+    """Regression: substring checks must scan every call, not only the last."""
+    good = [("SSL Certificate failure",), ("SSL Certificate retry",)]
+    for call in good:
+        assert "SSL Certificate" in call[0]
+
+    bad = [("SSL Certificate ok",), ("unrelated noise",)]
+    with pytest.raises(AssertionError):
+        for msg in bad:
+            assert "SSL Certificate" in msg[0]
