@@ -233,18 +233,28 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
     def ensure_ready(self):
         asyncio.run(self._ensure_ready_isolated_connection())
 
+    def _unwrap_worker_response(self, response: dict[str, Any]) -> serialization.JSON:
+        try:
+            return response["response"]["result"]
+        except KeyError:
+            raise Exception(
+                f"Remote function call failed with status code {response['status']}: {response['text']}"
+            )
+
     async def _dispatch(self, f_name, globals, sig, args, kwargs) -> Any:
         if not isinstance(self._inner, _FullDeployment):
             raise Exception("Deployment is not ready. Call .ensure_ready() first!")
         bound_args = sig.bind(*args, **kwargs)
         bound_args.apply_defaults()
         return serialization.deserialize_unwrap_error(
-            await self._inner.deployment.endpoint.request(
-                "/remote/" + "/".join(f_name),
-                {
-                    k: serialization.serialize(v, self._inner.root_module)
-                    for k, v in bound_args.arguments.items()
-                },
+            self._unwrap_worker_response(
+                await self._inner.deployment.endpoint.request(
+                    "/remote/" + "/".join(f_name),
+                    {
+                        k: serialization.serialize(v, self._inner.root_module)
+                        for k, v in bound_args.arguments.items()
+                    },
+                )
             ),
             self._inner.root_module,
             globals,

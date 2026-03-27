@@ -1,6 +1,7 @@
 import base64
 from typing import Any, TypeAlias
 from importlib import import_module
+from vastai import logging
 
 
 def relativize_module(mod: str, root_module):
@@ -101,6 +102,7 @@ def serialize_err(err, root_module: str):
 
 
 def deserialize_unwrap_error(json, root_module: str, globals):
+    logging.log_debug(f"got json: \n{json}")
     for k, v in json.items():
         if (k) == "ok":
             return deserialize(v, root_module, globals)
