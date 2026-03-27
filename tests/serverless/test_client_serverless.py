@@ -1369,3 +1369,311 @@ class TestQueueEndpointRequestTaskBehavior:
                 )
                 result = await req
                 assert result["response"] is mock_stream
+
+
+# ---------------------------------------------------------------------------
+# queue_endpoint_request – resilience edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestQueueEndpointRequestResilience:
+    """Cover transport failure, generic exception retry, and cancellation paths
+    in queue_endpoint_request that the main tests do not exercise."""
+
+    async def test_session_worker_connection_error_raises(self) -> None:
+        """
+        Verifies that a ClientConnectorError with an active session raises
+        ConnectionError and marks session.open = False.
+
+        This test verifies by:
+        1. Creating a Serverless client and Endpoint
+        2. Creating a Session bound to that endpoint
+        3. Mocking _make_request to raise ClientConnectorError
+        4. Asserting ConnectionError is raised and session.open is False
+
+        Assumptions:
+        - Session-bound requests cannot re-route to a different worker
+        - The session is marked closed on transport failure
+        """
+        client = Serverless(api_key="test-key")
+        ep = Endpoint(client=client, name="ep", id=1, api_key="k")
+        client._get_session = AsyncMock()
+        client.get_ssl_context = AsyncMock(return_value=None)
+
+        session = Session(
+            endpoint=ep,
+            session_id="sess-1",
+            lifetime=60.0,
+            expiration="2026-12-31T00:00:00Z",
+            url="https://worker1.vast.ai",
+            auth_data={"url": "https://worker1.vast.ai", "signature": "abc"},
+        )
+        assert session.open is True
+
+        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            conn_os_error = OSError("connection refused")
+            mock_req.side_effect = aiohttp.ClientConnectorError(
+                connection_key=MagicMock(), os_error=conn_os_error,
+            )
+            req = client.queue_endpoint_request(
+                endpoint=ep,
+                worker_route="/predict",
+                worker_payload={},
+                session=session,
+            )
+            with pytest.raises(ConnectionError, match="Session worker unavailable"):
+                await req
+
+        assert session.open is False
+
+    async def test_session_worker_server_disconnected_raises(self) -> None:
+        """
+        Verifies that ServerDisconnectedError with an active session raises
+        ConnectionError.
+
+        This test verifies by:
+        1. Mocking _make_request to raise ServerDisconnectedError
+        2. Asserting ConnectionError is raised
+
+        Assumptions:
+        - ServerDisconnectedError is handled identically to ClientConnectorError
+          when a session is present
+        """
+        client = Serverless(api_key="test-key")
+        ep = Endpoint(client=client, name="ep", id=1, api_key="k")
+        client._get_session = AsyncMock()
+        client.get_ssl_context = AsyncMock(return_value=None)
+
+        session = Session(
+            endpoint=ep,
+            session_id="sess-2",
+            lifetime=60.0,
+            expiration="2026-12-31T00:00:00Z",
+            url="https://worker2.vast.ai",
+            auth_data={"url": "https://worker2.vast.ai", "signature": "xyz"},
+        )
+
+        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            mock_req.side_effect = aiohttp.ServerDisconnectedError()
+            req = client.queue_endpoint_request(
+                endpoint=ep,
+                worker_route="/predict",
+                worker_payload={},
+                session=session,
+            )
+            with pytest.raises(ConnectionError, match="Session worker unavailable"):
+                await req
+
+        assert session.open is False
+
+    async def test_no_session_connection_error_reroutes(self) -> None:
+        """
+        Verifies that a ClientConnectorError WITHOUT a session triggers a
+        re-route instead of raising.
+
+        This test verifies by:
+        1. Mocking _make_request to raise ClientConnectorError once, then succeed
+        2. Mocking _route to return READY both times
+        3. Asserting the request succeeds and _route was called twice (initial + re-route)
+
+        Assumptions:
+        - Without a session, transport errors trigger re-routing to a new worker
+        - request_idx resets so a fresh route is obtained
+        """
+        client = Serverless(api_key="test-key", max_poll_interval=0.001)
+        ep = Endpoint(client=client, name="ep", id=1, api_key="k")
+        client._get_session = AsyncMock()
+        client.get_ssl_context = AsyncMock(return_value=None)
+
+        with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
+            mock_route.return_value = MagicMock(
+                status="READY", request_idx=1,
+                get_url=MagicMock(return_value="https://w.vast.ai"),
+                body={"url": "https://w.vast.ai"},
+            )
+            conn_os_error = OSError("connection refused")
+            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+                mock_req.side_effect = [
+                    aiohttp.ClientConnectorError(
+                        connection_key=MagicMock(), os_error=conn_os_error,
+                    ),
+                    {"ok": True, "json": {"result": "rerouted"}, "status": 200, "text": ""},
+                ]
+                req = client.queue_endpoint_request(
+                    endpoint=ep,
+                    worker_route="/predict",
+                    worker_payload={},
+                )
+                result = await req
+                assert result["ok"] is True
+                assert result["response"]["result"] == "rerouted"
+                # _route called twice: initial route + re-route after failure
+                assert mock_route.call_count == 2
+
+    async def test_generic_exception_retries(self) -> None:
+        """
+        Verifies that a non-transport exception (e.g. RuntimeError) in
+        _make_request triggers a retry rather than failing immediately.
+
+        This test verifies by:
+        1. Mocking _make_request to raise RuntimeError once, then succeed
+        2. Asserting the request eventually succeeds
+        3. Asserting _make_request was called twice
+
+        Assumptions:
+        - The bare `except Exception` clause in queue_endpoint_request sets
+          status to "Retrying" and continues the loop
+        """
+        client = Serverless(api_key="test-key", max_poll_interval=0.001)
+        ep = Endpoint(client=client, name="ep", id=1, api_key="k")
+        client._get_session = AsyncMock()
+        client.get_ssl_context = AsyncMock(return_value=None)
+
+        with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
+            mock_route.return_value = MagicMock(
+                status="READY", request_idx=1,
+                get_url=MagicMock(return_value="https://w.vast.ai"),
+                body={"url": "https://w.vast.ai"},
+            )
+            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+                mock_req.side_effect = [
+                    RuntimeError("unexpected worker error"),
+                    {"ok": True, "json": {"result": "recovered"}, "status": 200, "text": ""},
+                ]
+                req = client.queue_endpoint_request(
+                    endpoint=ep,
+                    worker_route="/predict",
+                    worker_payload={},
+                )
+                result = await req
+                assert result["ok"] is True
+                assert result["response"]["result"] == "recovered"
+                assert mock_req.call_count == 2
+
+    async def test_cancelled_error_sets_status(self) -> None:
+        """
+        Verifies that cancelling the background task sets request status
+        to "Cancelled".
+
+        This test verifies by:
+        1. Mocking _route to block indefinitely (simulating a stuck poll)
+        2. Cancelling the ServerlessRequest future
+        3. Waiting briefly, then asserting status == "Cancelled"
+
+        Assumptions:
+        - CancelledError is caught by the outer try/except
+        - _propagate_cancel forwards the cancellation to the bg_task
+        """
+        client = Serverless(api_key="test-key")
+        ep = Endpoint(client=client, name="ep", id=1, api_key="k")
+        client._get_session = AsyncMock()
+        client.get_ssl_context = AsyncMock(return_value=None)
+
+        async def _block_forever(**kwargs):
+            await asyncio.sleep(999)
+
+        with patch.object(ep, "_route", new_callable=AsyncMock, side_effect=_block_forever):
+            req = client.queue_endpoint_request(
+                endpoint=ep,
+                worker_route="/predict",
+                worker_payload={},
+            )
+            # Let the task start and hit the blocking _route
+            await asyncio.sleep(0.05)
+            req.cancel()
+            # Give the event loop time to process cancellation
+            await asyncio.sleep(0.05)
+            assert req.status == "Cancelled"
+
+
+# ---------------------------------------------------------------------------
+# get_ssl_context – hermetic SSL certificate loading
+# ---------------------------------------------------------------------------
+
+
+class TestGetSslContext:
+    """Cover the get_ssl_context method that downloads and caches the Vast root cert."""
+
+    async def test_downloads_and_caches_ssl_cert(self) -> None:
+        """
+        Verifies that get_ssl_context fetches the cert, creates an SSLContext,
+        and caches it for subsequent calls.
+
+        This test verifies by:
+        1. Mocking the aiohttp.ClientSession used inside get_ssl_context
+        2. Providing a self-signed cert as the response body
+        3. Calling get_ssl_context twice
+        4. Asserting the HTTP fetch only happens once (cached)
+
+        Assumptions:
+        - get_ssl_context uses a fresh aiohttp.ClientSession internally
+        - The cert is written to a temp file, loaded, then deleted
+        """
+        import ssl as _ssl
+        import tempfile
+
+        # Generate a minimal self-signed cert for the test
+        from unittest.mock import call
+
+        # Use a real DER-encoded cert stub — we just need ssl.create_default_context
+        # to not crash. We'll mock the ssl calls instead.
+        fake_cert_bytes = b"fake-cert-data"
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.read = AsyncMock(return_value=fake_cert_bytes)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_ctx = MagicMock(spec=_ssl.SSLContext)
+
+        client = Serverless(api_key="test-key")
+        assert client._ssl_context is None
+
+        with patch("vastai.serverless.client.client.aiohttp.ClientSession", return_value=mock_session):
+            with patch("vastai.serverless.client.client.ssl.create_default_context", return_value=mock_ctx):
+                ctx1 = await client.get_ssl_context()
+                ctx2 = await client.get_ssl_context()
+
+        # Should return the same cached context both times
+        assert ctx1 is ctx2
+        assert ctx1 is mock_ctx
+        # The HTTP fetch should only happen once
+        mock_session.get.assert_called_once_with(Serverless.SSL_CERT_URL)
+        # The cert should have been loaded
+        mock_ctx.load_verify_locations.assert_called_once()
+
+    async def test_ssl_cert_fetch_failure_raises(self) -> None:
+        """
+        Verifies that a non-200 response from the cert URL raises an Exception.
+
+        This test verifies by:
+        1. Mocking the HTTP response with status 500
+        2. Asserting Exception is raised with appropriate message
+
+        Assumptions:
+        - get_ssl_context raises when cert download fails
+        - _ssl_context remains None after failure
+        """
+        mock_response = AsyncMock()
+        mock_response.status = 500
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        client = Serverless(api_key="test-key")
+
+        with patch("vastai.serverless.client.client.aiohttp.ClientSession", return_value=mock_session):
+            with pytest.raises(Exception, match="Failed to fetch SSL cert: 500"):
+                await client.get_ssl_context()
+
+        assert client._ssl_context is None
