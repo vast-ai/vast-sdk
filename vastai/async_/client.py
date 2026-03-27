@@ -107,19 +107,19 @@ class AsyncClient(_BaseClient):
         """Search available offers and return a list of AsyncOffer result wrappers."""
         payload = dict(query.query)
         for key, value in [
-            ("type",               type_),
-            ("order",              order),
-            ("limit",              limit),
-            ("allocated_storage",  allocated_storage),
+            ("type", type_),
+            ("order", order),
+            ("limit", limit),
+            ("allocated_storage", allocated_storage),
             ("target_reliability", target_reliability),
-            ("disable_bundling",   disable_bundling),
-            ("external",           external),
-            ("extra_ids",          extra_ids),
-            ("has_avx",            has_avx),
-            ("gpu_option",         gpu_option),
-            ("show_incompatible",  show_incompatible),
-            ("sort_option",        sort_option),
-            ("template_id",        template_id),
+            ("disable_bundling", disable_bundling),
+            ("external", external),
+            ("extra_ids", extra_ids),
+            ("has_avx", has_avx),
+            ("gpu_option", gpu_option),
+            ("show_incompatible", show_incompatible),
+            ("sort_option", sort_option),
+            ("template_id", template_id),
         ]:
             if value is not None:
                 payload[key] = value
@@ -154,7 +154,9 @@ class AsyncClient(_BaseClient):
             data = await resp.json(content_type=None)
 
         if not data.get("success"):
-            raise Exception(f"Failed to create instance: {data.get('error', '')} - {data.get('msg', '')}")
+            raise Exception(
+                f"Failed to create instance: {data.get('error', '')} - {data.get('msg', '')}"
+            )
 
         resp_data = CreateInstanceResponse.from_dict(data)
         # Fetch the newly created instance
@@ -178,11 +180,16 @@ class AsyncClient(_BaseClient):
             resp.raise_for_status()
             data = await resp.json(content_type=None)
 
-        return [AsyncInstance(Instance.from_dict(i), self) for i in data.get("instances", [])]
+        return [
+            AsyncInstance(Instance.from_dict(i), self)
+            for i in data.get("instances", [])
+        ]
 
     async def destroy_instance(self, instance_or_id: Union[AsyncInstance, int]) -> None:
         """Destroy a running or stopped instance."""
-        instance_id = instance_or_id if isinstance(instance_or_id, int) else instance_or_id.id
+        instance_id = (
+            instance_or_id if isinstance(instance_or_id, int) else instance_or_id.id
+        )
         session = await self._get_session()
         async with session.delete(
             self._url(f"/api/v0/instances/{instance_id}/"),
@@ -196,6 +203,7 @@ class AsyncClient(_BaseClient):
         self,
         *,
         instance: str = "prod",
+        autoscaler_url: Optional[str] = None,
         debug: bool = False,
         default_request_timeout: float = 600.0,
         max_poll_interval: float = 5.0,
@@ -204,6 +212,7 @@ class AsyncClient(_BaseClient):
         sl = CoroutineServerless(
             api_key=self._api_key,
             instance=instance,
+            autoscaler_url=autoscaler_url,
             debug=debug,
             connection_limit=self._connection_limit,
             default_request_timeout=default_request_timeout,

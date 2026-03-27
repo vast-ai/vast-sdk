@@ -114,6 +114,7 @@ class _ServerlessBase(Generic[R]):
         *,
         debug: bool = False,
         instance: str = "prod",
+        autoscaler_url: Optional[str] = None,
         connection_limit: int = 500,
         default_request_timeout: float = 600.0,
         max_poll_interval: float = 5.0,
@@ -124,22 +125,25 @@ class _ServerlessBase(Generic[R]):
             )
         self.api_key = api_key
 
-        match instance:
-            case "prod":
-                self.autoscaler_url = "https://run.vast.ai"
-                self.vast_web_url = "https://console.vast.ai"
-            case "alpha":
-                self.autoscaler_url = "https://run-alpha.vast.ai"
-                self.vast_web_url = "https://alpha.vast.ai"
-            case "candidate":
-                self.autoscaler_url = "https://run-candidate.vast.ai"
-                self.vast_web_url = "https://candidate.vast.ai"
-            case "local":
-                self.autoscaler_url = "http://localhost:8080"
-                self.vast_web_url = "https://alpha.vast.ai"
-            case _:
-                self.autoscaler_url = "https://run.vast.ai"
-                self.vast_web_url = "https://console.vast.ai"
+        if autoscaler_url:
+            self.autoscaler_url = autoscaler_url
+        else:
+            match instance:
+                case "prod":
+                    self.autoscaler_url = "https://run.vast.ai"
+                    self.vast_web_url = "https://console.vast.ai"
+                case "alpha":
+                    self.autoscaler_url = "https://run-alpha.vast.ai"
+                    self.vast_web_url = "https://alpha.vast.ai"
+                case "candidate":
+                    self.autoscaler_url = "https://run-candidate.vast.ai"
+                    self.vast_web_url = "https://candidate.vast.ai"
+                case "local":
+                    self.autoscaler_url = "http://localhost:8080"
+                    self.vast_web_url = "https://alpha.vast.ai"
+                case _:
+                    self.autoscaler_url = "https://run.vast.ai"
+                    self.vast_web_url = "https://console.vast.ai"
 
         self.latencies = collections.deque(maxlen=50)
         self.debug = debug

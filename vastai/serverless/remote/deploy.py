@@ -108,20 +108,31 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         self,
         api_key: str | object = _APIKEY_SENTINEL,
         ttl: float | None = None,
+        autoscaler_instance="prod",
+        autoscaler_url: Optional[str] = None,
+        webserver_url="https://console.vast.ai",
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.async_client = AsyncClient(api_key)
-        self.client = self.async_client.serverless()
+        self.async_client = AsyncClient(api_key, vast_server=webserver_url)
+        self.client = self.async_client.serverless(
+            instance=autoscaler_instance, autoscaler_url=autoscaler_url
+        )
+        self.autoscaler_instance = autoscaler_instance
+        self.autoscaler_url = self.client.autoscaler_url
+        self.webserver_url = webserver_url
         self._image: Image | None = None
         self._autoscaling: Autoscaling | None = None
         self._ttl = ttl
         self._inner: _FullDeployment | None = None
 
     def _compile_env(self, checked_image: Image) -> str:
-        return " ".join(
-            f"-p {port}:{port}/{type_}" for port, type_ in checked_image.ports
-        )
+        envs = [f"-p {port}:{port}/{type_}" for port, type_ in checked_image.ports]
+        if self.autoscaler_url is not None:
+            envs.append(f"-e REPORT_ADDR={self.autoscaler_url}")
+        if self.webserver_url != "https://console.vast.ai":
+            envs.append(f"-e VAST_API_URL={self.webserver_url}")
+        return " ".join(envs)
 
     def _into_deployment_config_and_tarball(self, tar_path: str) -> DeploymentConfig:
         # should error if _image, _autoscaling, file, or any other field needed to calculate DeploymentConfig is None
