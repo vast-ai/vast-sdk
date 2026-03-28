@@ -21,7 +21,6 @@ packages = [
 ]
 
 [tool.poetry.scripts]
-vast = "vastai.serverless.cli:main"
 serve-vast-deployment = "cli.serve_deployment:main"
 
 [tool.poetry-dynamic-versioning]
