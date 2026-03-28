@@ -483,7 +483,12 @@ class Backend:
 
         try:
             if handler.allow_parallel_requests:
-                work_task = create_task(make_request())
+                coro = make_request()
+                try:
+                    work_task = create_task(coro)
+                except Exception:
+                    coro.close()
+                    raise
                 # Handler cancellation will raise CancelledError on client disconnect
                 return await work_task
 
@@ -508,7 +513,12 @@ class Backend:
                     )
 
                 # Execute the work task
-                work_task = create_task(make_request())
+                coro = make_request()
+                try:
+                    work_task = create_task(coro)
+                except Exception:
+                    coro.close()
+                    raise
                 return await work_task
 
         except asyncio.CancelledError:
