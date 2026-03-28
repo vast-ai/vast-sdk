@@ -3,6 +3,7 @@
 Covers session HTTP handlers, request forwarding entry points, and small helpers.
 All I/O and crypto verification are mocked per unit-test-requirements (no real network).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +29,9 @@ class TestBackendSessionHealth:
     """Tests for Backend.session_health_handler."""
 
     @pytest.mark.asyncio
-    async def test_session_health_invalid_json_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_health_invalid_json_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_health_handler returns 422 when request body is not valid JSON.
 
@@ -48,7 +51,9 @@ class TestBackendSessionHealth:
         assert body.get("error") == "invalid JSON"
 
     @pytest.mark.asyncio
-    async def test_session_health_missing_session_id_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_health_missing_session_id_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_health_handler returns 422 when session_id is absent or empty.
 
@@ -63,15 +68,25 @@ class TestBackendSessionHealth:
         req = serverless_backend_testkit.json_request({"session_auth": "x"})
         resp = await backend.session_health_handler(req)
         assert resp.status == 422
-        assert serverless_backend_testkit.response_json(resp).get("error") == "missing session_id"
+        assert (
+            serverless_backend_testkit.response_json(resp).get("error")
+            == "missing session_id"
+        )
 
-        req_empty = serverless_backend_testkit.json_request({"session_id": "", "session_auth": "x"})
+        req_empty = serverless_backend_testkit.json_request(
+            {"session_id": "", "session_auth": "x"}
+        )
         resp_empty = await backend.session_health_handler(req_empty)
         assert resp_empty.status == 422
-        assert serverless_backend_testkit.response_json(resp_empty).get("error") == "missing session_id"
+        assert (
+            serverless_backend_testkit.response_json(resp_empty).get("error")
+            == "missing session_id"
+        )
 
     @pytest.mark.asyncio
-    async def test_session_health_unknown_session_returns_ok_false(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_health_unknown_session_returns_ok_false(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies unknown session_id returns 200 with ok False (not an error status).
 
@@ -83,14 +98,19 @@ class TestBackendSessionHealth:
         - Handler distinguishes missing session from invalid auth for known sessions
         """
         backend, _ = serverless_backend_and_handler_default
-        req = serverless_backend_testkit.json_request({"session_id": "nope", "session_auth": None})
+        req = serverless_backend_testkit.json_request(
+            {"session_id": "nope", "session_auth": None}
+        )
         resp = await backend.session_health_handler(req)
         assert resp.status == 200
         assert serverless_backend_testkit.response_json(resp) == {"ok": False}
 
     @pytest.mark.asyncio
     async def test_session_health_invalid_auth_returns_401(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_pyworker_session
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_pyworker_session,
     ) -> None:
         """
         Verifies session_health_handler returns 401 when session_auth does not match.
@@ -113,13 +133,18 @@ class TestBackendSessionHealth:
             on_close_route=None,
             on_close_payload=None,
         )
-        req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": {"k": "bad"}})
+        req = serverless_backend_testkit.json_request(
+            {"session_id": sid, "session_auth": {"k": "bad"}}
+        )
         resp = await backend.session_health_handler(req)
         assert resp.status == 401
 
     @pytest.mark.asyncio
     async def test_session_health_valid_returns_ok_true(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_pyworker_session
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_pyworker_session,
     ) -> None:
         """
         Verifies session_health_handler returns 200 ok True when id and auth match.
@@ -142,7 +167,9 @@ class TestBackendSessionHealth:
             on_close_route=None,
             on_close_payload=None,
         )
-        req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": auth})
+        req = serverless_backend_testkit.json_request(
+            {"session_id": sid, "session_auth": auth}
+        )
         resp = await backend.session_health_handler(req)
         assert resp.status == 200
         assert serverless_backend_testkit.response_json(resp) == {"ok": True}
@@ -157,7 +184,9 @@ class TestBackendSessionGet:
     """Tests for Backend.session_get_handler."""
 
     @pytest.mark.asyncio
-    async def test_session_get_unknown_session_returns_400(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_get_unknown_session_returns_400(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_get_handler returns 400 when session does not exist.
 
@@ -174,11 +203,16 @@ class TestBackendSessionGet:
         )
         resp = await backend.session_get_handler(req)
         assert resp.status == 400
-        assert "does not exist" in serverless_backend_testkit.response_json(resp).get("error", "")
+        assert "does not exist" in serverless_backend_testkit.response_json(resp).get(
+            "error", ""
+        )
 
     @pytest.mark.asyncio
     async def test_session_get_success_returns_session_fields(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_pyworker_session
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_pyworker_session,
     ) -> None:
         """
         Verifies session_get_handler returns session metadata when auth matches.
@@ -204,7 +238,9 @@ class TestBackendSessionGet:
             created_at=100.0,
             request_idx=7,
         )
-        req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": auth})
+        req = serverless_backend_testkit.json_request(
+            {"session_id": sid, "session_auth": auth}
+        )
         resp = await backend.session_get_handler(req)
         assert resp.status == 200
         data = serverless_backend_testkit.response_json(resp)
@@ -217,7 +253,9 @@ class TestBackendSessionGet:
         assert data["created_at"] == 100.0
 
     @pytest.mark.asyncio
-    async def test_session_get_missing_session_id_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_get_missing_session_id_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_get_handler returns 422 when session_id is missing or empty.
 
@@ -233,15 +271,25 @@ class TestBackendSessionGet:
         req = serverless_backend_testkit.json_request({"session_auth": {}})
         resp = await backend.session_get_handler(req)
         assert resp.status == 422
-        assert serverless_backend_testkit.response_json(resp).get("error") == "missing session_id"
+        assert (
+            serverless_backend_testkit.response_json(resp).get("error")
+            == "missing session_id"
+        )
 
-        req_empty = serverless_backend_testkit.json_request({"session_id": "", "session_auth": {}})
+        req_empty = serverless_backend_testkit.json_request(
+            {"session_id": "", "session_auth": {}}
+        )
         resp_empty = await backend.session_get_handler(req_empty)
         assert resp_empty.status == 422
-        assert serverless_backend_testkit.response_json(resp_empty).get("error") == "missing session_id"
+        assert (
+            serverless_backend_testkit.response_json(resp_empty).get("error")
+            == "missing session_id"
+        )
 
     @pytest.mark.asyncio
-    async def test_session_get_invalid_json_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_get_invalid_json_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_get_handler returns 422 when the body is not valid JSON.
 
@@ -256,11 +304,17 @@ class TestBackendSessionGet:
         req = serverless_backend_testkit.json_request("{")
         resp = await backend.session_get_handler(req)
         assert resp.status == 422
-        assert serverless_backend_testkit.response_json(resp).get("error") == "invalid JSON"
+        assert (
+            serverless_backend_testkit.response_json(resp).get("error")
+            == "invalid JSON"
+        )
 
     @pytest.mark.asyncio
     async def test_session_get_wrong_auth_returns_401(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_pyworker_session
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_pyworker_session,
     ) -> None:
         """
         Verifies session_get_handler returns 401 when session_auth does not match.
@@ -299,7 +353,9 @@ class TestBackendSessionCreate:
     """Tests for Backend.session_create_handler."""
 
     @pytest.mark.asyncio
-    async def test_session_create_invalid_json_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_create_invalid_json_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_create_handler returns 422 on JSON decode errors.
 
@@ -314,7 +370,10 @@ class TestBackendSessionCreate:
         req = serverless_backend_testkit.json_request("not-json")
         resp = await backend.session_create_handler(req)
         assert resp.status == 422
-        assert serverless_backend_testkit.response_json(resp).get("error") == "invalid JSON"
+        assert (
+            serverless_backend_testkit.response_json(resp).get("error")
+            == "invalid JSON"
+        )
 
     @pytest.mark.asyncio
     async def test_session_create_at_max_sessions_returns_429(
@@ -372,7 +431,9 @@ class TestBackendSessionCreate:
     @pytest.mark.parametrize(
         "body",
         [
-            pytest.param({"auth_data": None, "payload": {"lifetime": 10.0}}, id="auth_null"),
+            pytest.param(
+                {"auth_data": None, "payload": {"lifetime": 10.0}}, id="auth_null"
+            ),
             pytest.param({"payload": {"lifetime": 10.0}}, id="auth_omitted"),
         ],
     )
@@ -447,7 +508,9 @@ class TestBackendSessionCreate:
         assert stored.expiration == pytest.approx(before + 60.0, abs=2.0)
 
     @pytest.mark.asyncio
-    async def test_session_create_returns_201_with_session_id(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_create_returns_201_with_session_id(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_create_handler creates a session and returns 201.
 
@@ -512,7 +575,9 @@ class TestBackendSessionEnd:
     """Tests for Backend.session_end_handler."""
 
     @pytest.mark.asyncio
-    async def test_session_end_not_found_returns_400(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_end_not_found_returns_400(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_end_handler returns 400 when session_id is unknown.
 
@@ -531,7 +596,9 @@ class TestBackendSessionEnd:
         assert resp.status == 400
 
     @pytest.mark.asyncio
-    async def test_session_end_invalid_json_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_end_invalid_json_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_end_handler returns 422 on invalid JSON.
 
@@ -548,7 +615,9 @@ class TestBackendSessionEnd:
         assert resp.status == 422
 
     @pytest.mark.asyncio
-    async def test_session_end_missing_session_id_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_session_end_missing_session_id_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies session_end_handler returns 422 when session_id is missing.
 
@@ -564,7 +633,9 @@ class TestBackendSessionEnd:
         resp = await backend.session_end_handler(req)
         assert resp.status == 422
 
-        req_empty = serverless_backend_testkit.json_request({"session_id": "", "session_auth": {}})
+        req_empty = serverless_backend_testkit.json_request(
+            {"session_id": "", "session_auth": {}}
+        )
         resp_empty = await backend.session_end_handler(req_empty)
         assert resp_empty.status == 422
 
@@ -597,7 +668,9 @@ class TestBackendSessionEnd:
             on_close_route=None,
             on_close_payload=None,
         )
-        req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": {"ok": False}})
+        req = serverless_backend_testkit.json_request(
+            {"session_id": sid, "session_auth": {"ok": False}}
+        )
         with make_patch_mock_backend_close_session(backend) as mock_close:
             resp = await backend.session_end_handler(req)
         mock_close.assert_not_awaited()
@@ -634,7 +707,9 @@ class TestBackendSessionEnd:
             on_close_payload=None,
         )
         backend.session_metrics[sid] = MagicMock()
-        req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": auth})
+        req = serverless_backend_testkit.json_request(
+            {"session_id": sid, "session_auth": auth}
+        )
         with make_patch_skip_backend_run_session_on_close(backend):
             resp = await backend.session_end_handler(req)
         assert resp.status == 200
@@ -673,7 +748,9 @@ class TestBackendSessionEnd:
             on_close_route=None,
             on_close_payload=None,
         )
-        req = serverless_backend_testkit.json_request({"session_id": sid, "session_auth": auth})
+        req = serverless_backend_testkit.json_request(
+            {"session_id": sid, "session_auth": auth}
+        )
         with make_patch_mock_backend_close_session(backend) as mock_close:
             mock_close.return_value = False
             resp = await backend.session_end_handler(req)
@@ -733,7 +810,9 @@ class TestBackendHandleRequest:
     """Tests for Backend.create_handler / __handle_request."""
 
     @pytest.mark.asyncio
-    async def test_handle_request_json_decode_error_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_handle_request_json_decode_error_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies the endpoint handler returns 422 when body is not valid JSON.
 
@@ -752,7 +831,9 @@ class TestBackendHandleRequest:
         assert resp.status == 422
 
     @pytest.mark.asyncio
-    async def test_handle_request_json_data_exception_returns_422(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_handle_request_json_data_exception_returns_422(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies JsonDataException from handler.get_data_from_request yields 422.
 
@@ -781,7 +862,9 @@ class TestBackendHandleRequest:
         assert serverless_backend_testkit.response_json(resp) == {"field": "bad"}
 
     @pytest.mark.asyncio
-    async def test_handle_request_invalid_session_returns_410(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_handle_request_invalid_session_returns_410(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies requests with session_id for unknown session return 410.
 
@@ -803,7 +886,9 @@ class TestBackendHandleRequest:
         assert resp.status == 410
 
     @pytest.mark.asyncio
-    async def test_handle_request_secured_without_pubkey_returns_401(self, serverless_backend_testkit) -> None:
+    async def test_handle_request_secured_without_pubkey_returns_401(
+        self, serverless_backend_testkit
+    ) -> None:
         """
         Verifies secured mode rejects when public key was never loaded.
 
@@ -818,12 +903,16 @@ class TestBackendHandleRequest:
         backend, handler = serverless_backend_testkit.make_backend(unsecured=False)
         backend._pubkey = None
         fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload()
+        )
         resp = await fn(req)
         assert resp.status == 401
 
     @pytest.mark.asyncio
-    async def test_handle_request_success_calls_backend_and_returns_response(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_handle_request_success_calls_backend_and_returns_response(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies happy path calls __call_backend and generate_client_response.
 
@@ -837,11 +926,15 @@ class TestBackendHandleRequest:
         """
         backend, handler = serverless_backend_and_handler_default
         fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload()
+        )
         mock_model_resp = MagicMock()
         mock_model_resp.status = 200
         expected = web.json_response({"result": "ok"}, status=200)
-        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_back:
+        with patch.object(
+            backend, "_Backend__call_backend", new_callable=AsyncMock
+        ) as mock_back:
             mock_back.return_value = mock_model_resp
             with patch.object(
                 handler,
@@ -855,7 +948,9 @@ class TestBackendHandleRequest:
         mock_back.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_handle_request_max_queue_time_exceeded_returns_429(self, serverless_backend_testkit) -> None:
+    async def test_handle_request_max_queue_time_exceeded_returns_429(
+        self, serverless_backend_testkit
+    ) -> None:
         """
         Verifies __handle_request returns 429 when model wait_time exceeds handler cap.
 
@@ -869,21 +964,25 @@ class TestBackendHandleRequest:
         """
         backend, handler = serverless_backend_testkit.make_backend(max_queue_time=10.0)
         fn = backend.create_handler(handler)
-        rm = RequestMetrics(
-            request_idx=0, reqnum=99, workload=100.0, status="Started"
-        )
+        rm = RequestMetrics(request_idx=0, reqnum=99, workload=100.0, status="Started")
         backend.metrics.model_metrics.requests_working[99] = rm
         backend.metrics.model_metrics.max_throughput = 0.00001
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload()
+        )
         with patch.object(backend.metrics, "_request_reject") as mock_reject:
-            with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+            with patch.object(
+                backend, "_Backend__call_backend", new_callable=AsyncMock
+            ) as mock_cb:
                 resp = await fn(req)
         assert resp.status == 429
         mock_cb.assert_not_awaited()
         mock_reject.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handle_request_model_error_returns_500(self, serverless_backend_and_handler_default, serverless_backend_testkit) -> None:
+    async def test_handle_request_model_error_returns_500(
+        self, serverless_backend_and_handler_default, serverless_backend_testkit
+    ) -> None:
         """
         Verifies exceptions from generate_client_response become HTTP 500.
 
@@ -897,10 +996,14 @@ class TestBackendHandleRequest:
         """
         backend, handler = serverless_backend_and_handler_default
         fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload()
+        )
         mock_model = MagicMock()
         with patch.object(backend.metrics, "_request_errored") as mock_errored:
-            with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+            with patch.object(
+                backend, "_Backend__call_backend", new_callable=AsyncMock
+            ) as mock_cb:
                 mock_cb.return_value = mock_model
                 with patch.object(
                     handler,
@@ -930,7 +1033,9 @@ class TestBackendHandleRequest:
         """
         backend, handler = serverless_backend_and_handler_default
         fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload()
+        )
         with patch.object(backend.metrics, "_request_errored") as mock_errored:
             with patch.object(
                 backend,
@@ -946,7 +1051,10 @@ class TestBackendHandleRequest:
 
     @pytest.mark.asyncio
     async def test_handle_request_call_api_uses_session_post(
-        self, serverless_backend_and_handler_default, serverless_backend_testkit, make_mock_model_response
+        self,
+        serverless_backend_and_handler_default,
+        serverless_backend_testkit,
+        make_mock_model_response,
     ) -> None:
         """
         Verifies the non-remote path posts JSON to handler.endpoint via ClientSession.
@@ -961,7 +1069,9 @@ class TestBackendHandleRequest:
         """
         backend, handler = serverless_backend_and_handler_default
         fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload()
+        )
         mock_resp = make_mock_model_response(body=b'{"model": true}')
         mock_sess = MagicMock()
         # Backend.__call_api does `return await self.session.post(...)` (awaitable, not async-with).
@@ -972,32 +1082,6 @@ class TestBackendHandleRequest:
         mock_sess.post.assert_awaited_once()
         assert mock_sess.post.await_args.kwargs["url"] == handler.endpoint
         assert mock_sess.post.await_args.kwargs["json"] == {"input": {}}
-
-    @pytest.mark.asyncio
-    async def test_handle_request_remote_dispatch_wraps_result(self, serverless_backend_testkit) -> None:
-        """
-        Verifies remote_dispatch_function path wraps return value as JSON ClientResponse-like.
-
-        This test verifies by:
-        1. Building a handler with remote_function returning a plain dict
-        2. Running create_handler without patching __call_backend
-        3. Asserting client response body contains the remote result (via default handler read())
-
-        Assumptions:
-        - __call_remote_dispatch builds RemoteDispatchClientResponse with read()
-        """
-
-        async def remote_fn(**params):
-            return {"dispatched": True, "params": params}
-
-        backend, handler = serverless_backend_testkit.make_backend(remote_function=remote_fn)
-        fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
-        resp = await fn(req)
-        assert resp.status == 200
-        body = serverless_backend_testkit.response_json(resp)
-        assert body["result"]["dispatched"] is True
-        assert body["result"]["params"] == {"input": {}}
 
     @pytest.mark.asyncio
     async def test_handle_request_verified_signature_allows_request(
@@ -1019,9 +1103,13 @@ class TestBackendHandleRequest:
         backend, handler = serverless_backend_testkit.make_backend(unsecured=False)
         backend._pubkey = key.publickey()
         fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.signed_auth(url, key))
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.signed_auth(url, key)
+        )
         mock_model = MagicMock()
-        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+        with patch.object(
+            backend, "_Backend__call_backend", new_callable=AsyncMock
+        ) as mock_cb:
             mock_cb.return_value = mock_model
             with patch.object(
                 handler,
@@ -1035,7 +1123,9 @@ class TestBackendHandleRequest:
         assert backend.reqnum >= 7
 
     @pytest.mark.asyncio
-    async def test_handle_request_fifo_mode_single_request_succeeds(self, serverless_backend_testkit) -> None:
+    async def test_handle_request_fifo_mode_single_request_succeeds(
+        self, serverless_backend_testkit
+    ) -> None:
         """
         Verifies queued (non-parallel) handler still completes when the request is alone.
 
@@ -1049,9 +1139,13 @@ class TestBackendHandleRequest:
         """
         backend, handler = serverless_backend_testkit.make_backend(allow_parallel=False)
         fn = backend.create_handler(handler)
-        req = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload())
+        req = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload()
+        )
         mock_model = MagicMock()
-        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+        with patch.object(
+            backend, "_Backend__call_backend", new_callable=AsyncMock
+        ) as mock_cb:
             mock_cb.return_value = mock_model
             with patch.object(
                 handler,
@@ -1092,9 +1186,15 @@ class TestBackendHandleRequest:
                 await release_first.wait()
             return mock_model
 
-        req1 = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload(reqnum=1))
-        req2 = serverless_backend_testkit.json_request(serverless_backend_testkit.auth_payload(reqnum=2))
-        with patch.object(backend, "_Backend__call_backend", side_effect=_gated_backend):
+        req1 = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload(reqnum=1)
+        )
+        req2 = serverless_backend_testkit.json_request(
+            serverless_backend_testkit.auth_payload(reqnum=2)
+        )
+        with patch.object(
+            backend, "_Backend__call_backend", side_effect=_gated_backend
+        ):
             with patch.object(
                 handler,
                 "generate_client_response",
@@ -1133,7 +1233,9 @@ class TestBackendHandleRequest:
         body = serverless_backend_testkit.signed_auth(signed_url, key)
         body["auth_data"]["url"] = "https://other.example/different"
         req = serverless_backend_testkit.json_request(body)
-        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+        with patch.object(
+            backend, "_Backend__call_backend", new_callable=AsyncMock
+        ) as mock_cb:
             resp = await fn(req)
         assert resp.status == 401
         mock_cb.assert_not_awaited()
@@ -1173,7 +1275,9 @@ class TestBackendHandleRequest:
         data["session_id"] = sid
         req = serverless_backend_testkit.json_request(data)
         mock_model = MagicMock()
-        with patch.object(backend, "_Backend__call_backend", new_callable=AsyncMock) as mock_cb:
+        with patch.object(
+            backend, "_Backend__call_backend", new_callable=AsyncMock
+        ) as mock_cb:
             mock_cb.return_value = mock_model
             with patch.object(
                 handler,
@@ -1238,9 +1342,13 @@ class TestBackendSessionGc:
         async def _yield_only(_delay: float = 0) -> None:
             await asyncio.sleep(0)
 
-        with patch("vastai.serverless.server.lib.backend.sleep", side_effect=_yield_only):
+        with patch(
+            "vastai.serverless.server.lib.backend.sleep", side_effect=_yield_only
+        ):
             with make_patch_skip_backend_run_session_on_close(backend):
-                with patch.object(backend, "_Backend__close_session", _close_then_signal):
+                with patch.object(
+                    backend, "_Backend__close_session", _close_then_signal
+                ):
                     task = asyncio.create_task(backend._Backend__session_gc_loop())
                     t0 = asyncio.get_running_loop().time()
                     await asyncio.wait_for(session_removed.wait(), timeout=5.0)
@@ -1262,7 +1370,9 @@ class TestBackendSessionGc:
 class TestBackendHelpers:
     """Tests for generate_session_id, backend_errored, and __run_session_on_close shape."""
 
-    def test_generate_session_id_length_and_charset(self, serverless_backend_and_handler_default) -> None:
+    def test_generate_session_id_length_and_charset(
+        self, serverless_backend_and_handler_default
+    ) -> None:
         """
         Verifies generate_session_id returns 13 alphanumeric characters.
 
@@ -1274,7 +1384,9 @@ class TestBackendHelpers:
         - Implementation uses string.ascii_letters + digits and k=13
         """
         backend, _ = serverless_backend_and_handler_default
-        with patch("vastai.serverless.server.lib.backend.random.choices") as mock_choices:
+        with patch(
+            "vastai.serverless.server.lib.backend.random.choices"
+        ) as mock_choices:
             mock_choices.return_value = list("abcdefghijklm")
             sid = backend.generate_session_id()
         assert len(sid) == 13
@@ -1283,7 +1395,9 @@ class TestBackendHelpers:
         args, kwargs = mock_choices.call_args
         assert kwargs.get("k") == 13
 
-    def test_backend_errored_forwards_to_metrics(self, serverless_backend_and_handler_default) -> None:
+    def test_backend_errored_forwards_to_metrics(
+        self, serverless_backend_and_handler_default
+    ) -> None:
         """
         Verifies backend_errored delegates to metrics._model_errored.
 
@@ -1327,7 +1441,9 @@ class TestBackendHelpers:
             on_close_route="http://internal/hook",
             on_close_payload={"foo": "bar"},
         )
-        mock_sess = attach_serverless_backend_mock_aiohttp_session(backend, response_text="ok")
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(
+            backend, response_text="ok"
+        )
         await backend._Backend__run_session_on_close(session)
         mock_sess.post.assert_called_once()
         call_kw = mock_sess.post.call_args.kwargs
@@ -1363,7 +1479,9 @@ class TestBackendHelpers:
             on_close_route="http://hook/cb",
             on_close_payload="done",
         )
-        mock_sess = attach_serverless_backend_mock_aiohttp_session(backend, response_text="")
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(
+            backend, response_text=""
+        )
         await backend._Backend__run_session_on_close(session)
         body = mock_sess.post.call_args.kwargs["json"]
         assert body == {"payload": "done", "session_id": "cb2"}
@@ -1387,7 +1505,9 @@ class TestBackendHelpers:
         - Early return happens before any HTTP
         """
         backend, _ = serverless_backend_and_handler_default
-        mock_sess = attach_serverless_backend_mock_aiohttp_session(backend, spy_only=True)
+        mock_sess = attach_serverless_backend_mock_aiohttp_session(
+            backend, spy_only=True
+        )
         session = make_pyworker_session(
             session_id="no-cb",
             lifetime=1.0,
@@ -1427,7 +1547,9 @@ class TestBackendHelpers:
         )
         mock_sess = attach_serverless_backend_mock_aiohttp_session(backend)
         await backend._Backend__run_session_on_close(session)
-        assert mock_sess.post.call_args.kwargs["json"] == {"session_id": "cb-null-payload"}
+        assert mock_sess.post.call_args.kwargs["json"] == {
+            "session_id": "cb-null-payload"
+        }
 
     @pytest.mark.asyncio
     async def test_run_session_on_close_completes_on_http_error_status(

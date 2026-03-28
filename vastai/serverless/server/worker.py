@@ -5,8 +5,9 @@ from aiohttp import web, ClientResponse
 import logging
 import json
 import random
+import inspect
 import logging
-from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type
+from typing import Optional, Dict, Callable, Awaitable, Union, Any, Type, AsyncContextManager
 
 # Callable types
 RequestPayloadParser = Callable[[Dict[str, Any]], Dict[str, Any]]
@@ -50,6 +51,7 @@ class HandlerConfig:
     request_parser: Optional[RequestPayloadParser] = None
     response_generator: Optional[ClientResponseGenerator] = None
     workload_calculator: Optional[WorkloadCalculator] = None
+    is_remote_dispatch: bool = False
     remote_function: Optional[Callable] = None
 
 
@@ -64,6 +66,7 @@ class WorkerConfig:
     benchmark_route: Optional[str] = None
     log_action_config: LogActionConfig = field(default_factory=LogActionConfig)
     max_sessions: Optional[int] = 10
+    lifecycle: Optional[AsyncContextManager] = None
 
 
 class EndpointHandlerFactory:
@@ -204,7 +207,7 @@ class EndpointHandlerFactory:
                     else True
                 )
             )
-            remote_dispatch_function: Callable[..., Awaitable[Any]] = field(
+            remote_function: Callable = field(
                 default=(
                     handler_config.remote_function
                     if handler_config.remote_function is not None
@@ -217,17 +220,17 @@ class EndpointHandlerFactory:
                 """The endpoint is the same as the route"""
                 return self._route
 
-            async def call_remote_dispatch_function(self, params: dict):
+            async def call_remote_function(self, params: dict):
                 """
-                define a remote dispatch function for this endpoint, return the result
+                define a remote function for this endpoint, return the result
                 """
-                if self.remote_dispatch_function is None:
+                if self.remote_function is None:
                     raise RuntimeError(f"remote_function is not configured for route {self._route}")
 
                 try:
-                    return await self.remote_dispatch_function(**params)
+                    return await self.remote_function(kwargs=params)
                 except Exception as ex:
-                    raise RuntimeError(f"Error calling remote dispatch function for route {self._route}: {ex}") from ex
+                    raise RuntimeError(f"Error calling remote function for route {self._route}: {ex}") from ex
 
             
             @property
@@ -371,7 +374,8 @@ class Worker:
             benchmark_handler=benchmark_handler,
             log_actions=config.log_action_config.log_actions,
             healthcheck_url=config.model_healthcheck_url,
-            max_sessions=config.max_sessions
+            max_sessions=config.max_sessions,
+            lifecycle=config.lifecycle,
         )
         
         # Attach endpoint handlers to HTTP routes

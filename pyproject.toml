@@ -16,8 +16,12 @@ homepage = "https://vast.ai"
 repository = "https://github.com/vast-ai/vast-sdk"
 packages = [
   { include = "vastai" },
-  { include = "vastai_sdk" }
+  { include = "vastai_sdk" },
+  { include = "cli" }
 ]
+
+[tool.poetry.scripts]
+serve-vast-deployment = "cli.serve_deployment:main"
 
 [tool.poetry-dynamic-versioning]
 enable = true
@@ -39,6 +43,7 @@ uvicorn = { version = ">=0.24,<0.32", extras = ["standard"] }
 aiohttp = ">=3.9.1" 
 aiodns = ">=3.6.0" 
 pycares = "=4.11.0"
+aiofiles = ">=23.0"
 anyio = "~4.4"
 nltk = "~3.9"
 psutil = "~6.0"
@@ -48,6 +53,13 @@ hf_transfer = ">=0.1.9"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that hit the live Vast API",
+    "serverless: serverless tests that create real resources (costs money)",
+]
+asyncio_mode = "strict"
 
 [tool.poetry.urls]
 Homepage = "https://vast.ai"

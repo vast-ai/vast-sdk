@@ -14,6 +14,7 @@ Coverage notes (functionality-oriented):
   non-OK worker responses, stream mode, task cancellation, ``latencies``, session without URL,
   ``_route`` failure → ``Errored``
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,11 @@ import aiohttp
 import pytest
 
 from vastai.serverless.client import client as serverless_client_mod
-from vastai.serverless.client.client import Serverless, ServerlessRequest, SessionCreateError
+from vastai.serverless.client.client import (
+    Serverless,
+    ServerlessRequest,
+    SessionCreateError,
+)
 from vastai.serverless.client.endpoint import Endpoint
 from vastai.serverless.client.session import Session
 
@@ -195,7 +200,6 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="k", instance="alpha")
         assert client.autoscaler_url == "https://run-alpha.vast.ai"
-        assert client.vast_web_url == "https://alpha.vast.ai"
 
     def test_instance_local_sets_local_autoscaler(self) -> None:
         """
@@ -210,7 +214,6 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="k", instance="local")
         assert client.autoscaler_url == "http://localhost:8080"
-        assert client.vast_web_url == "https://alpha.vast.ai"
 
     def test_instance_candidate_sets_candidate_hosts(self) -> None:
         """
@@ -225,7 +228,6 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="k", instance="candidate")
         assert client.autoscaler_url == "https://run-candidate.vast.ai"
-        assert client.vast_web_url == "https://candidate.vast.ai"
 
     def test_instance_unknown_string_falls_back_to_default_urls(self) -> None:
         """
@@ -261,7 +263,8 @@ class TestServerlessInit:
         assert client.logger.level == logging.DEBUG
         assert client.logger.propagate is False
         assert any(
-            isinstance(h, logging.StreamHandler) and not isinstance(h, logging.NullHandler)
+            isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.NullHandler)
             for h in client.logger.handlers
         )
 
@@ -323,7 +326,9 @@ class TestServerlessSessionOpen:
     """Verify is_open, context manager, and close behavior with mocked aiohttp session."""
 
     @pytest.mark.asyncio
-    async def test_is_open_true_when_session_exists_and_not_closed(self, client) -> None:
+    async def test_is_open_true_when_session_exists_and_not_closed(
+        self, client
+    ) -> None:
         """is_open() is True when _session is set and aiohttp session is open."""
         mock_sess = MagicMock()
         mock_sess.closed = False
@@ -530,7 +535,9 @@ class TestServerlessGetSslContext:
     """Verify SSL context loading uses mocked cert download and ssl APIs."""
 
     @pytest.mark.asyncio
-    async def test_get_ssl_context_fetches_cert_and_caches_context(self, client) -> None:
+    async def test_get_ssl_context_fetches_cert_and_caches_context(
+        self, client
+    ) -> None:
         """
         Verifies get_ssl_context downloads PEM bytes, loads them, and caches SSLContext.
 
@@ -545,7 +552,9 @@ class TestServerlessGetSslContext:
         """
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_resp.read = AsyncMock(return_value=b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----")
+        mock_resp.read = AsyncMock(
+            return_value=b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+        )
 
         mock_get_cm = MagicMock()
         mock_get_cm.__aenter__ = AsyncMock(return_value=mock_resp)
@@ -684,7 +693,9 @@ class TestServerlessGetEndpoints:
                 await client.get_endpoints()
 
     @pytest.mark.asyncio
-    async def test_get_endpoints_returns_empty_list_when_no_results(self, client) -> None:
+    async def test_get_endpoints_returns_empty_list_when_no_results(
+        self, client
+    ) -> None:
         """ok=True with empty results yields an empty Endpoint list."""
         with patch(
             "vastai.serverless.client.client._make_request",
@@ -728,7 +739,9 @@ class TestServerlessGetEndpoints:
         """
         e1 = Endpoint(client, "one", 1, "k1")
         e2 = Endpoint(client, "two", 2, "k2")
-        with patch.object(client, "get_endpoints", new_callable=AsyncMock, return_value=[e1, e2]):
+        with patch.object(
+            client, "get_endpoints", new_callable=AsyncMock, return_value=[e1, e2]
+        ):
             found = await client.get_endpoint("two")
         assert found is e2
 
@@ -744,7 +757,9 @@ class TestServerlessGetEndpoints:
         Assumptions:
         - Missing name produces a clear error string
         """
-        with patch.object(client, "get_endpoints", new_callable=AsyncMock, return_value=[]):
+        with patch.object(
+            client, "get_endpoints", new_callable=AsyncMock, return_value=[]
+        ):
             with pytest.raises(Exception, match="could not be found"):
                 await client.get_endpoint("missing")
 
@@ -812,7 +827,10 @@ class TestServerlessGetEndpointWorkers:
         mock_session.post.assert_called_once()
         url = mock_session.post.call_args[0][0]
         assert url.endswith("/get_endpoint_workers/")
-        assert mock_session.post.call_args.kwargs["json"] == {"id": 99, "api_key": "master"}
+        assert mock_session.post.call_args.kwargs["json"] == {
+            "id": 99,
+            "api_key": "master",
+        }
 
     @pytest.mark.asyncio
     async def test_get_endpoint_workers_returns_empty_list_on_error_msg(
@@ -1306,7 +1324,9 @@ class TestServerlessStartEndpointSession:
             }
         )
         with patch.object(client, "queue_endpoint_request", return_value=done):
-            with pytest.raises(SessionCreateError, match="No response from /session/create"):
+            with pytest.raises(
+                SessionCreateError, match="No response from /session/create"
+            ):
                 await client.start_endpoint_session(ep)
 
     @pytest.mark.asyncio
@@ -1379,7 +1399,8 @@ class TestServerlessQueueEndpointRequest:
         client = client_with_session
 
         waiting = make_route_response_mock(request_idx=7)
-        ready = make_route_response_mock(status="READY", 
+        ready = make_route_response_mock(
+            status="READY",
             url="https://worker/",
             request_idx=7,
             body={"token": "t"},
@@ -1500,7 +1521,9 @@ class TestServerlessQueueEndpointRequestBranches:
 
         with (
             patch.object(Endpoint, "_route", side_effect=always_waiting),
-            patch("vastai.serverless.client.client.asyncio.sleep", new_callable=AsyncMock),
+            patch(
+                "vastai.serverless.client.client.asyncio.sleep", new_callable=AsyncMock
+            ),
             patch("vastai.serverless.client.client.random.uniform", return_value=0.1),
         ):
             fut = client.queue_endpoint_request(
@@ -1536,7 +1559,8 @@ class TestServerlessQueueEndpointRequestBranches:
         ep = make_serverless_endpoint(client_with_session)
         client = client_with_session
 
-        ready = make_route_response_mock(status="READY", 
+        ready = make_route_response_mock(
+            status="READY",
             url="https://worker/",
             request_idx=3,
             body={"token": "t"},
@@ -1572,7 +1596,12 @@ class TestServerlessQueueEndpointRequestBranches:
         assert route_calls == 2
 
     @pytest.mark.asyncio
-    async def test_queue_connector_error_with_session_raises_connection_error(self, client_with_session, make_serverless_endpoint, patch_serverless_queue_async_stubs) -> None:
+    async def test_queue_connector_error_with_session_raises_connection_error(
+        self,
+        client_with_session,
+        make_serverless_endpoint,
+        patch_serverless_queue_async_stubs,
+    ) -> None:
         """
         Verifies ClientConnectorError with an active session raises ConnectionError.
 
@@ -1607,7 +1636,12 @@ class TestServerlessQueueEndpointRequestBranches:
         assert sess.open is False
 
     @pytest.mark.asyncio
-    async def test_queue_server_disconnected_with_session_raises_connection_error(self, client_with_session, make_serverless_endpoint, patch_serverless_queue_async_stubs) -> None:
+    async def test_queue_server_disconnected_with_session_raises_connection_error(
+        self,
+        client_with_session,
+        make_serverless_endpoint,
+        patch_serverless_queue_async_stubs,
+    ) -> None:
         """
         Verifies ServerDisconnectedError with session is treated like a dead worker.
 
@@ -1684,7 +1718,12 @@ class TestServerlessQueueEndpointRequestBranches:
         assert make_req.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_queue_uses_session_url_without_routing(self, client_with_session, make_serverless_endpoint, patch_serverless_queue_async_stubs) -> None:
+    async def test_queue_uses_session_url_without_routing(
+        self,
+        client_with_session,
+        make_serverless_endpoint,
+        patch_serverless_queue_async_stubs,
+    ) -> None:
         """
         Verifies queue_endpoint_request skips routing when session is provided with a URL.
 
@@ -1786,7 +1825,12 @@ class TestServerlessQueueEndpointRequestBranches:
             patch(
                 "vastai.serverless.client.client._make_request",
                 new_callable=AsyncMock,
-                return_value={"ok": False, "retryable": True, "status": 503, "text": "busy"},
+                return_value={
+                    "ok": False,
+                    "retryable": True,
+                    "status": 503,
+                    "text": "busy",
+                },
             ) as make_req,
         ):
             fut = client.queue_endpoint_request(
@@ -2019,7 +2063,9 @@ class TestServerlessQueueEndpointRequestBranches:
 
         with (
             patch.object(Endpoint, "_route", side_effect=wait_route),
-            patch("vastai.serverless.client.client.asyncio.sleep", side_effect=slow_sleep),
+            patch(
+                "vastai.serverless.client.client.asyncio.sleep", side_effect=slow_sleep
+            ),
             patch("vastai.serverless.client.client.random.uniform", return_value=0.1),
         ):
             fut = client.queue_endpoint_request(
@@ -2077,7 +2123,12 @@ class TestServerlessQueueEndpointRequestBranches:
             await fut
 
     @pytest.mark.asyncio
-    async def test_queue_route_ready_with_zero_request_idx_still_completes(self, client_with_session, make_serverless_endpoint, patch_serverless_queue_async_stubs) -> None:
+    async def test_queue_route_ready_with_zero_request_idx_still_completes(
+        self,
+        client_with_session,
+        make_serverless_endpoint,
+        patch_serverless_queue_async_stubs,
+    ) -> None:
         """
         Verifies routing with falsy request_idx still reaches worker _make_request.
 
@@ -2204,4 +2255,3 @@ class TestServerlessQueueEndpointRequestBranches:
                 await fut
 
         assert fut.status == "Errored"
-

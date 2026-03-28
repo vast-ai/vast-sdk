@@ -1,18 +1,37 @@
 import os
+import sys
 import json
 import time
 import base64
 import dataclasses
 import logging
 from asyncio import sleep, gather, Semaphore, create_task
-from typing import Tuple, Awaitable, NoReturn, List, Union, Callable, Optional, Any, Dict
+from typing import (
+    Tuple,
+    Awaitable,
+    NoReturn,
+    List,
+    Union,
+    Callable,
+    Optional,
+    Any,
+    Dict,
+    AsyncContextManager,
+)
 from functools import cached_property
 from distutils.util import strtobool
 from collections import deque
 from asyncio import sleep, CancelledError
 
 from anyio import open_file
-from aiohttp import web, ClientResponse, ClientSession, ClientConnectorError, ClientTimeout, TCPConnector
+from aiohttp import (
+    web,
+    ClientResponse,
+    ClientSession,
+    ClientConnectorError,
+    ClientTimeout,
+    TCPConnector,
+)
 import asyncio
 import string
 import random
@@ -65,7 +84,9 @@ class Backend:
     version = VERSION
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
     queue: deque = dataclasses.field(default_factory=deque, repr=False)
-    _queue_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock, repr=False)
+    _queue_lock: asyncio.Lock = dataclasses.field(
+        default_factory=asyncio.Lock, repr=False
+    )
     unsecured: bool = dataclasses.field(
         default_factory=lambda: bool(strtobool(os.environ.get("UNSECURED", "false"))),
     )
@@ -78,11 +99,14 @@ class Backend:
     healthcheck_url: str = dataclasses.field(
         default_factory=lambda: os.environ.get("MODEL_HEALTH_ENDPOINT", "")
     )
-    _sessions_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock, repr=False)
+    _sessions_lock: asyncio.Lock = dataclasses.field(
+        default_factory=asyncio.Lock, repr=False
+    )
     sessions: Dict[str, Session] = dataclasses.field(default_factory=dict)
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
     max_sessions: int = dataclasses.field(default=-1)
-        
+    lifecycle: Optional[AsyncContextManager] = dataclasses.field(default=None)
+
     async def session_health_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
@@ -100,10 +124,12 @@ class Backend:
                 return web.json_response({"ok": False}, status=200)
 
             if session_auth is None or session.auth_data != session_auth:
-                return web.json_response({"error": "session_auth is not valid"}, status=401)
+                return web.json_response(
+                    {"error": "session_auth is not valid"}, status=401
+                )
 
             return web.json_response({"ok": True}, status=200)
-        
+
     async def session_get_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
@@ -119,19 +145,19 @@ class Backend:
             session = self.sessions.get(session_id)
         if session is None:
             return web.json_response({"error": "session does not exist"}, status=400)
-        
+
         if session_auth is None or session.auth_data != session_auth:
             return web.json_response({"error": "session_auth is not valid"}, status=401)
         else:
             return web.json_response(
                 {
-                    "session_id" : session_id,
-                    "auth_data" : session.auth_data,
-                    "lifetime" : session.lifetime,
-                    "expiration" : session.expiration,
+                    "session_id": session_id,
+                    "auth_data": session.auth_data,
+                    "lifetime": session.lifetime,
+                    "expiration": session.expiration,
                     "created_at": session.created_at,
-                    "on_close_route" : session.on_close_route,
-                    "on_close_payload": session.on_close_payload
+                    "on_close_route": session.on_close_route,
+                    "on_close_payload": session.on_close_payload,
                 }
             )
 
@@ -207,7 +233,6 @@ class Backend:
 
         return True
 
-
     async def session_end_handler(self, request: web.Request) -> web.Response:
         try:
             data = await request.json()
@@ -218,7 +243,7 @@ class Backend:
 
         if not session_id:
             return web.json_response({"error": "missing session_id"}, status=422)
-        
+
         session = None
         async with self._sessions_lock:
             session = self.sessions.get(session_id)
@@ -229,8 +254,10 @@ class Backend:
                     status=400,
                 )
             if session_auth is None or session.auth_data != session_auth:
-                return web.json_response({"error": "session_auth is not valid"}, status=401)
-                    
+                return web.json_response(
+                    {"error": "session_auth is not valid"}, status=401
+                )
+
         closed = await self.__close_session(session_id)
         if not closed:
             return web.json_response({"error": "session already closed"}, status=410)
@@ -240,12 +267,10 @@ class Backend:
             status=200,
         )
 
-
     def generate_session_id(self):
         characters = string.ascii_letters + string.digits
-        random_string = ''.join(random.choices(characters, k=13))
+        random_string = "".join(random.choices(characters, k=13))
         return random_string
-
 
     async def session_create_handler(self, request: web.Request) -> web.Response:
         try:
@@ -256,18 +281,21 @@ class Backend:
             return web.json_response(dict(error="invalid JSON"), status=422)
 
         session_request_metrics = RequestMetrics(
-            request_idx= auth_data.get("request_idx"),
-            reqnum= auth_data.get("reqnum"),
-            workload= auth_data.get("cost"),
+            request_idx=auth_data.get("request_idx"),
+            reqnum=auth_data.get("reqnum"),
+            workload=auth_data.get("cost"),
             status="SessionActive",
-            is_session=True
+            is_session=True,
         )
 
         async with self._sessions_lock:
-            if not (self.max_sessions is None or self.max_sessions == 0) and len(self.sessions) >= self.max_sessions:
+            if (
+                not (self.max_sessions is None or self.max_sessions == 0)
+                and len(self.sessions) >= self.max_sessions
+            ):
                 self.metrics._request_reject(session_request_metrics)
                 return web.Response(status=429)
-            
+
             # Set the session expiration time, and the TTL extension per request/get
             lifetime = payload.get("lifetime", 60.0)
             now = time.time()
@@ -289,20 +317,16 @@ class Backend:
                 auth_data=auth_data,
                 on_close_route=on_close_route,
                 on_close_payload=on_close_payload,
-                request_idx=session_request_metrics.request_idx
+                request_idx=session_request_metrics.request_idx,
             )
             self.sessions[session_id] = session
             self.session_metrics[session_id] = session_request_metrics
             self.metrics._request_start(session_request_metrics)
 
         return web.json_response(
-            {
-                "session_id": session.session_id,
-                "expiration": session.expiration
-            },
+            {"session_id": session.session_id, "expiration": session.expiration},
             status=201,
         )
-
 
     def __post_init__(self):
         self.metrics = Metrics()
@@ -322,9 +346,11 @@ class Backend:
             force_close=True,  # Required for long running jobs
             enable_cleanup_closed=True,
         )
-        
+
         timeout = ClientTimeout(total=None)
-        return ClientSession(self.model_server_url, timeout=timeout, connector=connector)
+        return ClientSession(
+            self.model_server_url, timeout=timeout, connector=connector
+        )
 
     def create_handler(
         self,
@@ -356,10 +382,14 @@ class Backend:
                         if key is not None:
                             self._pubkey = key
                             self.__pubkey_fetch_complete.set()
-                            log.debug(f"Successfully fetched pubkey on attempt {attempt}")
+                            log.debug(
+                                f"Successfully fetched pubkey on attempt {attempt}"
+                            )
                             return
             except (ValueError, ClientConnectorError, Exception) as e:
-                log.debug(f"Error downloading key (attempt {attempt}/{MAX_PUBKEY_FETCH_ATTEMPTS}): {e}")
+                log.debug(
+                    f"Error downloading key (attempt {attempt}/{MAX_PUBKEY_FETCH_ATTEMPTS}): {e}"
+                )
                 if attempt < MAX_PUBKEY_FETCH_ATTEMPTS:
                     backoff = 2 ** (attempt - 1)  # 1, 2, 4, 8, 16 seconds
                     log.debug(f"Retrying in {backoff} seconds...")
@@ -368,8 +398,9 @@ class Backend:
         log.error(f"Failed to fetch pubkey after {MAX_PUBKEY_FETCH_ATTEMPTS} attempts")
         self.__pubkey_failed = True
         self.__pubkey_fetch_complete.set()  # Signal that fetch is complete (even though it failed)
-        self.backend_errored("Failed to get Serverless public key after all retry attempts")
-       
+        self.backend_errored(
+            "Failed to get Serverless public key after all retry attempts"
+        )
 
     async def __handle_request(
         self,
@@ -385,7 +416,12 @@ class Backend:
         except json.JSONDecodeError:
             return web.json_response(dict(error="invalid JSON"), status=422)
         workload = payload.count_workload()
-        request_metrics: RequestMetrics = RequestMetrics(request_idx=auth_data.request_idx, reqnum=auth_data.reqnum, workload=workload, status="Created")
+        request_metrics: RequestMetrics = RequestMetrics(
+            request_idx=auth_data.request_idx,
+            reqnum=auth_data.reqnum,
+            workload=workload,
+            status="Created",
+        )
 
         event = asyncio.Event()
 
@@ -400,8 +436,7 @@ class Backend:
                 session.session_reqnum += 1
                 request_metrics.session = session
                 request_metrics.session_reqnum = session.session_reqnum
-                
-        
+
         async def advance_queue_after_completion(event: asyncio.Event):
             """Pop current head and wake next waiter, if any."""
             async with self._queue_lock:
@@ -473,7 +508,9 @@ class Backend:
                 if request_metrics.session is None:
                     log.debug(f"Starting work on request {request_metrics.reqnum}")
                 else:
-                    log.debug(f"Starting work on request {request_metrics.session_reqnum} in session {request_metrics.session.request_idx}")
+                    log.debug(
+                        f"Starting work on request {request_metrics.session_reqnum} in session {request_metrics.session.request_idx}"
+                    )
 
                 # Execute the work task
                 coro = make_request()
@@ -493,7 +530,7 @@ class Backend:
         except Exception as e:
             log.debug(f"Exception in main handler loop {e}")
             return web.Response(status=500)
-        
+
         finally:
             try:
                 # Remove request from session if present
@@ -572,9 +609,66 @@ class Backend:
                     self.backend_errored(str(e))
 
     async def _start_tracking(self) -> None:
-        await gather(
-            self._fetch_pubkey(), self.__read_logs(), self.metrics._send_metrics_loop(), self.__healthcheck(), self.metrics._send_delete_requests_loop(), self.__session_gc_loop(),
-        )
+        if self.lifecycle is not None:
+            await gather(
+                self._fetch_pubkey(),
+                self.__lifecycle_startup(),
+                self.metrics._send_metrics_loop(),
+                self.__healthcheck(),
+                self.metrics._send_delete_requests_loop(),
+                self.__session_gc_loop(),
+            )
+        else:
+            await gather(
+                self._fetch_pubkey(),
+                self.__read_logs(),
+                self.metrics._send_metrics_loop(),
+                self.__healthcheck(),
+                self.metrics._send_delete_requests_loop(),
+                self.__session_gc_loop(),
+            )
+
+    async def __lifecycle_startup(self) -> None:
+        """
+        Alternative to __read_logs for deployments that use an AsyncContextManager
+        lifecycle instead of log-based ready detection.
+
+        Enters the lifecycle context (which replaces on_init / log-based readiness),
+        runs the benchmark, then marks the model as loaded. Guarantees __aexit__ runs
+        on cancellation or exception.
+        """
+        try:
+            await self.lifecycle.__aenter__()
+            try:
+                max_throughput = await self.__run_benchmark()
+                self.__start_healthcheck = True
+
+                if self.healthcheck_url:
+                    log.debug("Lifecycle ready, waiting for healthcheck...")
+                    try:
+                        await asyncio.wait_for(
+                            self.__healthcheck_ready.wait(), timeout=300.0
+                        )
+                    except asyncio.TimeoutError:
+                        raise Exception(
+                            "Timed out waiting for healthcheck after lifecycle ready (300s)"
+                        )
+                else:
+                    log.debug("Lifecycle ready, no healthcheck configured")
+
+                self.metrics._model_loaded(max_throughput=max_throughput)
+                log.debug("Model marked as loaded via lifecycle")
+
+                # Keep alive — this coroutine lives for the duration of the server
+                await asyncio.Event().wait()
+            except BaseException:
+                await self.lifecycle.__aexit__(*sys.exc_info())
+                raise
+            else:
+                await self.lifecycle.__aexit__(None, None, None)
+        except Exception as e:
+            log.error(f"Lifecycle startup failed: {e}")
+            self.backend_errored(f"Lifecycle startup failed: {e}")
 
     def backend_errored(self, msg: str) -> None:
         self.metrics._model_errored(msg)
@@ -582,8 +676,8 @@ class Backend:
     async def __call_backend(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
-        if handler.remote_dispatch_function:
-            return await self.__call_remote_dispatch(handler=handler, payload=payload)
+        if handler.remote_function:
+            return await self.__call_remote_function(handler=handler, payload=payload)
         else:
             return await self.__call_api(handler=handler, payload=payload)
 
@@ -594,19 +688,19 @@ class Backend:
         log.debug(f"posting to endpoint: '{handler.endpoint}', payload: {api_payload}")
         return await self.session.post(url=handler.endpoint, json=api_payload)
 
-    async def __call_remote_dispatch(
+    async def __call_remote_function(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
         remote_func_params = payload.generate_payload_json()
         log.debug(
-            f"Calling remote dispatch function on {handler.endpoint} "
+            f"Calling remote function on {handler.endpoint} "
             f"with params {remote_func_params}"
         )
 
-        result = await handler.call_remote_dispatch_function(params=remote_func_params)
+        result = await handler.call_remote_function(params=remote_func_params)
 
         # Wrap the result in a fake ClientResponse-like object
-        class RemoteDispatchClientResponse:
+        class RemoteFunctionClientResponse:
             def __init__(self, data: Any, status: int = 200):
                 self._body = json.dumps({"result": data}).encode("utf-8")
                 self.status = status
@@ -616,7 +710,7 @@ class Backend:
             async def read(self) -> bytes:
                 return self._body
 
-        return RemoteDispatchClientResponse(result) 
+        return RemoteFunctionClientResponse(result)
 
     def __check_signature(self, auth_data: AuthData) -> bool:
         if self.unsecured is True:
@@ -635,84 +729,100 @@ class Backend:
             except (ValueError, TypeError):
                 return False
 
-        message = {
-            "url" : auth_data.url
-        }
+        message = {"url": auth_data.url}
 
-        if verify_signature(json.dumps(message, indent=4, sort_keys=True), auth_data.signature):
+        if verify_signature(
+            json.dumps(message, indent=4, sort_keys=True), auth_data.signature
+        ):
             self.reqnum = max(auth_data.reqnum, self.reqnum)
             return True
         else:
-            log.error(f"Signature error: signature verification failed, sig:{auth_data.signature}, message: {message}")
+            log.error(
+                f"Signature error: signature verification failed, sig:{auth_data.signature}, message: {message}"
+            )
             return False
 
-    async def __read_logs(self) -> Awaitable[NoReturn]:
+    async def __run_benchmark(self) -> float:
+        """Run the benchmark against the benchmark handler. Returns max throughput."""
+        log.debug("Running benchmark")
+        try:
+            with open(BENCHMARK_INDICATOR_FILE, "r") as f:
+                perf = float(f.readline())
+                log.debug(f"Already ran benchmark for perf score of {perf}")
+                return perf
+        except FileNotFoundError:
+            pass
+        if self.benchmark_handler.do_warmup_benchmark:
+            log.debug(
+                f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}"
+            )
+            log.debug("Initial run to trigger model loading...")
+            payload = self.benchmark_handler.make_benchmark_payload()
+            await self.__call_backend(handler=self.benchmark_handler, payload=payload)
 
-        async def run_benchmark() -> float:
-            log.debug("Model load detected")
-            try:
-                with open(BENCHMARK_INDICATOR_FILE, "r") as f:
-                    perf = float(f.readline())
-                    log.debug(f"Already ran benchmark for perf score of {perf}")
-                    return perf
-            except FileNotFoundError:
-                pass
-            if self.benchmark_handler.do_warmup_benchmark:
-                log.debug(f"Performing benchmark on endpoint {self.benchmark_handler.endpoint}")
-                log.debug("Initial run to trigger model loading...")
+        max_throughput = 0
+        sum_throughput = 0
+        concurrent_requests = (
+            self.benchmark_handler.concurrency
+            if self.benchmark_handler.allow_parallel_requests
+            else 1
+        )
+        for run in range(1, self.benchmark_handler.benchmark_runs + 1):
+            start = time.time()
+            benchmark_requests = []
+
+            for i in range(concurrent_requests):
                 payload = self.benchmark_handler.make_benchmark_payload()
-                await self.__call_backend(handler=self.benchmark_handler, payload=payload)
-
-            max_throughput = 0
-            sum_throughput = 0
-            concurrent_requests = self.benchmark_handler.concurrency if self.benchmark_handler.allow_parallel_requests else 1
-            for run in range(1, self.benchmark_handler.benchmark_runs + 1):
-                start = time.time()
-                benchmark_requests = []
-
-                for i in range(concurrent_requests):
-                    payload = self.benchmark_handler.make_benchmark_payload()
-                    workload = payload.count_workload()
-                    task = self.__call_backend(handler=self.benchmark_handler, payload=payload)
-                    benchmark_requests.append(
-                        BenchmarkResult(request_idx=i, workload=workload, task=task)
-                    )
-
-                responses = await gather(*[br.task for br in benchmark_requests])
-                for br, response in zip(benchmark_requests, responses):
-                    br.response = response
-
-                total_workload = sum(br.workload for br in benchmark_requests if br.is_successful)
-                time_elapsed = time.time() - start
-                successful_responses = sum([1 for br in benchmark_requests if br.is_successful])
-                if successful_responses == 0:
-                    self.backend_errored("No successful responses from benchmark")
-                    log.error(f"Benchmark Failed: No successful responses")
-                    return 0.0
-                throughput = total_workload / time_elapsed
-                sum_throughput += throughput
-                max_throughput = max(max_throughput, throughput)
-
-                # Log results for debugging
-                log.debug(
-                    "\n".join(
-                        [
-                            "#" * 60,
-                            f"Run: {run}, concurrent_requests: {concurrent_requests}",
-                            f"Total workload: {total_workload}, time_elapsed: {time_elapsed}s",
-                            f"Throughput: {throughput} workload/s",
-                            f"Successful responses: {successful_responses}/{concurrent_requests}",
-                            "#" * 60,
-                        ]
-                    )
+                workload = payload.count_workload()
+                task = self.__call_backend(
+                    handler=self.benchmark_handler, payload=payload
+                )
+                benchmark_requests.append(
+                    BenchmarkResult(request_idx=i, workload=workload, task=task)
                 )
 
-            average_throughput = sum_throughput / self.benchmark_handler.benchmark_runs
-            log.debug( f"Benchmark complete: average perf is {average_throughput}, measured perf is {max_throughput}")
-            with open(BENCHMARK_INDICATOR_FILE, "w") as f:
-                f.write(str(max_throughput))
-            return max_throughput
+            responses = await gather(*[br.task for br in benchmark_requests])
+            for br, response in zip(benchmark_requests, responses):
+                br.response = response
 
+            total_workload = sum(
+                br.workload for br in benchmark_requests if br.is_successful
+            )
+            time_elapsed = time.time() - start
+            successful_responses = sum(
+                [1 for br in benchmark_requests if br.is_successful]
+            )
+            if successful_responses == 0:
+                self.backend_errored("No successful responses from benchmark")
+                log.error(f"Benchmark Failed: No successful responses")
+                return 0.0
+            throughput = total_workload / time_elapsed
+            sum_throughput += throughput
+            max_throughput = max(max_throughput, throughput)
+
+            # Log results for debugging
+            log.debug(
+                "\n".join(
+                    [
+                        "#" * 60,
+                        f"Run: {run}, concurrent_requests: {concurrent_requests}",
+                        f"Total workload: {total_workload}, time_elapsed: {time_elapsed}s",
+                        f"Throughput: {throughput} workload/s",
+                        f"Successful responses: {successful_responses}/{concurrent_requests}",
+                        "#" * 60,
+                    ]
+                )
+            )
+
+        average_throughput = sum_throughput / self.benchmark_handler.benchmark_runs
+        log.debug(
+            f"Benchmark complete: average perf is {average_throughput}, measured perf is {max_throughput}"
+        )
+        with open(BENCHMARK_INDICATOR_FILE, "w") as f:
+            f.write(str(max_throughput))
+        return max_throughput
+
+    async def __read_logs(self) -> Awaitable[NoReturn]:
         async def handle_log_line(log_line: str) -> None:
             """
             Implement this function to handle each log line for your model.
@@ -725,20 +835,30 @@ class Backend:
                             f"Got log line indicating model is loaded: {log_line}"
                         )
                         try:
-                            max_throughput = await run_benchmark()
+                            max_throughput = await self.__run_benchmark()
                             self.__start_healthcheck = True
 
                             # Wait for the first successful healthcheck before marking model as loaded
                             if self.healthcheck_url:
-                                log.debug("Benchmark succeeded, waiting for healthcheck to confirm model is ready...")
+                                log.debug(
+                                    "Benchmark succeeded, waiting for healthcheck to confirm model is ready..."
+                                )
                                 try:
-                                    await asyncio.wait_for(self.__healthcheck_ready.wait(), timeout=300.0)
-                                    log.debug("Healthcheck confirmed - marking model as loaded")
+                                    await asyncio.wait_for(
+                                        self.__healthcheck_ready.wait(), timeout=300.0
+                                    )
+                                    log.debug(
+                                        "Healthcheck confirmed - marking model as loaded"
+                                    )
                                 except asyncio.TimeoutError:
-                                    raise Exception("Timed out waiting for healthcheck after benchmark (waited 300s)")
+                                    raise Exception(
+                                        "Timed out waiting for healthcheck after benchmark (waited 300s)"
+                                    )
                             else:
                                 # No healthcheck endpoint defined, wait 10 seconds as fallback
-                                log.debug("No healthcheck endpoint defined, waiting 10 seconds before marking model as loaded...")
+                                log.debug(
+                                    "No healthcheck endpoint defined, waiting 10 seconds before marking model as loaded..."
+                                )
                                 await asyncio.sleep(10)
                                 log.debug("Wait complete - marking model as loaded")
 
@@ -747,12 +867,19 @@ class Backend:
                                 if not self.__pubkey_fetch_complete.is_set():
                                     log.debug("Waiting for pubkey to be fetched...")
                                     try:
-                                        await asyncio.wait_for(self.__pubkey_fetch_complete.wait(), timeout=60.0)
+                                        await asyncio.wait_for(
+                                            self.__pubkey_fetch_complete.wait(),
+                                            timeout=60.0,
+                                        )
                                     except asyncio.TimeoutError:
-                                        raise Exception("Timed out waiting for pubkey fetch (waited 60s)")
+                                        raise Exception(
+                                            "Timed out waiting for pubkey fetch (waited 60s)"
+                                        )
                                     log.debug("Pubkey fetch complete")
                                 if self.__pubkey_failed:
-                                    raise Exception("Cannot mark model as loaded: pubkey fetch failed")
+                                    raise Exception(
+                                        "Cannot mark model as loaded: pubkey fetch failed"
+                                    )
 
                             # Mark worker ready!
                             self.metrics._model_loaded(
@@ -790,19 +917,25 @@ class Backend:
                             await f.aclose()
                             f = None
                             current_inode = None
-                        log.debug(f"Log file {self.model_log_file} not found, waiting...")
+                        log.debug(
+                            f"Log file {self.model_log_file} not found, waiting..."
+                        )
                         await asyncio.sleep(1)
                         continue
 
                     # If inode changed (file was rotated) or we don't have a file handle, (re)open
                     if current_inode != file_inode:
                         if f is not None:
-                            log.debug(f"Log file rotation detected (inode changed from {current_inode} to {file_inode}), reopening...")
+                            log.debug(
+                                f"Log file rotation detected (inode changed from {current_inode} to {file_inode}), reopening..."
+                            )
                             await f.aclose()
                         else:
                             log.debug(f"Opening log file (inode: {file_inode})")
 
-                        f = await open_file(self.model_log_file, encoding='utf-8', errors='ignore')
+                        f = await open_file(
+                            self.model_log_file, encoding="utf-8", errors="ignore"
+                        )
                         current_inode = file_inode
 
                     # Read a line
@@ -823,8 +956,6 @@ class Backend:
                 return await tail_log()
             else:
                 await sleep(1)
-      
-
 
     async def __session_gc_loop(self) -> NoReturn:
         while True:
@@ -834,7 +965,8 @@ class Backend:
 
                 async with self._sessions_lock:
                     expired = [
-                        sid for sid, s in self.sessions.items()
+                        sid
+                        for sid, s in self.sessions.items()
                         if s.expiration is not None and s.expiration <= now
                     ]
 
@@ -849,4 +981,3 @@ class Backend:
             except Exception as e:
                 log.debug(f"Session GC loop error: {e}")
                 continue
-                
