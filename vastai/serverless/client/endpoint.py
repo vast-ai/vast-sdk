@@ -1,35 +1,77 @@
 # endpoint.py
 import os
+
+import time
 from .connection import _make_request
 from typing import Awaitable, Generic, Optional, TypeVar, Union, TYPE_CHECKING
+from vastai.logging import log_debug
+import asyncio
 
 if TYPE_CHECKING:
     from .client import _ServerlessBase, ServerlessRequest
     from .request_status import RequestStatus
     from .session import Session
+    from vastai.data.endpoint import EndpointData
 
 R = TypeVar("R", bound=Awaitable)
 
 
 class Endpoint_(Generic[R]):
-    name: str
-    id: int
     client: "_ServerlessBase[R]"
 
     def __repr__(self):
-        return f"<Endpoint {self.name} (id={self.id})>"
+        return f"<Endpoint {self.data.config.endpoint_name} (id={self.data.id})>"
 
-    def __init__(self, client: "_ServerlessBase[R]", name: str, id: int, api_key: str):
-        if client is None:
-            raise ValueError("Endpoint cannot be created without client reference")
-        if not name:
-            raise ValueError("Endpoint name cannot be empty")
-        if id is None:
-            raise ValueError("Endpoint id cannot be empty")
+    def __init__(
+        self,
+        client: "_ServerlessBase[R]",
+        data: "EndpointData",
+        soft_refresh_threshold=3 * 24 * 3600,
+        hard_refresh_threshold=6 * 24 * 3600,
+    ):
         self.client = client
-        self.name = name
-        self.id = id
-        self.api_key = api_key
+        self.data = data
+        self.refresh_task: Optional[asyncio.Task["EndpointData"]] = None
+        self.last_refresh = time.time()
+        self.soft_refresh_threshold = soft_refresh_threshold
+        self.hard_refresh_threshold = hard_refresh_threshold
+
+    @property
+    def name(self):
+        return self.data.config.endpoint_name
+
+    @property
+    def id(self):
+        return self.data.id
+
+    @property
+    def api_key(self):
+        return self.data.api_key
+
+    async def refresh(self, block=False):
+        log_debug("refresh")
+        if self.refresh_task is not None:
+            if block:
+                try:
+                    self.data = await self.refresh_task
+                finally:
+                    self.refresh_task = None
+            else:
+                try:
+                    self.data = self.refresh_task.result()
+                    self.refresh_task = None
+                except asyncio.InvalidStateError:
+                    pass
+                except Exception as e:  # refresh task errored, reset it.
+                    self.refresh_task = None
+                    raise e
+        else:
+            if block:
+                self.data = await self.client.fetch_endpoint(self.data.id)
+            else:
+                self.refresh_task = asyncio.create_task(
+                    self.client.fetch_endpoint(self.data.id)
+                )
 
     def request(
         self,
@@ -41,8 +83,8 @@ class Endpoint_(Generic[R]):
         cost: int = 100,
         retry: bool = True,
         stream: bool = False,
-        timeout: float = None,
-        session: "Session" = None,
+        timeout: Optional[float] = None,
+        session: Optional["Session"] = None,
     ) -> R:
         return self.client.queue_endpoint_request(
             endpoint=self,
@@ -101,15 +143,19 @@ class Endpoint_(Generic[R]):
             return RouteResponse({"request_idx": 1, "url": VAST_DEBUG_WORKER_URL})
         if self.client is None or not self.client.is_open():
             raise ValueError("Client is invalid")
+        if time.time() > self.last_refresh + self.soft_refresh_threshold:
+            await self.refresh(
+                block=time.time() > self.last_refresh + self.hard_refresh_threshold
+            )
         try:
             result = await _make_request(
                 client=self.client,
                 url=self.client.autoscaler_url,
                 route="/route/",
-                api_key=self.api_key,
+                api_key=self.data.api_key,
                 body={
-                    "endpoint": self.name,
-                    "api_key": self.api_key,
+                    "endpoint": self.data.config.endpoint_name,
+                    "api_key": self.data.api_key,
                     "cost": cost,
                     "request_idx": req_idx,
                     "replay_timeout": timeout,

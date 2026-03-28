@@ -18,21 +18,19 @@ class ManagedEndpoint(Generic[R]):
     The .id property is always available. All other data is fetched on first
     access via .get() and cached. Call .invalidate() to force a re-fetch.
     """
-    def __init__(self, id: int, client: _ServerlessBase[R], data: Optional[EndpointData] = None):
+
+    def __init__(
+        self, id: int, client: _ServerlessBase[R], data: Optional[EndpointData] = None
+    ):
         self._id = id
         self._client = client
-        self._data = data
-        self._routing_endpoint: Optional[Endpoint_[R]] = None
+        self._routing_endpoint: Optional[Endpoint_[R]] = (
+            Endpoint_[R](client, data) if isinstance(data, EndpointData) else None
+        )
 
     @property
     def id(self) -> int:
         return self._id
-
-    async def get(self) -> EndpointData:
-        """Fetch and cache the full endpoint data. Returns cached data on subsequent calls."""
-        if self._data is None:
-            self._data = await self._client.fetch_endpoint(self._id)
-        return self._data
 
     def invalidate(self):
         """Clear cached data so the next .get() re-fetches from the API."""
@@ -41,20 +39,18 @@ class ManagedEndpoint(Generic[R]):
 
     async def _get_routing_endpoint(self) -> Endpoint_[R]:
         if self._routing_endpoint is None:
-            data = await self.get()
-            self._routing_endpoint = Endpoint_(
-                client=self._client,
-                name=data.config.endpoint_name,
-                id=self._id,
-                api_key=data.api_key,
-            )
+            data = await self._client.fetch_endpoint(self._id)
+            self._routing_endpoint = Endpoint_(client=self._client, data=data)
         return self._routing_endpoint
 
     async def request(self, route: str, payload: dict, **kwargs) -> dict:
         """Route a request to this endpoint's workers. Fetches endpoint data if needed."""
         ep = await self._get_routing_endpoint()
         return await self._client.queue_endpoint_request(
-            endpoint=ep, worker_route=route, worker_payload=payload, **kwargs,
+            endpoint=ep,
+            worker_route=route,
+            worker_payload=payload,
+            **kwargs,
         )
 
     async def add_workergroup(
@@ -74,7 +70,9 @@ class ManagedEndpoint(Generic[R]):
             if config.endpoint_id is None:
                 config.endpoint_id = self._id
         elif isinstance(config_or_template_hash, str):
-            config = WorkergroupConfig(endpoint_id=self._id, template_hash=config_or_template_hash, **kwargs)
+            config = WorkergroupConfig(
+                endpoint_id=self._id, template_hash=config_or_template_hash, **kwargs
+            )
         else:
             config = WorkergroupConfig(endpoint_id=self._id, **kwargs)
         return await self._client.create_workergroup(config)
@@ -84,7 +82,7 @@ class ManagedEndpoint(Generic[R]):
         await self._client.delete_endpoint(self._id)
 
     def __repr__(self) -> str:
-        status = "loaded" if self._data is not None else "lazy"
+        status = "loaded" if self._routing_endpoint is not None else "lazy"
         return f"<ManagedEndpoint id={self._id} ({status})>"
 
 
@@ -95,6 +93,7 @@ class ManagedDeployment(Generic[R]):
     If the deployment was just created/updated, .needs_upload and .upload()
     are available to handle S3 blob uploads.
     """
+
     def __init__(
         self,
         id: int,

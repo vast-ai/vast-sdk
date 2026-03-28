@@ -255,14 +255,8 @@ class _ServerlessBase(Generic[R]):
         response = result.get("json") or {}
         endpoints = []
         for e in response.get("results", []):
-            endpoints.append(
-                Endpoint(
-                    client=self,
-                    name=e["endpoint_name"],
-                    id=e["id"],
-                    api_key=e["api_key"],
-                )
-            )
+            data = EndpointData.from_dict(e)
+            endpoints.append(Endpoint(client=self, data=data))
         self.logger.info(f"Found {len(endpoints)} endpoints")
         return endpoints
 
