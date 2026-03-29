@@ -2440,6 +2440,7 @@ def create_instance(id, args):
         print("request json: ")
         print(json_blob)
     r.raise_for_status()
+
     if args.raw:
         return r
     else:
@@ -2519,7 +2520,7 @@ def create__instance(args: argparse.Namespace):
 
     :param argparse.Namespace args: Namespace with many fields relevant to the endpoint.
     """
-    create_instance(args.id, args)
+    return create_instance(args.id, args)
 
 @parser.command(
     argument("ids", help="ids of instance types to launch (returned from search offers)", type=int, nargs='+'),
