@@ -14,7 +14,6 @@ class Query:
         verified: Optional[bool] = True,
         rentable: Optional[bool] = True,
         rented: Optional[bool] = False,
-        static_ip=True,
     ) -> "Query":
         """Creates a Query pre-populated with default search filters for end-user use."""
         q = cls({})
@@ -22,7 +21,6 @@ class Query:
             ("verified", verified),
             ("rentable", rentable),
             ("rented", rented),
-            ("static_ip", static_ip),
         ]:
             if value is not None:
                 q.query[name] = {"eq": value}

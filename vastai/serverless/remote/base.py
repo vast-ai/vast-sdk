@@ -32,6 +32,7 @@ class Image:
         self.image_ = from_image
         self.envs_: dict[str, str] = {}
         self.runs_: list[str | tuple[str, ...]] = []
+        self.venv_: str | None = None  # None=SDK default, ""=system python, str=custom venv path
         self.pip_installs_: list[str] = []
         self.apt_gets_: list[str] = []
         self.docker_login: DockerLogin = docker_login
@@ -39,6 +40,7 @@ class Image:
         self.storage_ = storage
         self.copies: list[tuple[str, str]] = []
         self.ports: set[tuple[int, str]] = {worker_port}
+
 
     def pip_install(self, *args: str) -> "Image":
         for arg in args:
@@ -70,6 +72,16 @@ class Image:
 
     def copy(self, src: str, dst: str) -> "Image":
         self.copies.append((src, dst))
+        return self
+
+    def venv(self, path: str) -> "Image":
+        """Use an existing venv at the given path instead of the SDK managed venv."""
+        self.venv_ = path
+        return self
+
+    def use_system_python(self) -> "Image":
+        """Use the image's system Python instead of a venv."""
+        self.venv_ = ""
         return self
 
     def publish_port(self, number: int, type_: str = "tcp") -> "Image":

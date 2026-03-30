@@ -134,6 +134,11 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             envs.append(f"-e REPORT_ADDR={self.autoscaler_url}")
         if self.webserver_url != "https://console.vast.ai":
             envs.append(f"-e VAST_API_URL={self.webserver_url}")
+        if checked_image.venv_ == "":
+            envs.append("-e USE_SYSTEM_PYTHON=true")
+            envs.append("-e UV_SYSTEM_PYTHON=1")
+        elif checked_image.venv_ is not None:
+            envs.append(f"-e ENV_PATH={checked_image.venv_}")
         return " ".join(envs)
 
     def _into_deployment_config_and_tarball(self, tar_path: str) -> DeploymentConfig:
