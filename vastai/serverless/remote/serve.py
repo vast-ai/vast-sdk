@@ -11,9 +11,11 @@ from typing import (
     AsyncContextManager,
 )
 import asyncio
-from vastai.logging import log_debug, log_critical, log_info, log_error, log_warning
+import logging
 
-log_debug("mode: serve")
+logger = logging.getLogger("vastai")
+
+logger.debug("mode: serve")
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -38,6 +40,11 @@ class Deployment(Deployment_, AsyncContextManager):
             return context_class
 
         return decorator
+
+    def get_context(self, context_class: Type[AsyncContextManager[T]]) -> T:
+        if context_class not in self.contexts:
+            raise KeyError(f"Context {context_class} not registered or not yet entered")
+        return self.contexts[context_class]
 
     async def __aenter__(self):
         self.contexts = dict(

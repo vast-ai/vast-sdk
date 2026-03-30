@@ -132,7 +132,7 @@ class Deployment_(ABC):
     def get_context(self, context_class: Type[AsyncContextManager[T]]) -> T:
         raise NotImplementedError(
             f"{context_class}"
-        )  # should not be run when not in serve modej
+        )  # should not be run when not in serve mode
 
     @property
     def name(self):

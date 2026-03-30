@@ -4,7 +4,9 @@ import os
 import time
 from .connection import _make_request
 from typing import Awaitable, Generic, Optional, TypeVar, Union, TYPE_CHECKING
-from vastai.logging import log_debug
+import logging
+
+logger = logging.getLogger("vastai")
 import asyncio
 
 if TYPE_CHECKING:
@@ -49,7 +51,7 @@ class Endpoint_(Generic[R]):
         return self.data.api_key
 
     async def refresh(self, block=False):
-        log_debug("refresh")
+        logger.debug("refresh")
         if self.refresh_task is not None:
             if block:
                 try:

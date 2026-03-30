@@ -35,8 +35,8 @@ from typing import (
     Union,
     List,
 )
-from vastai.logging import log_debug
 
+logger = logging.getLogger("vastai")
 
 R = TypeVar("R", bound=Awaitable)
 
@@ -327,7 +327,7 @@ class _ServerlessBase(Generic[R]):
 
     async def put_deployment(self, config: DeploymentConfig) -> ManagedDeployment[R]:
         """Create or update a deployment. Returns a ManagedDeployment (data fetched lazily)."""
-        log_debug(f"putting deployment: \n {config.to_dict()}")
+        logger.debug(f"putting deployment: \n {config.to_dict()}")
         try:
             result = await _make_request(
                 client=self,

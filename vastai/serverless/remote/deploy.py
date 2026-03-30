@@ -15,9 +15,11 @@ from .utils import create_deployment_tarball, compute_deployment_hash
 from os.path import getsize
 import tempfile
 import asyncio
-from vastai.logging import log_debug, log_critical, log_info, log_error, log_warning
+import logging
 
-log_debug("mode: deploy")
+logger = logging.getLogger("vastai")
+
+logger.debug("mode: deploy")
 # TODO: implement heartbeat, sync ready.
 
 """
@@ -152,9 +154,11 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             raise Exception(
                 "Trying to deploy a deployment without autoscaling configured."
             )
+        logger.debug(f"Building deployment tarball at {tar_path}")
         hash, size = self._compute_hash_and_filesize_and_make_tar(
             tar_path, self.name, self._image
         )
+        logger.info(f"Deployment tarball built: hash={hash}, size={size} bytes")
         return DeploymentConfig(
             name=self.name
             if self.name
@@ -211,16 +215,23 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
                 "Trying to deploy a deployment not yet bound to a Python module. Have any remote functions been registered?"
             )
 
+        logger.info(f"Preparing deployment '{self.name}' (module={self.root_module})")
         with tempfile.NamedTemporaryFile(
             delete_on_close=False
         ) as f:  # deletes at end of context manager instead of at f.close
             tar_path = f.name if not DEBUG_DEPLOYMENT_TAR else DEBUG_DEPLOYMENT_TAR
             f.close()  # _into_deployment_config_and_tarball will reopen it when it makes the tarball
             config = self._into_deployment_config_and_tarball(tar_path)
+            logger.debug(f"Registering deployment with server")
             deployment = await self.client.put_deployment(config)
             if deployment.needs_upload:
+                logger.info(f"Uploading deployment tarball")
                 await deployment.upload(tar_path)
+                logger.info(f"Upload complete")
+            else:
+                logger.info(f"Deployment tarball already up to date, skipping upload")
             self._inner = _FullDeployment(self.root_module, deployment)
+        logger.info(f"Deployment '{self.name}' is ready (id={deployment.id})")
 
     # ensure_ready will often be called at import time, before we have access to the end client's async event loop,
     # in an isolated temporary async event loop
@@ -246,10 +257,12 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             raise Exception("Deployment is not ready. Call .ensure_ready() first!")
         bound_args = sig.bind(*args, **kwargs)
         bound_args.apply_defaults()
+        route = "/remote/" + "/".join(f_name)
+        logger.debug(f"Dispatching remote call to {route}")
         return serialization.deserialize_unwrap_error(
             self._unwrap_worker_response(
                 await self._inner.deployment.endpoint.request(
-                    "/remote/" + "/".join(f_name),
+                    route,
                     {
                         k: serialization.serialize(v, self._inner.root_module)
                         for k, v in bound_args.arguments.items()
@@ -275,6 +288,7 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             f: Callable[P, Awaitable[Any]], **_
         ) -> Callable[P, Awaitable[Any]]:
             f_rel_name = self.relativize(f)
+            logger.debug(f"Registered remote function: {f.__name__}")
             f_globals = f.__globals__
             sig = inspect.signature(f)
 
