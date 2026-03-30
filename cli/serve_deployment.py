@@ -111,11 +111,11 @@ def run_apt_gets(packages: list[str]):
 
 
 def run_pip_installs(packages: list[str]):
-    """Install pip packages."""
+    """Install pip packages using uv."""
     if not packages:
         return
     subprocess.run(
-        [sys.executable, "-m", "pip", "install"] + packages,
+        ["uv", "pip", "install"] + packages,
         check=True,
     )
 
