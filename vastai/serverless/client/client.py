@@ -15,10 +15,6 @@ import collections
 from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Union, List
 
 
-class SessionCreateError(Exception):
-    """Queue returned ``ok`` for ``/session/create`` but no ``response`` body (see :meth:`Serverless.start_endpoint_session`)."""
-
-
 class ServerlessRequest(asyncio.Future):
     """A request to a Serverless endpoint managed by the client"""
     def __init__(self):
@@ -313,7 +309,7 @@ class Serverless:
                 raise Exception(error_msg)
             response = session_start_response.get("response")
             if response is None:
-                raise SessionCreateError("No response from /session/create")
+                raise Exception("No response from /session/create")
             if not isinstance(response, dict):
                 raise Exception("Invalid response from /session/create: expected mapping")
             session_id = response.get("session_id")
@@ -328,8 +324,6 @@ class Serverless:
                 raise Exception("Missing auth data")
             return Session(endpoint=endpoint, session_id=session_id, lifetime=lifetime, expiration=expiration, url=url, auth_data=auth_data)
         except asyncio.TimeoutError:
-            raise
-        except SessionCreateError:
             raise
         except Exception as ex:
             error_msg = f"Failed to create session: {ex}"
