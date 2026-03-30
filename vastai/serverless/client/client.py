@@ -401,6 +401,30 @@ class _ServerlessBase(Generic[R]):
 
         self.logger.info(f"Deleted workergroup {workergroup_id}")
 
+    async def update_workers(self, workergroup_id: int) -> dict:
+        """Trigger a rolling update for all workers in a workergroup via the autoscaler."""
+        try:
+            result = await _make_request(
+                client=self,
+                url=self.autoscaler_url,
+                route="/update_workers/",
+                api_key=self.api_key,
+                body={"workergroup_id": workergroup_id, "api_key": self.api_key},
+                method="POST",
+            )
+        except Exception as ex:
+            raise Exception(
+                f"Failed to trigger worker update for workergroup {workergroup_id}:\nReason={ex}"
+            )
+
+        if not result.get("ok"):
+            raise Exception(
+                f"Failed to trigger worker update for workergroup {workergroup_id}: HTTP {result.get('status')} - {result.get('text', '')[:512]}"
+            )
+
+        self.logger.info(f"Triggered rolling update for workergroup {workergroup_id}")
+        return result.get("json", {})
+
     async def delete_endpoint(self, endpoint_id: int) -> None:
         """Delete an endpoint job by ID."""
         try:
