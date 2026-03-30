@@ -17,7 +17,7 @@ Pyworker: ``pyworker_backend`` (Backend with Metrics mocked), ``patch_pyworker_b
 
 Serverless pyworker: ``serverless_backend_and_handler_default`` (default ``Backend`` + handler),
 ``serverless_tracked_runner_and_tcp_site`` (AppRunner/TCPSite capture bundle for ``server.lib.server``),
-``run_serverless_start_server_async_patched`` (async helper applying standard start_server_async patches),
+``run_serverless_start_server_async_patched`` (async helper applying AppRunner/TCPSite/_start_tracking patches for ``start_server_async``),
 ``make_patch_skip_backend_run_session_on_close`` / ``make_patch_mock_backend_close_session``,
 ``attach_serverless_backend_mock_aiohttp_session`` (single mock ``ClientSession`` on ``backend.session``),
 ``make_serverless_fetch_pubkey_client_session_return_value``, ``make_serverless_backend_session_get_steps``,
@@ -895,7 +895,7 @@ def make_serverless_test_rsa_key():
 
 @pytest.fixture
 def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_site):
-    """Async callable: apply env + AppRunner + TCPSite + _start_tracking + gather patches, then ``start_server_async``.
+    """Async callable: apply env + AppRunner + TCPSite + _start_tracking patches, then ``start_server_async``.
 
     Returns the ``_start_tracking`` AsyncMock.
     """
@@ -905,7 +905,6 @@ def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_
         routes: list,
         env: dict,
         *,
-        gather_side_effect,
         ssl_create_default_context_patch=None,
     ) -> MagicMock:
         sm = vast_serverless_server_mod
@@ -920,7 +919,6 @@ def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_
             mock_track = stack.enter_context(
                 patch.object(backend, "_start_tracking", new_callable=AsyncMock)
             )
-            stack.enter_context(patch.object(sm, "gather", side_effect=gather_side_effect))
             await sm.start_server_async(backend, routes)
         return mock_track
 

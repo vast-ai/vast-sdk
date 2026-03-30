@@ -21,7 +21,6 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
     serverless_backend_and_handler_default,
     serverless_metrics_test_env,
     serverless_tracked_runner_and_tcp_site,
-    serverless_gather_await_all,
     serverless_aiohttp_route_path_tuples,
     run_serverless_start_server_async_patched,
 ) -> None:
@@ -29,13 +28,13 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
     Verifies start_server_async builds apps with session endpoints and starts TCPSites.
 
     This test verifies by:
-    1. Patching AppRunner, TCPSite, and gather so nothing listens on real ports
+    1. Patching AppRunner, TCPSite, and _start_tracking so nothing listens on real ports
     2. Capturing Application instances passed to AppRunner
     3. Asserting main app includes POST /session/create, /session/end, /session/get, /session/health
     4. Asserting HTTP app includes POST /session/end
 
     Assumptions:
-    - backend._start_tracking is mocked so gather completes; WORKER_PORT and related env are set
+    - backend._start_tracking is mocked; WORKER_PORT and related env are set
     """
     backend, _ = serverless_backend_and_handler_default
     routes: list = []
@@ -48,7 +47,6 @@ async def test_start_server_async_registers_session_routes_and_starts_sites(
         backend,
         routes,
         env,
-        gather_side_effect=serverless_gather_await_all,
     )
 
     mock_track.assert_awaited_once()
@@ -67,7 +65,6 @@ async def test_start_server_async_defaults_http_port_to_worker_plus_one(
     serverless_backend_and_handler_default,
     serverless_metrics_test_env,
     serverless_tracked_runner_and_tcp_site,
-    serverless_gather_await_all,
     run_serverless_start_server_async_patched,
 ) -> None:
     """
@@ -79,7 +76,7 @@ async def test_start_server_async_defaults_http_port_to_worker_plus_one(
     3. Asserting its port is WORKER_PORT + 1 while the TLS/plain worker uses WORKER_PORT
 
     Assumptions:
-    - Same patched gather/runner path as other start_server_async tests
+    - Same patched runner/_start_tracking path as other start_server_async tests
     """
     backend, _ = serverless_backend_and_handler_default
     routes: list = []
@@ -93,7 +90,6 @@ async def test_start_server_async_defaults_http_port_to_worker_plus_one(
             backend,
             routes,
             env,
-            gather_side_effect=serverless_gather_await_all,
         )
     finally:
         if old_http is not None:
@@ -107,7 +103,6 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
     serverless_backend_and_handler_default,
     serverless_metrics_test_env,
     serverless_tracked_runner_and_tcp_site,
-    serverless_gather_await_all,
     run_serverless_start_server_async_patched,
 ) -> None:
     """
@@ -137,7 +132,6 @@ async def test_start_server_async_ssl_branch_loads_cert_chain(
         backend,
         routes,
         env,
-        gather_side_effect=serverless_gather_await_all,
         ssl_create_default_context_patch=patch.object(
             server_mod.ssl, "create_default_context", return_value=mock_ctx
         ),
@@ -196,15 +190,13 @@ async def test_start_server_async_gather_failure_runs_beacon_until_sleep_stops(
     serverless_metrics_test_env,
     serverless_tracked_runner_and_tcp_site,
     serverless_error_beacon_mocks,
-    serverless_gather_raise_bind_failed,
 ) -> None:
     """
     Verifies launch failure enters the metrics beacon loop (error reporting path).
 
     This test verifies by:
-    1. Patching gather to raise after AppRunner/TCPSite construction (using a replacement
-       that closes the already-created site.start / _start_tracking coroutines so GC does
-       not emit RuntimeWarning)
+    1. Patching Backend._start_tracking to raise after mocked TCPSite starts (same stage as
+       a real failure once the listener stack is built)
     2. Patching asyncio.sleep in the server module so the second iteration raises
     3. Asserting _model_errored was invoked with the launch error message
 
@@ -226,9 +218,9 @@ async def test_start_server_async_gather_failure_runs_beacon_until_sleep_stops(
         with patch.object(server_mod.web, "AppRunner", side_effect=app_runner):
             with patch.object(server_mod.web, "TCPSite", side_effect=tcp_site):
                 with patch.object(
-                    server_mod,
-                    "gather",
-                    side_effect=serverless_gather_raise_bind_failed,
+                    backend,
+                    "_start_tracking",
+                    AsyncMock(side_effect=RuntimeError("bind failed")),
                 ):
                     with pytest.raises(RuntimeError, match="stop-beacon"):
                         await start_server_async(backend, routes)
