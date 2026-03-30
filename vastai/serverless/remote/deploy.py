@@ -137,6 +137,7 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         if checked_image.venv_ == "":
             envs.append("-e USE_SYSTEM_PYTHON=true")
             envs.append("-e UV_SYSTEM_PYTHON=1")
+            envs.append("-e UV_BREAK_SYSTEM_PACKAGES=1")
         elif checked_image.venv_ is not None:
             envs.append(f"-e ENV_PATH={checked_image.venv_}")
         return " ".join(envs)
@@ -235,6 +236,15 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
                 logger.info(f"Upload complete")
             else:
                 logger.info(f"Deployment tarball already up to date, skipping upload")
+            if deployment.action == "soft_update":
+                wg_id = deployment.workergroup_id
+                if not wg_id:
+                    wg_id = await self.client.find_workergroup_for_endpoint(deployment.endpoint_id)
+                if wg_id:
+                    logger.info(f"Triggering rolling update for workergroup {wg_id}")
+                    await self.client.update_workers(wg_id)
+                else:
+                    logger.warning(f"soft_update but no workergroup found for endpoint {deployment.endpoint_id}, skipping update_workers")
             self._inner = _FullDeployment(self.root_module, deployment)
         logger.info(f"Deployment '{self.name}' is ready (id={deployment.id})")
 

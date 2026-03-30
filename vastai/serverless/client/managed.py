@@ -123,6 +123,11 @@ class ManagedDeployment(Generic[R]):
         return self._put_response.action if self._put_response else None
 
     @property
+    def workergroup_id(self) -> Optional[int]:
+        """The workergroup ID associated with this deployment, if returned by the server."""
+        return self._put_response.workergroup_id if self._put_response else None
+
+    @property
     def needs_upload(self) -> bool:
         """True if the deployment requires a blob upload to S3 to complete setup."""
         return (

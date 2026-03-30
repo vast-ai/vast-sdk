@@ -48,6 +48,7 @@ class DeploymentPutResponse:
     action: str  # "created", "soft_update", "autoscale_update", "exists"
     deployment_id: int
     endpoint_id: int
+    workergroup_id: Optional[int] = None
     upload_url: Optional[str] = None
     upload_fields: Optional[dict] = None
     evicted_versions: Optional[list] = None
@@ -59,6 +60,7 @@ class DeploymentPutResponse:
             action=d["action"],
             deployment_id=d["deployment_id"],
             endpoint_id=d["endpoint_id"],
+            workergroup_id=d.get("workergroup_id"),
             upload_url=d.get("upload_url"),
             upload_fields=d.get("upload_fields"),
             evicted_versions=d.get("evicted_versions"),
