@@ -1,6 +1,6 @@
 from .base import Config, Deployment_
 from ..server.worker import Worker, WorkerConfig, HandlerConfig, BenchmarkConfig
-from .serialization import deserialize, serialize_ok, serialize_err
+from .serialization import serialize, deserialize, serialize_ok, serialize_err
 from typing import (
     ParamSpec,
     Type,
@@ -103,8 +103,16 @@ class Deployment(Deployment_, AsyncContextManager):
                     entry["benchmark_dataset"] is not None
                     or entry["benchmark_generator"] is not None
                 ):
+                    # Serialize benchmark dataset values so they match the
+                    # format a real client sends (the wrapper deserializes them).
+                    dataset = entry["benchmark_dataset"]
+                    if dataset is not None:
+                        dataset = [
+                            {k: serialize(v, self.root_module) for k, v in item.items()}
+                            for item in dataset
+                        ]
                     benchmark_config = BenchmarkConfig(
-                        dataset=entry["benchmark_dataset"],
+                        dataset=dataset,
                         generator=entry["benchmark_generator"],
                         runs=entry["benchmark_runs"],
                     )

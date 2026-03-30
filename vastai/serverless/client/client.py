@@ -425,6 +425,25 @@ class _ServerlessBase(Generic[R]):
         self.logger.info(f"Triggered rolling update for workergroup {workergroup_id}")
         return result.get("json", {})
 
+    async def find_workergroup_for_endpoint(self, endpoint_id: int) -> Optional[int]:
+        """Fetch all workergroups and return the first one matching endpoint_id, or None."""
+        try:
+            result = await _make_request(
+                client=self,
+                url=self.vast_web_url,
+                route="/api/v0/workergroups/",
+                api_key=self.api_key,
+                method="GET",
+            )
+        except Exception:
+            return None
+        if not result.get("ok"):
+            return None
+        for wg in result.get("json", {}).get("results", []):
+            if wg.get("endpoint_id") == endpoint_id:
+                return wg["id"]
+        return None
+
     async def delete_endpoint(self, endpoint_id: int) -> None:
         """Delete an endpoint job by ID."""
         try:

@@ -236,9 +236,15 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
                 logger.info(f"Upload complete")
             else:
                 logger.info(f"Deployment tarball already up to date, skipping upload")
-            #if deployment.action == "soft_update" and deployment.workergroup_id:
-            #    logger.info(f"Triggering rolling update for workergroup {deployment.workergroup_id}")
-            #    await self.client.update_workers(deployment.workergroup_id)
+            if deployment.action == "soft_update":
+                wg_id = deployment.workergroup_id
+                if not wg_id:
+                    wg_id = await self.client.find_workergroup_for_endpoint(deployment.endpoint_id)
+                if wg_id:
+                    logger.info(f"Triggering rolling update for workergroup {wg_id}")
+                    await self.client.update_workers(wg_id)
+                else:
+                    logger.warning(f"soft_update but no workergroup found for endpoint {deployment.endpoint_id}, skipping update_workers")
             self._inner = _FullDeployment(self.root_module, deployment)
         logger.info(f"Deployment '{self.name}' is ready (id={deployment.id})")
 
