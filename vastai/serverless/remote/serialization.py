@@ -79,14 +79,7 @@ def deserialize(json, root_module: str, globals):
         modname = derelativize_module(json["module"], root_module)
         namespace = globals if modname == "" else import_module(modname).__dict__
         cls = namespace[json["class"]]
-
-        def empty_init(_):
-            pass
-
-        old_init = cls.__init__
-        cls.__init__ = empty_init
-        obj = cls()
-        cls.__init__ = old_init
+        obj = cls.__new__(cls)
         for k, v in json["contents"].items():
             setattr(obj, k, deserialize(v, root_module, globals))
         return obj
