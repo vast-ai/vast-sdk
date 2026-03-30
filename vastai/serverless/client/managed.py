@@ -25,7 +25,7 @@ class ManagedEndpoint(Generic[R]):
         self._id = id
         self._client = client
         self._routing_endpoint: Optional[Endpoint_[R]] = (
-            Endpoint_[R](client, data) if isinstance(data, EndpointData) else None
+            Endpoint_[R](client, data=data) if isinstance(data, EndpointData) else None
         )
 
     @property

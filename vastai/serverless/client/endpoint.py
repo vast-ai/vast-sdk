@@ -1,4 +1,6 @@
 # endpoint.py
+import asyncio
+from dataclasses import dataclass
 import os
 
 import time
@@ -6,41 +8,66 @@ from .connection import _make_request
 from typing import Awaitable, Generic, Optional, TypeVar, Union, TYPE_CHECKING
 import logging
 
+from vastai.data.endpoint import EndpointData
+
 logger = logging.getLogger("vastai")
-import asyncio
 
 if TYPE_CHECKING:
     from .client import _ServerlessBase, ServerlessRequest
     from .request_status import RequestStatus
     from .session import Session
-    from vastai.data.endpoint import EndpointData
 
 R = TypeVar("R", bound=Awaitable)
+
+
+@dataclass
+class EndpointDataPartial:
+    name: str
+    id: int
+    api_key: str
 
 
 class Endpoint_(Generic[R]):
     client: "_ServerlessBase[R]"
 
     def __repr__(self):
-        return f"<Endpoint {self.data.config.endpoint_name} (id={self.data.id})>"
+        return f"<Endpoint {self.name} (id={self.data.id})>"
 
     def __init__(
         self,
         client: "_ServerlessBase[R]",
-        data: "EndpointData",
+        name: Optional[str] = None,
+        id: Optional[int] = None,
+        api_key: Optional[str] = None,
+        data: Optional[EndpointData] = None,
         soft_refresh_threshold=3 * 24 * 3600,
         hard_refresh_threshold=6 * 24 * 3600,
     ):
+        if client is None:
+            raise ValueError("client is required")
         self.client = client
-        self.data = data
-        self.refresh_task: Optional[asyncio.Task["EndpointData"]] = None
+        if isinstance(data, EndpointData):
+            self.data: "EndpointData | EndpointDataPartial" = data
+        elif isinstance(name, str) and isinstance(id, int) and isinstance(api_key, str):
+            self.data: "EndpointData | EndpointDataPartial" = EndpointDataPartial(
+                name, id, api_key
+            )
+        else:
+            raise ValueError(
+                "Either data or all of name, id, and api_key are required!"
+            )
+        self.refresh_task: Optional[asyncio.Task[EndpointData]] = None
         self.last_refresh = time.time()
         self.soft_refresh_threshold = soft_refresh_threshold
         self.hard_refresh_threshold = hard_refresh_threshold
 
     @property
     def name(self):
-        return self.data.config.endpoint_name
+        return (
+            self.data.config.endpoint_name
+            if isinstance(self.data, EndpointData)
+            else self.data.name
+        )
 
     @property
     def id(self):
@@ -156,7 +183,7 @@ class Endpoint_(Generic[R]):
                 route="/route/",
                 api_key=self.data.api_key,
                 body={
-                    "endpoint": self.data.config.endpoint_name,
+                    "endpoint": self.name,
                     "api_key": self.data.api_key,
                     "cost": cost,
                     "request_idx": req_idx,
