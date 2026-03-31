@@ -8,7 +8,7 @@ from vastai.data.query import (
     RTX_5090,
 )
 
-app = Deployment(webserver_url="https://alpha-server.vast.ai")
+app = Deployment(webserver_url="https://alpha-server.vast.ai", ttl=60)
 
 
 @app.remote(benchmark_dataset=[{"x": 2}])

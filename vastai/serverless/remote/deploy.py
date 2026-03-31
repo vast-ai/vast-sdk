@@ -1,4 +1,6 @@
 import inspect
+import threading
+import time
 import json
 import os
 from typing import Optional, Any, Callable, Awaitable, ParamSpec, BinaryIO
@@ -215,6 +217,12 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         size = getsize(tar_path)
         return (hash, size)
 
+    def _heartbeat_thread(self, deployment: ManagedDeployment, ttl: float):
+        interval = min(ttl / 2, 60)
+        while True:
+            deployment.sync_heartbeat()
+            time.sleep(interval)
+
     async def async_ensure_ready(self):
         if not isinstance(self.root_module, str):
             raise Exception(
@@ -239,25 +247,27 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             if deployment.action == "soft_update":
                 wg_id = deployment.workergroup_id
                 if not wg_id:
-                    wg_id = await self.client.find_workergroup_for_endpoint(deployment.endpoint_id)
+                    wg_id = await self.client.find_workergroup_for_endpoint(
+                        deployment.endpoint_id
+                    )
                 if wg_id:
                     logger.info(f"Triggering rolling update for workergroup {wg_id}")
                     await self.client.update_workers(wg_id)
                 else:
-                    logger.warning(f"soft_update but no workergroup found for endpoint {deployment.endpoint_id}, skipping update_workers")
+                    logger.warning(
+                        f"soft_update but no workergroup found for endpoint {deployment.endpoint_id}, skipping update_workers"
+                    )
             self._inner = _FullDeployment(self.root_module, deployment)
+            if self._ttl is not None:
+                threading.Thread(
+                    target=self._heartbeat_thread,
+                    args=(deployment, self._ttl),
+                    daemon=True,
+                ).start()
         logger.info(f"Deployment '{self.name}' is ready (id={deployment.id})")
 
-    # ensure_ready will often be called at import time, before we have access to the end client's async event loop,
-    # in an isolated temporary async event loop
-    # so we need to close our connection after, since aiohttp connections are bound to an async event loop,
-    # and will error if reused after the event loop has closed.
-    async def _ensure_ready_isolated_connection(self):
-        async with self.async_client:
-            await self.async_ensure_ready()
-
     def ensure_ready(self):
-        asyncio.run(self._ensure_ready_isolated_connection())
+        asyncio.run(self.async_ensure_ready())
 
     def _unwrap_worker_response(self, response: dict[str, Any]) -> serialization.JSON:
         try:

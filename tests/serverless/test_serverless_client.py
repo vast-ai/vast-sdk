@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from vastai.serverless.client.client import Serverless, ServerlessRequest, SessionCreateError
+from vastai.serverless.client.client import Serverless, ServerlessRequest
 from vastai.serverless.client.endpoint import Endpoint
 
 
@@ -557,19 +557,17 @@ class TestServerlessSessionApiErrors:
             },
         ],
     )
-    async def test_start_endpoint_session_raises_session_create_error_when_response_body_missing(
+    async def test_start_endpoint_session_raises_when_response_body_missing(
         self, client, make_serverless_endpoint, queue_payload: dict
     ) -> None:
         """
-        Missing or null ``response`` raises :class:`SessionCreateError` with a stable message.
-
-        This is the supported hook for callers (not ``AttributeError`` from pre-fix code paths).
+        Missing or null ``response`` raises
         """
         ep = make_serverless_endpoint(client)
         fut = ServerlessRequest()
         fut.set_result(queue_payload)
         with patch.object(client, "queue_endpoint_request", return_value=fut):
-            with pytest.raises(SessionCreateError, match="No response from /session/create"):
+            with pytest.raises(Exception, match="No response from /session/create"):
                 await client.start_endpoint_session(ep)
 
     async def test_start_endpoint_session_wraps_when_response_not_mapping(

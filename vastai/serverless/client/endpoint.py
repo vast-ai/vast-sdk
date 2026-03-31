@@ -170,8 +170,7 @@ class Endpoint_(Generic[R]):
         VAST_DEBUG_WORKER_URL = os.environ.get("VAST_DEBUG_WORKER_URL")
         if VAST_DEBUG_WORKER_URL:
             return RouteResponse({"request_idx": 1, "url": VAST_DEBUG_WORKER_URL})
-        if self.client is None or not self.client.is_open():
-            raise ValueError("Client is invalid")
+        await self.client._get_session()
         if time.time() > self.last_refresh + self.soft_refresh_threshold:
             await self.refresh(
                 block=time.time() > self.last_refresh + self.hard_refresh_threshold

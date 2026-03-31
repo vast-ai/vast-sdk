@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from vastai.serverless.client.client import Serverless, ServerlessRequest, SessionCreateError
+from vastai.serverless.client.client import Serverless, ServerlessRequest
 from vastai.serverless.client.endpoint import Endpoint
 from vastai.serverless.client.worker import Worker
 from vastai.serverless.client.session import Session
@@ -931,10 +931,6 @@ class TestServerlessStartEndpointSession:
 
         This test verifies by:
         1. Mocking queue_endpoint_request with response=None
-        2. Asserting :class:`SessionCreateError` with "No response from /session/create"
-
-        Assumptions:
-        - None response triggers :class:`SessionCreateError` (not a generic Exception)
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
@@ -943,7 +939,7 @@ class TestServerlessStartEndpointSession:
             "response": None,
             "status": 200,
         })
-        with pytest.raises(SessionCreateError, match="No response from /session/create"):
+        with pytest.raises(Exception, match="No response from /session/create"):
             await client.start_endpoint_session(endpoint=ep)
 
     async def test_start_session_raises_on_missing_session_id(self) -> None:

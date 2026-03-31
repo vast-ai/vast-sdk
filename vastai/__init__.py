@@ -26,8 +26,6 @@ from .serverless.client.client import (
     Serverless,
     CoroutineServerless,
     ServerlessRequest,
-    _ServerlessBase,
-    SessionCreateError,
 )
 from .serverless.client.request_status import RequestStatus
 from .serverless.client.endpoint import Endpoint
@@ -49,7 +47,6 @@ __all__ = [
     "CoroutineServerless",
     "ServerlessRequest",
     "RequestStatus",
-    "SessionCreateError",
     "Endpoint",
     "Worker",
     "WorkerConfig",
