@@ -2,6 +2,7 @@ import aiohttp
 import ssl
 import os
 import tempfile
+import asyncio
 from typing import Any, Optional, Union
 
 from vastai._base import _BaseClient, _APIKEY_SENTINEL
@@ -35,6 +36,7 @@ class AsyncClient(_BaseClient):
         self._connection_limit = connection_limit
         self._session: aiohttp.ClientSession | None = None
         self._ssl_context: ssl.SSLContext | None = None
+        self._session_depth = 0
 
     async def get_ssl_context(self) -> ssl.SSLContext:
         """Download Vast.ai root cert and build SSL context (cached).
@@ -61,7 +63,7 @@ class AsyncClient(_BaseClient):
 
         return self._ssl_context
 
-    async def _get_session(self) -> aiohttp.ClientSession:
+    async def _get_session(self, use_context=False) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 connector=aiohttp.TCPConnector(
@@ -69,17 +71,33 @@ class AsyncClient(_BaseClient):
                     ssl=await self.get_ssl_context(),
                 )
             )
+            self._session_depth += 1
+            if not use_context:
+                loop = asyncio.get_running_loop()
+                original_close = loop.close
+
+                def close():
+                    loop.run_until_complete(self.close(force=True))
+                    original_close()
+
+                loop.close = close
+        elif use_context:
+            self._session_depth += 1  # If we already are expected to keep a connection, and we expect to call close before exit, still flag so that close doesn't actually close.
         return self._session
 
     def is_open(self):
         return self._session is not None and not self._session.closed
 
-    async def close(self):
+    async def close(self, force=False):
         if self._session and not self._session.closed:
-            await self._session.close()
+            if self._session_depth > 0:
+                self._session_depth -= 1
+            if force or not self._session_depth:
+                self._session_depth = 0
+                await self._session.close()
 
     async def __aenter__(self):
-        await self._get_session()
+        await self._get_session(use_context=True)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):

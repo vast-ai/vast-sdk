@@ -5,6 +5,7 @@ from vastai.data.endpoint import EndpointData
 from vastai.data.deployment import DeploymentData, DeploymentPutResponse
 from vastai.data.workergroup import WorkergroupConfig
 from .endpoint import Endpoint_
+import requests
 
 if TYPE_CHECKING:
     from .client import _ServerlessBase
@@ -187,6 +188,16 @@ class ManagedDeployment(Generic[R]):
     def invalidate(self):
         """Clear cached data so the next .get() re-fetches from the API."""
         self._data = None
+
+    def sync_heartbeat(
+        self,
+    ):  # for use in background thread outside of main aiohttp connection
+        headers = {"Authorization": f"Bearer {self._client.api_key}"}
+        requests.post(
+            url=self._client.vast_web_url.rstrip("/")
+            + f"/api/v0/deployment/{self.id}/heartbeat/",
+            headers=headers,
+        )
 
     def __repr__(self) -> str:
         status = "loaded" if self._data is not None else "lazy"
