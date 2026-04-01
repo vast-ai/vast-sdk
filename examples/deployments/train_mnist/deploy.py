@@ -80,7 +80,6 @@ async def infer(pixel_values: list[list[float]]) -> dict:
     ctx = app.get_context(MNISTModel)
 
     tensor = torch.tensor(pixel_values, dtype=torch.float32)
-    print(f"tensor shape: {tensor.shape}")
     # Normalize the same way training data was normalized
     tensor = (tensor - 0.1307) / 0.3081
     tensor = tensor.unsqueeze(0).unsqueeze(0).to(ctx.device)  # (1, 1, 28, 28)

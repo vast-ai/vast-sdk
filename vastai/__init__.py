@@ -36,7 +36,7 @@ from .serverless.server.worker import (
     LogActionConfig,
     BenchmarkConfig,
 )
-
+from .serverless.remote.deploy import Deployment
 __all__ = [
     # Clients
     "SyncClient",
@@ -53,4 +53,5 @@ __all__ = [
     "HandlerConfig",
     "LogActionConfig",
     "BenchmarkConfig",
+    "Deployment"
 ]
