@@ -12,7 +12,7 @@ from vastai._base import _APIKEY_SENTINEL
 from vastai.data.deployment import DeploymentConfig
 from vastai.serverless.client import ManagedDeployment
 from . import serialization
-from .base import Deployment_, Config, Image, Autoscaling
+from .base import Deployment_, Config, DockerLogin, Image, Autoscaling
 from .utils import create_deployment_tarball, compute_deployment_hash
 from os.path import getsize
 import tempfile
@@ -190,8 +190,10 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         else:
             self._autoscaling.update(kwargs)
 
-    def image(self, from_image: str, storage: int) -> Image:
-        self._image = Image(from_image, storage)
+    def image(
+        self, from_image: str, storage: int, **docker_login: Unpack[DockerLogin]
+    ) -> Image:
+        self._image = Image(from_image, storage, **docker_login)
         return self._image
 
     def _collate_config(self, checked_name: str, checked_image: Image) -> Config:
@@ -289,8 +291,10 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
                 await self._inner.deployment.endpoint.request(
                     route,
                     {
-                        k: serialization.serialize(v, self._inner.root_module)
-                        for k, v in bound_args.arguments.items()
+                        "kwargs": {
+                            k: serialization.serialize(v, self._inner.root_module)
+                            for k, v in bound_args.arguments.items()
+                        }
                     },
                 )
             ),

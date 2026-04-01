@@ -6,6 +6,7 @@ This module is the primary home for queue/session API coverage added for serverl
 Broader tests (SSL, subprocess env, ``get_ssl_context``, extra debug branches) live in
 ``test_client.py``; add new narrow queue/session behavior here first to avoid drift.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -85,7 +86,9 @@ class TestServerlessInitAndConfig:
             ("local", "localhost:8080"),
         ],
     )
-    def test_instance_selects_autoscaler_url(self, instance: str, autoscaler_substr: str) -> None:
+    def test_instance_selects_autoscaler_url(
+        self, instance: str, autoscaler_substr: str
+    ) -> None:
         """
         Verifies instance keyword maps to expected autoscaler base URL.
 
@@ -120,16 +123,51 @@ class TestServerlessEndpoints:
             "ok": True,
             "json": {
                 "results": [
-                    {"endpoint_name": "ep-a", "id": 7, "api_key": "wk"},
+                    {
+                        "endpoint_name": "a",
+                        "id": 1,
+                        "api_key": "ek1",
+                        "cold_workers": 1,
+                        "max_workers": 20,
+                        "min_load": 100,
+                        "target_util": 0.9,
+                        "cold_mult": 1.5,
+                        "max_queue_time": 30,
+                        "target_queue_time": 5,
+                        "endpoint_state": "running",
+                        "inactivity_timeout": 600,
+                        "user_id": 5,
+                        "created_at": 129401,
+                    },
+                    {
+                        "endpoint_name": "b",
+                        "id": 2,
+                        "api_key": "ek2",
+                        "cold_workers": 1,
+                        "max_workers": 20,
+                        "min_load": 100,
+                        "target_util": 0.9,
+                        "cold_mult": 1.5,
+                        "max_queue_time": 30,
+                        "target_queue_time": 5,
+                        "endpoint_state": "running",
+                        "inactivity_timeout": 600,
+                        "user_id": 5,
+                        "created_at": 129401,
+                    },
                 ]
             },
         }
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock, return_value=fake):
+        with patch(
+            "vastai.serverless.client.client._make_request",
+            new_callable=AsyncMock,
+            return_value=fake,
+        ):
             endpoints = await client.get_endpoints()
-        assert len(endpoints) == 1
-        assert endpoints[0].name == "ep-a"
-        assert endpoints[0].id == 7
-        assert endpoints[0].api_key == "wk"
+        assert len(endpoints) == 2
+        assert endpoints[0].name == "a"
+        assert endpoints[0].id == 1
+        assert endpoints[0].api_key == "ek1"
         assert endpoints[0].client is client
 
     async def test_get_endpoints_raises_when_http_not_ok(self, client) -> None:
@@ -165,7 +203,9 @@ class TestServerlessEndpoints:
         """
         e1 = Endpoint(client, "one", 1, "k")
         e2 = Endpoint(client, "two", 2, "k")
-        with patch.object(client, "get_endpoints", new_callable=AsyncMock, return_value=[e1, e2]):
+        with patch.object(
+            client, "get_endpoints", new_callable=AsyncMock, return_value=[e1, e2]
+        ):
             got = await client.get_endpoint("two")
         assert got is e2
 
@@ -180,7 +220,9 @@ class TestServerlessEndpoints:
         Assumptions:
         - Empty list yields no match
         """
-        with patch.object(client, "get_endpoints", new_callable=AsyncMock, return_value=[]):
+        with patch.object(
+            client, "get_endpoints", new_callable=AsyncMock, return_value=[]
+        ):
             with pytest.raises(Exception, match="could not be found"):
                 await client.get_endpoint("nope")
 
@@ -245,7 +287,9 @@ class TestServerlessWorkersAndSessions:
         """
         mock_sess = MagicMock()
         mock_sess.post = MagicMock(
-            return_value=make_mock_http_response(status=200, json_data={"error_msg": "not ready"})
+            return_value=make_mock_http_response(
+                status=200, json_data={"error_msg": "not ready"}
+            )
         )
         client._session = mock_sess
         ep = make_serverless_endpoint(client, endpoint_id=3)
@@ -276,7 +320,11 @@ class TestServerlessWorkersAndSessions:
                 "expiration": "2099-01-01",
             },
         }
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock, return_value=fake):
+        with patch(
+            "vastai.serverless.client.client._make_request",
+            new_callable=AsyncMock,
+            return_value=fake,
+        ):
             sess = await client.get_endpoint_session(ep, 42, auth, timeout=5.0)
         assert sess.endpoint is ep
         assert sess.session_id == 42
@@ -304,7 +352,9 @@ class TestServerlessWorkersAndSessions:
             url="https://worker/end",
             auth_data={"a": 1},
         )
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_mr:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_mr:
             mock_mr.return_value = {"ok": True, "json": {}}
             await client.end_endpoint_session(sess, timeout=8.0)
         mock_mr.assert_awaited_once()
@@ -372,7 +422,9 @@ class TestQueueEndpointRequest:
             expiration="2099-01-01",
             url="https://worker/direct",
         )
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_mr:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_mr:
             mock_mr.return_value = {"ok": True, "json": {"answer": 42}}
             fut = client.queue_endpoint_request(
                 ep, "/do", {"p": 1}, session=sess, worker_timeout=30.0
@@ -641,7 +693,9 @@ class TestServerlessRequestExceptionPath:
     """ServerlessRequest.then silences exceptions instead of forwarding them."""
 
     @pytest.mark.asyncio
-    async def test_then_does_not_invoke_callback_when_future_has_exception(self) -> None:
+    async def test_then_does_not_invoke_callback_when_future_has_exception(
+        self,
+    ) -> None:
         """
         Verifies that .then callback is NOT called when the future resolves with an exception.
 
@@ -782,9 +836,17 @@ class TestServerlessGetSession:
         mock_aio_session = MagicMock()
         mock_aio_session.closed = False
         with (
-            patch.object(client, "get_ssl_context", new_callable=AsyncMock, return_value=None),
-            patch("vastai.serverless.client.client.aiohttp.TCPConnector", return_value=mock_connector),
-            patch("vastai.serverless.client.client.aiohttp.ClientSession", return_value=mock_aio_session) as mock_cs,
+            patch.object(
+                client, "get_ssl_context", new_callable=AsyncMock, return_value=None
+            ),
+            patch(
+                "vastai.serverless.client.client.aiohttp.TCPConnector",
+                return_value=mock_connector,
+            ),
+            patch(
+                "vastai.serverless.client.client.aiohttp.ClientSession",
+                return_value=mock_aio_session,
+            ) as mock_cs,
         ):
             result = await client._get_session()
         assert result is mock_aio_session
@@ -827,9 +889,17 @@ class TestServerlessGetSession:
         new_sess = MagicMock()
         new_sess.closed = False
         with (
-            patch.object(client, "get_ssl_context", new_callable=AsyncMock, return_value=None),
-            patch("vastai.serverless.client.client.aiohttp.TCPConnector", return_value=MagicMock()),
-            patch("vastai.serverless.client.client.aiohttp.ClientSession", return_value=new_sess),
+            patch.object(
+                client, "get_ssl_context", new_callable=AsyncMock, return_value=None
+            ),
+            patch(
+                "vastai.serverless.client.client.aiohttp.TCPConnector",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "vastai.serverless.client.client.aiohttp.ClientSession",
+                return_value=new_sess,
+            ),
         ):
             result = await client._get_session()
         assert result is new_sess
@@ -900,7 +970,9 @@ class TestGetEndpointWorkersErrors:
         """
         mock_sess = MagicMock()
         mock_sess.post = MagicMock(
-            return_value=make_mock_http_response(status=200, json_data="unexpected-string")
+            return_value=make_mock_http_response(
+                status=200, json_data="unexpected-string"
+            )
         )
         client._session = mock_sess
         ep = make_serverless_endpoint(client)
@@ -1008,7 +1080,9 @@ class TestQueueEndpointRequestRoutingPath:
         - Session-less path calls endpoint._route to get worker_url and auth_data
         """
         ep = make_serverless_endpoint(client_with_session)
-        ready = make_route_response_mock(status="READY", url="https://w/", request_idx=5)
+        ready = make_route_response_mock(
+            status="READY", url="https://w/", request_idx=5
+        )
         with (
             patch.object(ep, "_route", new_callable=AsyncMock, return_value=ready),
             patch(
@@ -1017,7 +1091,9 @@ class TestQueueEndpointRequestRoutingPath:
                 return_value={"ok": True, "json": {"result": "done"}},
             ),
         ):
-            result = await client_with_session.queue_endpoint_request(ep, "/predict", {"x": 1})
+            result = await client_with_session.queue_endpoint_request(
+                ep, "/predict", {"x": 1}
+            )
         assert result["ok"] is True
         assert result["response"] == {"result": "done"}
         assert result["url"] == "https://w/"
@@ -1041,16 +1117,22 @@ class TestQueueEndpointRequestRoutingPath:
         """
         ep = make_serverless_endpoint(client_with_session)
         waiting = make_route_response_mock(status="WAITING", request_idx=1)
-        ready = make_route_response_mock(status="READY", url="https://w/", request_idx=1)
+        ready = make_route_response_mock(
+            status="READY", url="https://w/", request_idx=1
+        )
         with (
-            patch.object(ep, "_route", new_callable=AsyncMock, side_effect=[waiting, ready]),
+            patch.object(
+                ep, "_route", new_callable=AsyncMock, side_effect=[waiting, ready]
+            ),
             patch(
                 "vastai.serverless.client.client._make_request",
                 new_callable=AsyncMock,
                 return_value={"ok": True, "json": {"result": "ok"}},
             ),
         ):
-            result = await client_with_session.queue_endpoint_request(ep, "/predict", {"x": 1})
+            result = await client_with_session.queue_endpoint_request(
+                ep, "/predict", {"x": 1}
+            )
         assert result["ok"] is True
 
     async def test_no_session_times_out_before_route(
@@ -1074,7 +1156,7 @@ class TestQueueEndpointRequestRoutingPath:
           the clock mock (CI often enables logging where local runs skip ``info``).
         """
         ep = make_serverless_endpoint(client_with_session)
-        time_seq = itertools.chain((0.0, 0.0), itertools.repeat(999.0))
+        time_seq = itertools.chain((0.0,), itertools.repeat(999.0))
         with (
             patch.object(client_with_session.logger, "info"),
             patch.object(client_with_session.logger, "disabled", True),
@@ -1141,7 +1223,9 @@ class TestQueueEndpointRequestRoutingPath:
         - No-session path resets request_idx and re-calls _route on ConnectorError
         """
         ep = make_serverless_endpoint(client_with_session)
-        ready = make_route_response_mock(status="READY", url="https://w/", request_idx=1)
+        ready = make_route_response_mock(
+            status="READY", url="https://w/", request_idx=1
+        )
         with (
             patch.object(ep, "_route", new_callable=AsyncMock, return_value=ready),
             patch(
@@ -1153,7 +1237,9 @@ class TestQueueEndpointRequestRoutingPath:
                 ],
             ),
         ):
-            result = await client_with_session.queue_endpoint_request(ep, "/predict", {"x": 1})
+            result = await client_with_session.queue_endpoint_request(
+                ep, "/predict", {"x": 1}
+            )
         assert result["ok"] is True
         assert result["response"] == {"result": "retried"}
 
@@ -1180,8 +1266,11 @@ class TestQueueEndpointRequestRoutingPath:
             "vastai.serverless.client.client._make_request",
             new_callable=AsyncMock,
             return_value={
-                "ok": False, "status": 422, "text": "invalid input",
-                "json": {"error": "bad"}, "retryable": False,
+                "ok": False,
+                "status": 422,
+                "text": "invalid input",
+                "json": {"error": "bad"},
+                "retryable": False,
             },
         ):
             result = await client_with_session.queue_endpoint_request(
@@ -1215,7 +1304,13 @@ class TestQueueEndpointRequestRoutingPath:
             "vastai.serverless.client.client._make_request",
             new_callable=AsyncMock,
             side_effect=[
-                {"ok": False, "status": 503, "text": "overloaded", "json": None, "retryable": True},
+                {
+                    "ok": False,
+                    "status": 503,
+                    "text": "overloaded",
+                    "json": None,
+                    "retryable": True,
+                },
                 {"ok": True, "json": {"done": True}, "status": 200, "text": ""},
             ],
         ):
@@ -1242,7 +1337,12 @@ class TestQueueEndpointRequestRoutingPath:
         - Outer except Exception in task() calls request.set_exception(ex)
         """
         ep = make_serverless_endpoint(client_with_session)
-        with patch.object(ep, "_route", new_callable=AsyncMock, side_effect=RuntimeError("routing failed")):
+        with patch.object(
+            ep,
+            "_route",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("routing failed"),
+        ):
             with pytest.raises(RuntimeError, match="routing failed"):
                 await client_with_session.queue_endpoint_request(ep, "/predict", {})
 
@@ -1302,7 +1402,9 @@ class TestQueueEndpointRequestRoutingPath:
         The client logs a missing-index warning for falsy request_idx; work still proceeds.
         """
         ep = make_serverless_endpoint(client_with_session)
-        ready = make_route_response_mock(status="READY", url="https://w/", request_idx=0)
+        ready = make_route_response_mock(
+            status="READY", url="https://w/", request_idx=0
+        )
         with (
             patch.object(ep, "_route", new_callable=AsyncMock, return_value=ready),
             patch(
@@ -1311,7 +1413,9 @@ class TestQueueEndpointRequestRoutingPath:
                 return_value={"ok": True, "json": {"v": 0}, "status": 200, "text": ""},
             ),
         ):
-            result = await client_with_session.queue_endpoint_request(ep, "/predict", {"x": 1})
+            result = await client_with_session.queue_endpoint_request(
+                ep, "/predict", {"x": 1}
+            )
         assert result["ok"] is True
         assert result["response"] == {"v": 0}
         assert result["request_idx"] == 0
@@ -1358,7 +1462,9 @@ class TestQueueEndpointRequestRoutingPath:
         Non-transport exceptions from _make_request trigger a retry (outer loop), not failure.
         """
         ep = make_serverless_endpoint(client_with_session)
-        ready = make_route_response_mock(status="READY", url="https://w/", request_idx=2)
+        ready = make_route_response_mock(
+            status="READY", url="https://w/", request_idx=2
+        )
         with (
             patch.object(ep, "_route", new_callable=AsyncMock, return_value=ready),
             patch(
@@ -1366,11 +1472,18 @@ class TestQueueEndpointRequestRoutingPath:
                 new_callable=AsyncMock,
                 side_effect=[
                     ValueError("worker glitch"),
-                    {"ok": True, "json": {"recovered": True}, "status": 200, "text": ""},
+                    {
+                        "ok": True,
+                        "json": {"recovered": True},
+                        "status": 200,
+                        "text": "",
+                    },
                 ],
             ),
         ):
-            result = await client_with_session.queue_endpoint_request(ep, "/predict", {"x": 1})
+            result = await client_with_session.queue_endpoint_request(
+                ep, "/predict", {"x": 1}
+            )
         assert result["ok"] is True
         assert result["response"] == {"recovered": True}
 
@@ -1387,7 +1500,7 @@ class TestQueueEndpointRequestRoutingPath:
 
         def fake_time():
             fake_time.n += 1
-            return 0.0 if fake_time.n <= 4 else 2.0
+            return 0.0 if fake_time.n <= 3 else 2.0
 
         fake_time.n = 0
 

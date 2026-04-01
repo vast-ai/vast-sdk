@@ -108,8 +108,13 @@ class Deployment(Deployment_, AsyncContextManager):
                     dataset = entry["benchmark_dataset"]
                     if dataset is not None:
                         dataset = [
-                            {k: serialize(v, self.root_module) for k, v in item.items()}
-                            for item in dataset
+                            {
+                                "kwargs": {
+                                    k: serialize(v, self.root_module)
+                                    for k, v in item.items()
+                                }
+                                for item in dataset
+                            }
                         ]
                     benchmark_config = BenchmarkConfig(
                         dataset=dataset,

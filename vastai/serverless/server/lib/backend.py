@@ -106,11 +106,15 @@ class Backend:
     session_metrics: Dict[str, RequestMetrics] = dataclasses.field(default_factory=dict)
     max_sessions: int = dataclasses.field(default=-1)
     lifecycle: Optional[AsyncContextManager] = dataclasses.field(default=None)
-        
+
     async def pyworker_update_handler(self, request: web.Request) -> web.Response:
         # Verify authorization header matches mtoken
         auth_header = request.headers.get("Authorization", "")
-        token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else auth_header
+        token = (
+            auth_header.removeprefix("Bearer ")
+            if auth_header.startswith("Bearer ")
+            else auth_header
+        )
         if token != self.mtoken:
             return web.json_response({"error": "unauthorized"}, status=401)
 
@@ -119,7 +123,9 @@ class Backend:
                 await f.write("")
         except Exception as e:
             log.error(f"Failed to write /.force_update: {e}")
-            return web.json_response({"error": f"failed to write file: {e}"}, status=500)
+            return web.json_response(
+                {"error": f"failed to write file: {e}"}, status=500
+            )
 
         return web.json_response({"ok": True}, status=200)
 
@@ -693,7 +699,9 @@ class Backend:
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
         if handler.remote_function:
-            return await self.__call_remote_function(handler=handler, payload=payload)
+            return await self.__call_remote_dispatch_function(
+                handler=handler, payload=payload
+            )
         else:
             return await self.__call_api(handler=handler, payload=payload)
 
@@ -704,7 +712,7 @@ class Backend:
         log.debug(f"posting to endpoint: '{handler.endpoint}', payload: {api_payload}")
         return await self.session.post(url=handler.endpoint, json=api_payload)
 
-    async def __call_remote_function(
+    async def __call_remote_dispatch_function(
         self, handler: EndpointHandler[ApiPayload_T], payload: ApiPayload_T
     ) -> ClientResponse:
         remote_func_params = payload.generate_payload_json()
@@ -713,7 +721,7 @@ class Backend:
             f"with params {remote_func_params}"
         )
 
-        result = await handler.call_remote_function(params=remote_func_params)
+        result = await handler.call_remote_dispatch_function(params=remote_func_params)
 
         # Wrap the result in a fake ClientResponse-like object
         class RemoteFunctionClientResponse:
