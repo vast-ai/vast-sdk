@@ -2,7 +2,6 @@ import asyncio
 import random
 from deploy import app, infer
 
-
 async def main():
     from torchvision import datasets, transforms
 
@@ -17,9 +16,6 @@ async def main():
     print(f"True label:  {true_label}")
     print(f"Predicted:   {result['digit']}")
     print(f"Confidence:  {result['probability']:.4f}")
-
-    await app.async_client.close()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

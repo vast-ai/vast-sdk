@@ -1,7 +1,7 @@
-from vastai.serverless.remote import Deployment
+from vastai import Deployment
 from vastai.data.query import gpu_name, RTX_4090, RTX_5090
 
-app = Deployment(name="vllm", webserver_url="https://alpha-server.vast.ai")
+app = Deployment(name="vllm")
 
 MODEL = "Qwen/Qwen3-0.6B"
 

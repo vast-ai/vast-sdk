@@ -1,7 +1,7 @@
-from vastai.serverless.remote import Deployment
+from vastai import Deployment
 from vastai.data.query import gpu_name, RTX_4090, RTX_5090
 
-app = Deployment(webserver_url="https://alpha-server.vast.ai")
+app = Deployment(name="square")
 
 
 @app.remote(benchmark_dataset=[{"x": 2}])
