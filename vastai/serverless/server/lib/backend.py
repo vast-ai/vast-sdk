@@ -19,7 +19,6 @@ from typing import (
     AsyncContextManager,
 )
 from functools import cached_property
-from distutils.util import strtobool
 from collections import deque
 from asyncio import sleep, CancelledError
 
@@ -55,6 +54,15 @@ from .data_types import (
 VERSION = "1.1.0"
 
 log = logging.getLogger(__file__)
+
+
+def strtobool(value: str) -> int:
+    normalized = value.strip().lower()
+    if normalized in {"y", "yes", "t", "true", "on", "1"}:
+        return 1
+    if normalized in {"n", "no", "f", "false", "off", "0"}:
+        return 0
+    raise ValueError(f"invalid truth value {value!r}")
 
 # defines the minimum wait time between sending updates to autoscaler
 LOG_POLL_INTERVAL = 0.1
