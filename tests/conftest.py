@@ -30,6 +30,7 @@ Serverless SSL: ``serverless_ssl_self_signed_cert_pem``, ``serverless_ssl_ca_cha
 An autouse fixture restores the ``Serverless`` logger after each test so global
 logging state follows RAII and cannot leak between cases.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -61,7 +62,10 @@ from vastai.serverless.client.session import Session
 from vastai.serverless.server.lib.backend import Backend
 from vastai.serverless.server.lib import server as vast_serverless_server_mod
 from vastai.serverless.server.lib.metrics import get_url
-from vastai.serverless.server.lib.data_types import RequestMetrics, Session as PyworkerSession
+from vastai.serverless.server.lib.data_types import (
+    RequestMetrics,
+    Session as PyworkerSession,
+)
 from vastai.serverless.server.worker import (
     WorkerConfig,
     HandlerConfig,
@@ -113,11 +117,14 @@ def _restore_serverless_logger_state():
 @pytest.fixture
 def make_mock_web_request():
     """Factory: create a mock object for aiohttp web.Request in handler tests."""
+
     def _make(spec_request: bool = False):
         if spec_request:
             from aiohttp import web
+
             return MagicMock(spec=web.Request)
         return MagicMock()
+
     return _make
 
 
@@ -129,6 +136,7 @@ def make_mock_model_response():
     stream_chunks. If stream_chunks is provided, content.iter_any is an async
     generator yielding those chunks; otherwise read() returns body.
     """
+
     def _make(
         content_type: str = "application/json",
         body: bytes | None = None,
@@ -142,13 +150,16 @@ def make_mock_model_response():
         mock.headers.get = MagicMock(return_value=None)
         mock.headers.copy = MagicMock(return_value={})
         if stream_chunks is not None:
+
             async def _iter():
                 for c in stream_chunks:
                     yield c
+
             mock.content.iter_any = _iter
         else:
             mock.read = AsyncMock(return_value=body or b"")
         return mock
+
     return _make
 
 
@@ -310,7 +321,9 @@ def make_backend_http_request():
         if json_side_effect is not None:
             req.json = AsyncMock(side_effect=json_side_effect)
         else:
-            req.json = AsyncMock(return_value=json_data if json_data is not None else {})
+            req.json = AsyncMock(
+                return_value=json_data if json_data is not None else {}
+            )
         return req
 
     return _make
@@ -419,7 +432,9 @@ def make_serverless_backend_and_handler():
         benchmark = factory.get_benchmark_handler()
         handler = factory.get_handler("/predict")
         assert handler is not None
-        effective_max = max_sessions if max_sessions is not None else config.max_sessions
+        effective_max = (
+            max_sessions if max_sessions is not None else config.max_sessions
+        )
         if effective_max is None:
             effective_max = 0
         with patch.dict(os.environ, SERVERLESS_METRICS_TEST_ENV, clear=False):
@@ -659,12 +674,12 @@ def serverless_error_beacon_mocks():
     Yields the MagicMock for Metrics._model_errored.
     """
     sm = vast_serverless_server_mod
-    with patch.object(sm.Metrics, "_Metrics__send_metrics_and_reset", new_callable=AsyncMock):
+    with patch.object(
+        sm.Metrics, "_Metrics__send_metrics_and_reset", new_callable=AsyncMock
+    ):
         with patch.object(sm.Metrics, "_model_errored") as mock_model_errored:
             with patch.object(sm.Metrics, "aclose", new_callable=AsyncMock):
-                sleep_mock = AsyncMock(
-                    side_effect=[None, RuntimeError("stop-beacon")]
-                )
+                sleep_mock = AsyncMock(side_effect=[None, RuntimeError("stop-beacon")])
                 with patch.object(sm.asyncio, "sleep", sleep_mock):
                     yield mock_model_errored
 
@@ -727,7 +742,9 @@ def _attach_serverless_backend_mock_aiohttp_session(
         mock_resp = MagicMock()
         mock_resp.status = response_status
         mock_resp.text = AsyncMock(return_value=response_text)
-        mock_sess.post = MagicMock(return_value=_serverless_aiohttp_async_enter_context(mock_resp))
+        mock_sess.post = MagicMock(
+            return_value=_serverless_aiohttp_async_enter_context(mock_resp)
+        )
 
     object.__setattr__(backend, "session", mock_sess)
     return mock_sess
@@ -763,14 +780,18 @@ def make_serverless_fetch_pubkey_client_session_return_value():
         session_enter_error: BaseException | None = None,
     ) -> MagicMock:
         if session_enter_error is not None:
-            return _serverless_aiohttp_async_enter_context(enter_side_effect=session_enter_error)
+            return _serverless_aiohttp_async_enter_context(
+                enter_side_effect=session_enter_error
+            )
         if pem_text is None:
             raise ValueError("pem_text is required when session_enter_error is None")
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.text = AsyncMock(return_value=pem_text)
         mock_client = MagicMock()
-        mock_client.get = MagicMock(return_value=_serverless_aiohttp_async_enter_context(mock_resp))
+        mock_client.get = MagicMock(
+            return_value=_serverless_aiohttp_async_enter_context(mock_resp)
+        )
         return _serverless_aiohttp_async_enter_context(mock_client)
 
     return _make
@@ -868,7 +889,9 @@ def make_patch_skip_backend_run_session_on_close():
     """Return ``patch.object(backend, _Backend__run_session_on_close, AsyncMock)`` context manager."""
 
     def _patch(backend: Backend):
-        return patch.object(backend, "_Backend__run_session_on_close", new_callable=AsyncMock)
+        return patch.object(
+            backend, "_Backend__run_session_on_close", new_callable=AsyncMock
+        )
 
     return _patch
 
@@ -914,7 +937,9 @@ def run_serverless_start_server_async_patched(serverless_tracked_runner_and_tcp_
             stack.enter_context(patch.dict(os.environ, env, clear=False))
             if ssl_create_default_context_patch is not None:
                 stack.enter_context(ssl_create_default_context_patch)
-            stack.enter_context(patch.object(sm.web, "AppRunner", side_effect=app_runner))
+            stack.enter_context(
+                patch.object(sm.web, "AppRunner", side_effect=app_runner)
+            )
             stack.enter_context(patch.object(sm.web, "TCPSite", side_effect=tcp_site))
             mock_track = stack.enter_context(
                 patch.object(backend, "_start_tracking", new_callable=AsyncMock)
@@ -1027,9 +1052,7 @@ def patch_build_kwargs():
     Yields the mock; tests run with _build_kwargs patched to return
     standard kwargs (headers, params, timeout).
     """
-    with patch(
-        "vastai.serverless.client.connection._build_kwargs"
-    ) as mock_build:
+    with patch("vastai.serverless.client.connection._build_kwargs") as mock_build:
         mock_build.return_value = {
             "headers": {},
             "params": {},
@@ -1353,6 +1376,7 @@ def mock_serverless_client():
     c.get_endpoint_session = AsyncMock(return_value=MagicMock())
     c.start_endpoint_session = AsyncMock(return_value="started")
     c.get_endpoint_workers = AsyncMock(return_value=[])
+    c._get_session = AsyncMock(return_value=MagicMock())
     return c
 
 
@@ -1591,8 +1615,12 @@ def make_session(make_delegate_endpoint):
         on_close_route=None,
         on_close_payload=None,
     ):
-        ep = endpoint if endpoint is not None else make_delegate_endpoint(
-            name="test-endpoint", endpoint_id=1, api_key="ep-api-key"
+        ep = (
+            endpoint
+            if endpoint is not None
+            else make_delegate_endpoint(
+                name="test-endpoint", endpoint_id=1, api_key="ep-api-key"
+            )
         )
         if auth_data is None:
             auth_data = {"url": "https://worker1.vast.ai", "signature": "abc"}

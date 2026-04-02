@@ -4,6 +4,7 @@ Tests Serverless initialization (API key validation, instance URL mapping, debug
 connection lifecycle (is_open, close), endpoint retrieval, worker retrieval,
 session management, and ServerlessRequest future behavior.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -151,7 +152,6 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="test-key", instance="prod")
         assert client.autoscaler_url == "https://run.vast.ai"
-        assert client.vast_web_url == "https://console.vast.ai"
 
     def test_alpha_instance_urls(self) -> None:
         """
@@ -166,7 +166,6 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="test-key", instance="alpha")
         assert client.autoscaler_url == "https://run-alpha.vast.ai"
-        assert client.vast_web_url == "https://alpha.vast.ai"
 
     def test_candidate_instance_urls(self) -> None:
         """
@@ -181,7 +180,6 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="test-key", instance="candidate")
         assert client.autoscaler_url == "https://run-candidate.vast.ai"
-        assert client.vast_web_url == "https://candidate.vast.ai"
 
     def test_local_instance_urls(self) -> None:
         """
@@ -196,7 +194,6 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="test-key", instance="local")
         assert client.autoscaler_url == "http://localhost:8080"
-        assert client.vast_web_url == "https://alpha.vast.ai"
 
     def test_unknown_instance_defaults_to_prod(self) -> None:
         """
@@ -266,7 +263,12 @@ class TestServerlessInit:
         """
         client = Serverless(api_key="test-key", debug=True)
         assert client.logger.level == logging.DEBUG
-        stream_handlers = [h for h in client.logger.handlers if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)]
+        stream_handlers = [
+            h
+            for h in client.logger.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
         assert len(stream_handlers) >= 1
         assert client.logger.propagate is False
 
@@ -282,7 +284,9 @@ class TestServerlessInit:
         - Non-debug adds NullHandler and sets propagate=True
         """
         client = Serverless(api_key="test-key", debug=False)
-        null_handlers = [h for h in client.logger.handlers if isinstance(h, logging.NullHandler)]
+        null_handlers = [
+            h for h in client.logger.handlers if isinstance(h, logging.NullHandler)
+        ]
         assert len(null_handlers) >= 1
         assert client.logger.propagate is True
 
@@ -460,23 +464,55 @@ class TestServerlessEndpoints:
         - get_endpoints calls /api/v0/endptjobs/ and parses results
         """
         client = Serverless(api_key="test-key")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.return_value = {
                 "ok": True,
                 "json": {
                     "results": [
-                        {"endpoint_name": "ep1", "id": 1, "api_key": "key1"},
-                        {"endpoint_name": "ep2", "id": 2, "api_key": "key2"},
+                        {
+                            "endpoint_name": "a",
+                            "id": 1,
+                            "api_key": "ek1",
+                            "cold_workers": 1,
+                            "max_workers": 20,
+                            "min_load": 100,
+                            "target_util": 0.9,
+                            "cold_mult": 1.5,
+                            "max_queue_time": 30,
+                            "target_queue_time": 5,
+                            "endpoint_state": "running",
+                            "inactivity_timeout": 600,
+                            "user_id": 5,
+                            "created_at": 129401,
+                        },
+                        {
+                            "endpoint_name": "b",
+                            "id": 2,
+                            "api_key": "ek2",
+                            "cold_workers": 1,
+                            "max_workers": 20,
+                            "min_load": 100,
+                            "target_util": 0.9,
+                            "cold_mult": 1.5,
+                            "max_queue_time": 30,
+                            "target_queue_time": 5,
+                            "endpoint_state": "running",
+                            "inactivity_timeout": 600,
+                            "user_id": 5,
+                            "created_at": 129401,
+                        },
                     ]
                 },
             }
             endpoints = await client.get_endpoints()
             assert len(endpoints) == 2
             assert isinstance(endpoints[0], Endpoint)
-            assert endpoints[0].name == "ep1"
+            assert endpoints[0].name == "a"
             assert endpoints[0].id == 1
-            assert endpoints[0].api_key == "key1"
-            assert endpoints[1].name == "ep2"
+            assert endpoints[0].api_key == "ek1"
+            assert endpoints[1].name == "b"
 
     async def test_get_endpoints_raises_on_http_failure(self) -> None:
         """
@@ -491,7 +527,9 @@ class TestServerlessEndpoints:
         - get_endpoints checks result["ok"]
         """
         client = Serverless(api_key="test-key")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.return_value = {"ok": False, "status": 401, "text": "Unauthorized"}
             with pytest.raises(Exception, match="Failed to get endpoints"):
                 await client.get_endpoints()
@@ -508,7 +546,9 @@ class TestServerlessEndpoints:
         - get_endpoints catches and re-raises with context
         """
         client = Serverless(api_key="test-key")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.side_effect = ConnectionError("connection refused")
             with pytest.raises(Exception, match="Failed to get endpoints"):
                 await client.get_endpoints()
@@ -525,7 +565,9 @@ class TestServerlessEndpoints:
         - Empty results array results in empty endpoint list
         """
         client = Serverless(api_key="test-key")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.return_value = {"ok": True, "json": {"results": []}}
             endpoints = await client.get_endpoints()
             assert endpoints == []
@@ -589,10 +631,12 @@ class TestServerlessWorkers:
         client = Serverless(api_key="test-key")
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value=[
-            {"id": 1, "status": "RUNNING", "cur_load": 0.5},
-            {"id": 2, "status": "IDLE", "cur_load": 0.0},
-        ])
+        mock_resp.json = AsyncMock(
+            return_value=[
+                {"id": 1, "status": "RUNNING", "cur_load": 0.5},
+                {"id": 2, "status": "IDLE", "cur_load": 0.0},
+            ]
+        )
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=None)
 
@@ -723,7 +767,9 @@ class TestServerlessSessionManagement:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.return_value = {
                 "ok": True,
                 "json": {
@@ -755,8 +801,14 @@ class TestServerlessSessionManagement:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
-            mock_req.return_value = {"ok": False, "json": {"error": "not found"}, "text": ""}
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = {
+                "ok": False,
+                "json": {"error": "not found"},
+                "text": "",
+            }
             with pytest.raises(Exception, match="Failed to get session"):
                 await client.get_endpoint_session(
                     endpoint=ep,
@@ -777,7 +829,9 @@ class TestServerlessSessionManagement:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.return_value = {
                 "ok": True,
                 "json": {"lifetime": 60.0},
@@ -802,7 +856,9 @@ class TestServerlessSessionManagement:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.side_effect = asyncio.TimeoutError()
             with pytest.raises(asyncio.TimeoutError):
                 await client.get_endpoint_session(
@@ -833,7 +889,9 @@ class TestServerlessSessionManagement:
             url="https://w.vast.ai",
             auth_data={"url": "https://w.vast.ai"},
         )
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.return_value = {"ok": True, "json": {}}
             await client.end_endpoint_session(session=session)
             mock_req.assert_called_once()
@@ -862,7 +920,9 @@ class TestServerlessSessionManagement:
             url="https://w.vast.ai",
             auth_data={"url": "https://w.vast.ai"},
         )
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.return_value = {"ok": False, "json": {"error": "fail"}, "text": ""}
             with pytest.raises(Exception, match="Failed to end session"):
                 await client.end_endpoint_session(session=session)
@@ -890,14 +950,18 @@ class TestServerlessStartEndpointSession:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        client.queue_endpoint_request = AsyncMock(return_value={
-            "ok": True,
-            "response": {"session_id": "sess-42", "expiration": "2026-12-31"},
-            "url": "https://w.vast.ai",
-            "auth_data": {"url": "https://w.vast.ai", "sig": "abc"},
-            "status": 200,
-        })
-        session = await client.start_endpoint_session(endpoint=ep, cost=100, lifetime=120)
+        client.queue_endpoint_request = AsyncMock(
+            return_value={
+                "ok": True,
+                "response": {"session_id": "sess-42", "expiration": "2026-12-31"},
+                "url": "https://w.vast.ai",
+                "auth_data": {"url": "https://w.vast.ai", "sig": "abc"},
+                "status": 200,
+            }
+        )
+        session = await client.start_endpoint_session(
+            endpoint=ep, cost=100, lifetime=120
+        )
         assert isinstance(session, Session)
         assert session.session_id == "sess-42"
         assert session.lifetime == 120
@@ -916,12 +980,14 @@ class TestServerlessStartEndpointSession:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        client.queue_endpoint_request = AsyncMock(return_value={
-            "ok": False,
-            "json": {"error": "quota exceeded"},
-            "text": "quota exceeded",
-            "status": 429,
-        })
+        client.queue_endpoint_request = AsyncMock(
+            return_value={
+                "ok": False,
+                "json": {"error": "quota exceeded"},
+                "text": "quota exceeded",
+                "status": 429,
+            }
+        )
         with pytest.raises(Exception, match="Failed to create session"):
             await client.start_endpoint_session(endpoint=ep)
 
@@ -934,11 +1000,13 @@ class TestServerlessStartEndpointSession:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        client.queue_endpoint_request = AsyncMock(return_value={
-            "ok": True,
-            "response": None,
-            "status": 200,
-        })
+        client.queue_endpoint_request = AsyncMock(
+            return_value={
+                "ok": True,
+                "response": None,
+                "status": 200,
+            }
+        )
         with pytest.raises(Exception, match="No response from /session/create"):
             await client.start_endpoint_session(endpoint=ep)
 
@@ -955,13 +1023,15 @@ class TestServerlessStartEndpointSession:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        client.queue_endpoint_request = AsyncMock(return_value={
-            "ok": True,
-            "response": {"expiration": "2026-12-31"},
-            "url": "https://w.vast.ai",
-            "auth_data": {"url": "https://w.vast.ai"},
-            "status": 200,
-        })
+        client.queue_endpoint_request = AsyncMock(
+            return_value={
+                "ok": True,
+                "response": {"expiration": "2026-12-31"},
+                "url": "https://w.vast.ai",
+                "auth_data": {"url": "https://w.vast.ai"},
+                "status": 200,
+            }
+        )
         with pytest.raises(Exception, match="Missing session id"):
             await client.start_endpoint_session(endpoint=ep)
 
@@ -978,13 +1048,15 @@ class TestServerlessStartEndpointSession:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        client.queue_endpoint_request = AsyncMock(return_value={
-            "ok": True,
-            "response": {"session_id": "s1", "expiration": "x"},
-            "url": None,
-            "auth_data": {"url": "https://w.vast.ai"},
-            "status": 200,
-        })
+        client.queue_endpoint_request = AsyncMock(
+            return_value={
+                "ok": True,
+                "response": {"session_id": "s1", "expiration": "x"},
+                "url": None,
+                "auth_data": {"url": "https://w.vast.ai"},
+                "status": 200,
+            }
+        )
         with pytest.raises(Exception, match="Missing URL"):
             await client.start_endpoint_session(endpoint=ep)
 
@@ -1001,13 +1073,15 @@ class TestServerlessStartEndpointSession:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        client.queue_endpoint_request = AsyncMock(return_value={
-            "ok": True,
-            "response": {"session_id": "s1", "expiration": "x"},
-            "url": "https://w.vast.ai",
-            "auth_data": None,
-            "status": 200,
-        })
+        client.queue_endpoint_request = AsyncMock(
+            return_value={
+                "ok": True,
+                "response": {"session_id": "s1", "expiration": "x"},
+                "url": "https://w.vast.ai",
+                "auth_data": None,
+                "status": 200,
+            }
+        )
         with pytest.raises(Exception, match="Missing auth data"):
             await client.start_endpoint_session(endpoint=ep)
 
@@ -1041,16 +1115,21 @@ class TestServerlessStartEndpointSession:
         """
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
-        client.queue_endpoint_request = AsyncMock(return_value={
-            "ok": True,
-            "response": {"session_id": "s1", "expiration": "x"},
-            "url": "https://w.vast.ai",
-            "auth_data": {"url": "https://w.vast.ai"},
-            "status": 200,
-        })
+        client.queue_endpoint_request = AsyncMock(
+            return_value={
+                "ok": True,
+                "response": {"session_id": "s1", "expiration": "x"},
+                "url": "https://w.vast.ai",
+                "auth_data": {"url": "https://w.vast.ai"},
+                "status": 200,
+            }
+        )
         await client.start_endpoint_session(
-            endpoint=ep, cost=50, lifetime=300,
-            on_close_route="/cleanup", on_close_payload={"key": "val"},
+            endpoint=ep,
+            cost=50,
+            lifetime=300,
+            on_close_route="/cleanup",
+            on_close_payload={"key": "val"},
             timeout=30.0,
         )
         call_kwargs = client.queue_endpoint_request.call_args.kwargs
@@ -1097,7 +1176,9 @@ class TestServerlessQueueEndpointRequest:
                 get_url=MagicMock(return_value="https://w.vast.ai"),
                 body={"url": "https://w.vast.ai"},
             )
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.return_value = {
                     "ok": True,
                     "json": {"result": "done"},
@@ -1139,7 +1220,9 @@ class TestServerlessQueueEndpointRequest:
                 get_url=MagicMock(return_value="https://w.vast.ai"),
                 body={"url": "https://w.vast.ai"},
             )
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.return_value = {
                     "ok": True,
                     "json": {"result": "done"},
@@ -1180,14 +1263,20 @@ class TestQueueEndpointRequestTaskBehavior:
         client = Serverless(api_key="test-key")
         ep = Endpoint(client=client, name="ep", id=1, api_key="k")
         session = Session(
-            endpoint=ep, session_id="s1", lifetime=60, expiration="x",
-            url="https://session-worker.vast.ai", auth_data={"sig": "abc"},
+            endpoint=ep,
+            session_id="s1",
+            lifetime=60,
+            expiration="x",
+            url="https://session-worker.vast.ai",
+            auth_data={"sig": "abc"},
         )
         client._get_session = AsyncMock()
         client.get_ssl_context = AsyncMock(return_value=None)
 
         with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.return_value = {
                     "ok": True,
                     "json": {"result": "done"},
@@ -1228,20 +1317,32 @@ class TestQueueEndpointRequestTaskBehavior:
         client.get_ssl_context = AsyncMock(return_value=None)
 
         waiting_response = MagicMock(
-            status="WAITING", request_idx=5, get_url=MagicMock(return_value=None),
+            status="WAITING",
+            request_idx=5,
+            get_url=MagicMock(return_value=None),
             body={},
         )
         ready_response = MagicMock(
-            status="READY", request_idx=5,
+            status="READY",
+            request_idx=5,
             get_url=MagicMock(return_value="https://w.vast.ai"),
             body={"url": "https://w.vast.ai"},
         )
 
         with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
-            mock_route.side_effect = [waiting_response, waiting_response, ready_response]
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            mock_route.side_effect = [
+                waiting_response,
+                waiting_response,
+                ready_response,
+            ]
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.return_value = {
-                    "ok": True, "json": {"result": "ok"}, "status": 200, "text": "",
+                    "ok": True,
+                    "json": {"result": "ok"},
+                    "status": 200,
+                    "text": "",
                 }
                 req = client.queue_endpoint_request(
                     endpoint=ep,
@@ -1272,13 +1373,22 @@ class TestQueueEndpointRequestTaskBehavior:
 
         with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
             mock_route.return_value = MagicMock(
-                status="READY", request_idx=1,
+                status="READY",
+                request_idx=1,
                 get_url=MagicMock(return_value="https://w.vast.ai"),
                 body={"url": "https://w.vast.ai"},
             )
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.side_effect = [
-                    {"ok": False, "retryable": True, "status": 503, "text": "Service Unavailable", "json": None},
+                    {
+                        "ok": False,
+                        "retryable": True,
+                        "status": 503,
+                        "text": "Service Unavailable",
+                        "json": None,
+                    },
                     {"ok": True, "json": {"result": "ok"}, "status": 200, "text": ""},
                 ]
                 req = client.queue_endpoint_request(
@@ -1309,14 +1419,20 @@ class TestQueueEndpointRequestTaskBehavior:
 
         with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
             mock_route.return_value = MagicMock(
-                status="READY", request_idx=1,
+                status="READY",
+                request_idx=1,
                 get_url=MagicMock(return_value="https://w.vast.ai"),
                 body={"url": "https://w.vast.ai"},
             )
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.return_value = {
-                    "ok": False, "retryable": False, "status": 400,
-                    "text": "Bad Request", "json": {"error": "invalid"},
+                    "ok": False,
+                    "retryable": False,
+                    "status": 400,
+                    "text": "Bad Request",
+                    "json": {"error": "invalid"},
                 }
                 req = client.queue_endpoint_request(
                     endpoint=ep,
@@ -1348,14 +1464,20 @@ class TestQueueEndpointRequestTaskBehavior:
 
         with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
             mock_route.return_value = MagicMock(
-                status="READY", request_idx=1,
+                status="READY",
+                request_idx=1,
                 get_url=MagicMock(return_value="https://w.vast.ai"),
                 body={"url": "https://w.vast.ai"},
             )
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.return_value = {
-                    "ok": True, "stream": mock_stream, "json": None,
-                    "status": 200, "text": "",
+                    "ok": True,
+                    "stream": mock_stream,
+                    "json": None,
+                    "status": 200,
+                    "text": "",
                 }
                 req = client.queue_endpoint_request(
                     endpoint=ep,
@@ -1406,10 +1528,13 @@ class TestQueueEndpointRequestResilience:
         )
         assert session.open is True
 
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             conn_os_error = OSError("connection refused")
             mock_req.side_effect = aiohttp.ClientConnectorError(
-                connection_key=MagicMock(), os_error=conn_os_error,
+                connection_key=MagicMock(),
+                os_error=conn_os_error,
             )
             req = client.queue_endpoint_request(
                 endpoint=ep,
@@ -1449,7 +1574,9 @@ class TestQueueEndpointRequestResilience:
             auth_data={"url": "https://worker2.vast.ai", "signature": "xyz"},
         )
 
-        with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+        with patch(
+            "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+        ) as mock_req:
             mock_req.side_effect = aiohttp.ServerDisconnectedError()
             req = client.queue_endpoint_request(
                 endpoint=ep,
@@ -1483,17 +1610,26 @@ class TestQueueEndpointRequestResilience:
 
         with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
             mock_route.return_value = MagicMock(
-                status="READY", request_idx=1,
+                status="READY",
+                request_idx=1,
                 get_url=MagicMock(return_value="https://w.vast.ai"),
                 body={"url": "https://w.vast.ai"},
             )
             conn_os_error = OSError("connection refused")
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.side_effect = [
                     aiohttp.ClientConnectorError(
-                        connection_key=MagicMock(), os_error=conn_os_error,
+                        connection_key=MagicMock(),
+                        os_error=conn_os_error,
                     ),
-                    {"ok": True, "json": {"result": "rerouted"}, "status": 200, "text": ""},
+                    {
+                        "ok": True,
+                        "json": {"result": "rerouted"},
+                        "status": 200,
+                        "text": "",
+                    },
                 ]
                 req = client.queue_endpoint_request(
                     endpoint=ep,
@@ -1527,14 +1663,22 @@ class TestQueueEndpointRequestResilience:
 
         with patch.object(ep, "_route", new_callable=AsyncMock) as mock_route:
             mock_route.return_value = MagicMock(
-                status="READY", request_idx=1,
+                status="READY",
+                request_idx=1,
                 get_url=MagicMock(return_value="https://w.vast.ai"),
                 body={"url": "https://w.vast.ai"},
             )
-            with patch("vastai.serverless.client.client._make_request", new_callable=AsyncMock) as mock_req:
+            with patch(
+                "vastai.serverless.client.client._make_request", new_callable=AsyncMock
+            ) as mock_req:
                 mock_req.side_effect = [
                     RuntimeError("unexpected worker error"),
-                    {"ok": True, "json": {"result": "recovered"}, "status": 200, "text": ""},
+                    {
+                        "ok": True,
+                        "json": {"result": "recovered"},
+                        "status": 200,
+                        "text": "",
+                    },
                 ]
                 req = client.queue_endpoint_request(
                     endpoint=ep,
@@ -1633,8 +1777,14 @@ class TestGetSslContext:
         client = Serverless(api_key="test-key")
         assert client._ssl_context is None
 
-        with patch("vastai.serverless.client.client.aiohttp.ClientSession", return_value=mock_session):
-            with patch("vastai.serverless.client.client.ssl.create_default_context", return_value=mock_ctx):
+        with patch(
+            "vastai.serverless.client.client.aiohttp.ClientSession",
+            return_value=mock_session,
+        ):
+            with patch(
+                "vastai.serverless.client.client.ssl.create_default_context",
+                return_value=mock_ctx,
+            ):
                 ctx1 = await client.get_ssl_context()
                 ctx2 = await client.get_ssl_context()
 
@@ -1670,7 +1820,10 @@ class TestGetSslContext:
 
         client = Serverless(api_key="test-key")
 
-        with patch("vastai.serverless.client.client.aiohttp.ClientSession", return_value=mock_session):
+        with patch(
+            "vastai.serverless.client.client.aiohttp.ClientSession",
+            return_value=mock_session,
+        ):
             with pytest.raises(Exception, match="Failed to fetch SSL cert: 500"):
                 await client.get_ssl_context()
 

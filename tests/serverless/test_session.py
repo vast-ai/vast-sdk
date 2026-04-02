@@ -2,6 +2,7 @@
 
 All endpoint I/O is mocked; no real network or API calls.
 """
+
 from __future__ import annotations
 
 import logging
@@ -71,9 +72,7 @@ class TestSessionInit:
         session = make_client_session(endpoint=ep, session_id="")
         assert session.session_id == ""
 
-    def test_init_raises_when_url_is_none(
-        self, make_mock_endpoint_for_session
-    ) -> None:
+    def test_init_raises_when_url_is_none(self, make_mock_endpoint_for_session) -> None:
         """
         Verifies that Session rejects a None url.
 
@@ -294,7 +293,10 @@ class TestSessionClose:
         """
         ep, session = session_on_mock_endpoint
         ep.close_session = AsyncMock(side_effect=RuntimeError("network"))
-        with caplog.at_level(logging.WARNING, logger="vastai.serverless.client.session"):
+        logging.getLogger("vastai").propagate = True
+        with caplog.at_level(
+            logging.WARNING, logger="vastai.serverless.client.session"
+        ):
             await session.close()
         assert session.open is False
         assert any(
