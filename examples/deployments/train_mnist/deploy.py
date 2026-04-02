@@ -83,6 +83,7 @@ async def infer(pixel_values: list[list[float]]) -> dict:
     # Normalize the same way training data was normalized
     tensor = (tensor - 0.1307) / 0.3081
     tensor = tensor.unsqueeze(0).unsqueeze(0).to(ctx.device)  # (1, 1, 28, 28)
+    tensor = torch.flip(tensor, dims=[2])  # flip vertically
 
     with torch.no_grad():
         logits = ctx.model(tensor)
@@ -95,5 +96,5 @@ async def infer(pixel_values: list[list[float]]) -> dict:
 image = app.image("vastai/pytorch:@vastai-automatic-tag", 16)
 image.venv("/venv/main")
 image.require(gpu_name.in_([RTX_4090, RTX_5090]))
-app.configure_autoscaling(min_load=100)
+app.configure_autoscaling(min_load=100, max_workers=3) #!VAST_IGNORE_CHANGES
 app.ensure_ready()
