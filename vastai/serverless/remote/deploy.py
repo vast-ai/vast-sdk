@@ -131,17 +131,17 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         self._inner: _FullDeployment | None = None
 
     def _compile_env(self, checked_image: Image) -> str:
-        envs = [f"-p {port}:{port}/{type_}" for port, type_ in checked_image.ports]
+        envs = [f"-p {port}:{port}/{type_}" for port, type_ in checked_image._ports]
         if self.autoscaler_url is not None:
             envs.append(f"-e REPORT_ADDR={self.autoscaler_url}")
         if self.webserver_url != "https://console.vast.ai":
             envs.append(f"-e VAST_API_URL={self.webserver_url}")
-        if checked_image.venv_ == "":
+        if checked_image._venv == "":
             envs.append("-e USE_SYSTEM_PYTHON=true")
             envs.append("-e UV_SYSTEM_PYTHON=1")
             envs.append("-e UV_BREAK_SYSTEM_PACKAGES=1")
-        elif checked_image.venv_ is not None:
-            envs.append(f"-e ENV_PATH={checked_image.venv_}")
+        elif checked_image._venv is not None:
+            envs.append(f"-e ENV_PATH={checked_image._venv}")
         return " ".join(envs)
 
     def _into_deployment_config_and_tarball(self, tar_path: str) -> DeploymentConfig:
@@ -171,16 +171,16 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
             name=self.name
             if self.name
             else self.root_module,  # if "", is main deployment for module
-            image=self._image.image_,
+            image=self._image._image,
             env=self._compile_env(self._image),
             file_hash=hash,
             file_size=size,
             tag=self.tag,
-            search_params=self._image.requires_.unparse_query(),
-            storage=self._image.storage_,
+            search_params=self._image._requires.unparse_query(),
+            storage=self._image._storage,
             ttl=self._ttl,
             version_label=self.version_label,
-            **self._image.docker_login,
+            **self._image._docker_login,
             **self._autoscaling,
         )
 
@@ -200,10 +200,10 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
         # should error if any required fields are still None
         return Config(
             checked_name,
-            checked_image.pip_installs_,
-            checked_image.apt_gets_,
-            list(checked_image.envs_.items()),
-            checked_image.runs_,
+            checked_image._pip_installs,
+            checked_image._apt_gets,
+            list(checked_image._envs.items()),
+            checked_image._runs,
         )
 
     def _compute_hash_and_filesize_and_make_tar(
@@ -214,8 +214,8 @@ class Deployment(Deployment_):  # TODO: Async Context Manager compatible with cl
                 "Trying to deploy a deployment not yet bound to a Python module. Have any remote functions been registered?"
             )
         config = self._collate_config(checked_name, checked_image)
-        hash = compute_deployment_hash(config, self.file, checked_image.copies)
-        create_deployment_tarball(tar_path, config, self.file, checked_image.copies)
+        hash = compute_deployment_hash(config, self.file, checked_image._copies)
+        create_deployment_tarball(tar_path, config, self.file, checked_image._copies)
         size = getsize(tar_path)
         return (hash, size)
 

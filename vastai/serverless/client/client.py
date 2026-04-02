@@ -688,7 +688,9 @@ class _ServerlessBase(Generic[R]):
                     if request_idx:
                         self.logger.debug(f"Got request index {request_idx}")
                     else:
-                        self.logger.error("Did not get request_idx from initial route")
+                        self.logger.info(  # usually non-fatal due to get_serverless_groups polling delay; we should fix that and make this an error again.
+                            "Did not get request_idx from initial route"
+                        )
 
                     poll_interval = 1
                     poll_elapsed = 0

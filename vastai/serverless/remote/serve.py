@@ -27,7 +27,7 @@ class RemoteFunc:
     allow_parallel_requests: bool
     max_queue_time: float
     benchmark_dataset: Optional[list[dict[str, Any]]]
-    benchmark_generator: Optional[Callable[[], dict]]
+    benchmark_generator: Optional[Callable[[], dict[str, Any]]]
     benchmark_runs: int
 
 
@@ -130,9 +130,22 @@ class Deployment(Deployment_, AsyncContextManager):
                                 for item in dataset
                             }
                         ]
+                    benchmark_generator = None
+                    if entry.benchmark_generator is not None:
+                        root_module = self.root_module  # in case self.root_module changes, bind to current root_module
+                        original_benchmark_generator = (
+                            entry.benchmark_generator
+                        )  # see above
+                        benchmark_generator = lambda: {
+                            "kwargs": {
+                                k: serialize(v, root_module)
+                                for k, v in original_benchmark_generator().items()
+                            }
+                        }
+
                     benchmark_config = BenchmarkConfig(
                         dataset=dataset,
-                        generator=entry.benchmark_generator,
+                        generator=benchmark_generator,
                         runs=entry.benchmark_runs,
                     )
 
