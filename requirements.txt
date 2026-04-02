@@ -5,7 +5,7 @@ pytz>=2026.1
 urllib3>=2.6.3
 pyparsing>=3.3.2
 fastapi==0.121.1
-uvicorn[standard]>=0.41.0
+uvicorn[standard]>=0.40.0
 aiohttp[speedups]>=3.13.5
 anyio>=4.13.0
 nltk>=3.9.4

@@ -39,7 +39,7 @@ pytz = ">=2026.1"
 urllib3 = ">=2.6.3"
 pyparsing = ">=3.3.2"
 fastapi = "==0.121.1"
-uvicorn = { version = ">=0.42.0", extras = ["standard"] }
+uvicorn = { version = ">=0.40.0", extras = ["standard"] }
 aiohttp = ">=3.13.5"
 aiodns = ">=4.0.0"
 pycares = ">=5.0.1"
