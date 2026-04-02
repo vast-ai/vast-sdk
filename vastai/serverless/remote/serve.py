@@ -9,13 +9,27 @@ from typing import (
     Awaitable,
     TypeVar,
     AsyncContextManager,
+    Optional,
 )
+from dataclasses import dataclass
 import asyncio
 import logging
 
 logger = logging.getLogger("vastai")
 
 logger.debug("mode: serve")
+
+
+@dataclass
+class RemoteFunc:
+    func: Callable[..., Awaitable[Any]]
+    globals: dict[str, Any]
+    allow_parallel_requests: bool
+    max_queue_time: float
+    benchmark_dataset: Optional[list[dict[str, Any]]]
+    benchmark_generator: Optional[Callable[[], dict]]
+    benchmark_runs: int
+
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -26,7 +40,7 @@ class Deployment(Deployment_, AsyncContextManager):
         super().__init__(*args, **kwargs)
         self.contexts: dict[Type, Any] = {}
         self.context_managers: dict[Type, AsyncContextManager] = {}
-        self.remote_funcs: dict[tuple[str], dict[str, Any]] = {}
+        self.remote_funcs: dict[tuple[str], RemoteFunc] = {}
 
     def context(
         self, *args, **kwargs
@@ -100,12 +114,12 @@ class Deployment(Deployment_, AsyncContextManager):
 
                 benchmark_config = None
                 if (
-                    entry["benchmark_dataset"] is not None
-                    or entry["benchmark_generator"] is not None
+                    entry.benchmark_dataset is not None
+                    or entry.benchmark_generator is not None
                 ):
                     # Serialize benchmark dataset values so they match the
                     # format a real client sends (the wrapper deserializes them).
-                    dataset = entry["benchmark_dataset"]
+                    dataset = entry.benchmark_dataset
                     if dataset is not None:
                         dataset = [
                             {
@@ -118,21 +132,21 @@ class Deployment(Deployment_, AsyncContextManager):
                         ]
                     benchmark_config = BenchmarkConfig(
                         dataset=dataset,
-                        generator=entry["benchmark_generator"],
-                        runs=entry["benchmark_runs"],
+                        generator=entry.benchmark_generator,
+                        runs=entry.benchmark_runs,
                     )
 
                 wrapped = self._wrap_remote_func(
-                    self.root_module, entry["func"], entry["globals"]
+                    self.root_module, entry.func, entry.globals
                 )
 
                 handlers.append(
                     HandlerConfig(
                         route=route,
                         remote_function=wrapped,
-                        allow_parallel_requests=False,
+                        allow_parallel_requests=entry.allow_parallel_requests,
                         benchmark_config=benchmark_config,
-                        max_queue_time=30.0,
+                        max_queue_time=entry.max_queue_time,
                     )
                 )
 
@@ -147,6 +161,8 @@ class Deployment(Deployment_, AsyncContextManager):
         self,
         f: Callable[P, Awaitable[Any]] | None = None,
         *,
+        allow_parallel_requests: bool = False,
+        max_queue_time: float = 30.0,
         benchmark_dataset: list[dict] | None = None,
         benchmark_generator: Callable[[], dict] | None = None,
         benchmark_runs: int = 10,
@@ -156,13 +172,15 @@ class Deployment(Deployment_, AsyncContextManager):
     ):
         def decorator(f: Callable[P, Awaitable[Any]]) -> Callable[P, Awaitable[Any]]:
             key = self.relativize(f)
-            self.remote_funcs[key] = {
-                "func": f,
-                "globals": f.__globals__,
-                "benchmark_dataset": benchmark_dataset,
-                "benchmark_generator": benchmark_generator,
-                "benchmark_runs": benchmark_runs,
-            }
+            self.remote_funcs[key] = RemoteFunc(
+                func=f,
+                globals=f.__globals__,
+                allow_parallel_requests=allow_parallel_requests,
+                max_queue_time=max_queue_time,
+                benchmark_dataset=benchmark_dataset,
+                benchmark_generator=benchmark_generator,
+                benchmark_runs=benchmark_runs,
+            )
             return f
 
         if f is not None:
