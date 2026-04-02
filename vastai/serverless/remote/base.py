@@ -29,63 +29,64 @@ class Image:
         worker_port: tuple[int, str] = (3000, "tcp"),
         **docker_login: Unpack[DockerLogin],
     ):
-        self.image_ = from_image
-        self.envs_: dict[str, str] = {}
-        self.runs_: list[str | tuple[str, ...]] = []
-        self.venv_: str | None = None  # None=SDK default, ""=system python, str=custom venv path
-        self.pip_installs_: list[str] = []
-        self.apt_gets_: list[str] = []
-        self.docker_login: DockerLogin = docker_login
-        self.requires_ = Query.search_defaults()
-        self.storage_ = storage
-        self.copies: list[tuple[str, str]] = []
-        self.ports: set[tuple[int, str]] = {worker_port}
-
+        self._image = from_image
+        self._envs: dict[str, str] = {}
+        self._runs: list[str | tuple[str, ...]] = []
+        self._venv: str | None = (
+            None  # None=SDK default, ""=system python, str=custom venv path
+        )
+        self._pip_installs: list[str] = []
+        self._apt_gets: list[str] = []
+        self._docker_login: DockerLogin = docker_login
+        self._requires = Query.search_defaults()
+        self._storage = storage
+        self._copies: list[tuple[str, str]] = []
+        self._ports: set[tuple[int, str]] = {worker_port}
 
     def pip_install(self, *args: str) -> "Image":
         for arg in args:
-            self.pip_installs_.append(arg)
+            self._pip_installs.append(arg)
         return self
 
     def apt_get(self, *args: str) -> "Image":
         for arg in args:
-            self.apt_gets_.append(arg)
+            self._apt_gets.append(arg)
         return self
 
     def run_script(self, script) -> "Image":
-        self.runs_.append(script)
+        self._runs.append(script)
         return self
 
     def run_cmd(self, *args) -> "Image":
-        self.runs_.append(args)
+        self._runs.append(args)
         return self
 
     def env(self, **kwargs: str) -> "Image":
         for k, v in kwargs.items():
-            self.envs_[k] = v
+            self._envs[k] = v
         return self
 
     def require(self, *args: Query) -> "Image":
         for arg in args:
-            self.requires_.extend(arg)
+            self._requires.extend(arg)
         return self
 
     def copy(self, src: str, dst: str) -> "Image":
-        self.copies.append((src, dst))
+        self._copies.append((src, dst))
         return self
 
     def venv(self, path: str) -> "Image":
         """Use an existing venv at the given path instead of the SDK managed venv."""
-        self.venv_ = path
+        self._venv = path
         return self
 
     def use_system_python(self) -> "Image":
         """Use the image's system Python instead of a venv."""
-        self.venv_ = ""
+        self._venv = ""
         return self
 
     def publish_port(self, number: int, type_: str = "tcp") -> "Image":
-        self.ports.add((number, type_))
+        self._ports.add((number, type_))
         return self
 
 
