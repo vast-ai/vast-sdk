@@ -9,7 +9,9 @@ _VAST_LOG_LEVELS = {
     "debug": logging.DEBUG,
 }
 _env_level = os.environ.get("VAST_LOG_LEVEL")
-_level = _VAST_LOG_LEVELS.get(_env_level, logging.INFO) if _env_level else logging.INFO
+_level = (
+    _VAST_LOG_LEVELS.get(_env_level, logging.WARNING) if _env_level else logging.INFO
+)
 
 logger = logging.getLogger("vastai")
 logger.setLevel(_level)
@@ -37,6 +39,7 @@ from .serverless.server.worker import (
     BenchmarkConfig,
 )
 from .serverless.remote import Deployment
+
 __all__ = [
     # Clients
     "SyncClient",
@@ -53,5 +56,5 @@ __all__ = [
     "HandlerConfig",
     "LogActionConfig",
     "BenchmarkConfig",
-    "Deployment"
+    "Deployment",
 ]
