@@ -476,8 +476,20 @@ class Backend:
 
         async def make_request() -> Union[web.Response, web.StreamResponse]:
             try:
-                response = await self.__call_backend(handler=handler, payload=payload)
-                res = await handler.generate_client_response(request, response)
+                if handler.remote_function:
+                    # Remote dispatch: return JSON directly, bypassing the
+                    # fake ClientResponse → generate_client_response path
+                    # to avoid double-serialization of large payloads.
+                    remote_func_params = payload.generate_payload_json()
+                    result = await handler.call_remote_dispatch_function(
+                        params=remote_func_params
+                    )
+                    res = web.json_response({"result": result})
+                else:
+                    response = await self.__call_backend(
+                        handler=handler, payload=payload
+                    )
+                    res = await handler.generate_client_response(request, response)
                 self.metrics._request_success(request_metrics)
                 return res
             except asyncio.CancelledError:

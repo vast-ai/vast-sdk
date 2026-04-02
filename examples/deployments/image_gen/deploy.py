@@ -31,7 +31,7 @@ REFINER_ID = "stabilityai/stable-diffusion-xl-refiner-1.0"
 class DiffusionModels:
     async def __aenter__(self):
         import torch, sys, logging
-        from diffusers import StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline
+        from diffusers import StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline, StableDiffusionUpscalePipeline
         from diffusers.utils import logging as diffusers_logging
 
         # Enable verbose download & loading logs
@@ -76,6 +76,17 @@ class DiffusionModels:
         self.txt2img_pipe(
             "warmup", num_inference_steps=1, output_type="latent",
         )
+
+        # SD x4 upscaler (separate model, shares nothing with SDXL)
+        UPSCALER_ID = "stabilityai/stable-diffusion-x4-upscaler"
+        print(f"[image-gen] Downloading & loading upscaler: {UPSCALER_ID}", flush=True)
+        self.upscale_pipe = StableDiffusionUpscalePipeline.from_pretrained(
+            UPSCALER_ID, torch_dtype=dtype,
+        ).to(device)
+        self.upscale_pipe.set_progress_bar_config(disable=True)
+        self.upscale_pipe.enable_vae_tiling()
+        self.upscale_pipe.enable_attention_slicing()
+        print(f"[image-gen] Upscaler loaded on {device}.", flush=True)
 
         self.device = device
         self.dtype = dtype
@@ -176,30 +187,33 @@ async def img2img(
 @app.remote()
 async def upscale(
     image_bytes: bytes,
-    scale_factor: int = 2,
+    prompt: str = "",
+    steps: int = 20,
+    seed: int = -1,
 ) -> bytes:
-    """Upscale an image using Real-ESRGAN. Returns PNG bytes."""
-    import torch, io, numpy as np
+    """4x upscale using Stable Diffusion x4 upscaler. Returns PNG bytes."""
+    import torch, io
     from PIL import Image
-    from realesrgan import RealESRGANer
-    from basicsr.archs.rrdbnet_arch import RRDBNet
 
-    input_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    input_array = np.array(input_image)
+    ctx = app.get_context(DiffusionModels)
 
-    # Lightweight RealESRGAN-x4plus model (loaded per-call, it's fast)
-    model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32)
-    upsampler = RealESRGANer(
-        scale=4,
-        model_path="https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
-        model=model,
-        half=True,
+    low_res = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+    generator = torch.Generator(device=ctx.device)
+    if seed >= 0:
+        generator.manual_seed(seed)
+    else:
+        generator.manual_seed(random.randint(0, 2**32 - 1))
+
+    result = ctx.upscale_pipe(
+        prompt=prompt or "",
+        image=low_res,
+        num_inference_steps=steps,
+        generator=generator,
     )
 
-    output_array, _ = upsampler.enhance(input_array, outscale=scale_factor)
-
     buf = io.BytesIO()
-    Image.fromarray(output_array).save(buf, format="PNG")
+    result.images[0].save(buf, format="PNG")
     return buf.getvalue()
 
 
@@ -215,9 +229,7 @@ image.pip_install(
     "accelerate",
     "safetensors",
     "invisible-watermark>=0.2.0",
-    "realesrgan",
-    "basicsr",
 )
 image.require(gpu_name.in_([RTX_4090, RTX_5090]))
-app.configure_autoscaling(min_load=100, max_workers=5)
+app.configure_autoscaling(min_load=10, max_workers=5) #!VAST_IGNORE_CHANGES
 app.ensure_ready()
