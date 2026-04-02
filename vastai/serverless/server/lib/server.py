@@ -28,7 +28,7 @@ async def start_server_async(backend: Backend, routes: List[web.RouteDef], **kwa
             ssl_context = None
 
         log.debug("Starting Worker Server...")
-        app = web.Application()
+        app = web.Application(client_max_size=0)
         app.add_routes(routes)
 
         # Hardcoded session routes
