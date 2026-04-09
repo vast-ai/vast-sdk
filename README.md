@@ -5,8 +5,10 @@
 ## Install
 
 ```bash
-pip install vastai-sdk
+pip install vastai
 ```
+
+> **Note:** `pip install vastai-sdk` also works and installs the same package. Both package names are supported for backward compatibility.
 
 ## Quickstart
 
@@ -14,7 +16,7 @@ pip install vastai-sdk
 
 2. Set your API key:
 ```python
-from vastai_sdk import VastAI
+from vastai import VastAI
 vast = VastAI(api_key="YOUR_API_KEY")
 ```
 
@@ -26,9 +28,9 @@ vast = VastAI()
 ## SDK Usage
 
 ```python
-from vastai_sdk import VastAI
+from vastai import VastAI
 
-vast = VastAI()
+vast = VastAI()  # uses VAST_API_KEY env var, or pass api_key="..."
 
 vast.search_offers(query='gpu_name=RTX_4090 num_gpus>=4')
 vast.show_instances()
@@ -38,11 +40,13 @@ vast.stop_instance(id=12345)
 
 Use `help(vast.search_offers)` to view documentation for any method.
 
+> **Migrating from `vastai-sdk`?** The old import still works: `from vastai_sdk import VastAI`
+
 ## Using the Serverless Client
 
 1. Create the client
 ```python
-from vastai_sdk.serverless.client.client import Serverless
+from vastai import Serverless
 serverless = Serverless() # or, Serverless("YOUR_API_KEY")
 ```
 2. Get an endpoint
