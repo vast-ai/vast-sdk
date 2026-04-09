@@ -1,7 +1,7 @@
 import importlib
 import types
 import argparse
-from typing import Optional, Any
+from typing import Any
 import io
 import contextlib
 import requests
@@ -10,13 +10,14 @@ import re
 import os
 import sys
 import logging
-from pyparsing import Word, alphas, alphanums, oneOf, Optional, Group, ZeroOrMore, quotedString, delimitedList, Suppress
+from pyparsing import Word, alphas, alphanums, one_of, Group, ZeroOrMore, quoted_string, DelimitedList, Suppress
 
 from .vastai_base import VastAIBase
 from .vast import parser, APIKEY_FILE
+from . import vast as _vast
 from textwrap import dedent
 
-logging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
+#ogging.basicConfig(level=os.getenv('LOGLEVEL') or logging.INFO)
 logger = logging.getLogger()
 
 
@@ -46,7 +47,7 @@ def reverse_mapping(regions):
 
 _regions_rev = reverse_mapping(_regions)
 
-def queryParser(kwargs):
+def queryParser(kwargs, instance):
   # georegion uses the region modifiers as top level
   # descriptors
   #
@@ -57,15 +58,16 @@ def queryParser(kwargs):
     qstr = kwargs['query']
 
     key = Word(alphas + "_-")
-    operator = oneOf("= in != > < >= <=")
-    single_value = Word(alphanums + "_") | quotedString
+    operator = one_of("= in != > < >= <=")
+    single_value = Word(alphanums + "_.-") | quoted_string()
+
     array_value = (
-        Suppress("[") + delimitedList(quotedString) + Suppress("]")
-    ).setParseAction(lambda t: f"[{','.join(t)}]")
-    value = single_value | array_value 
+        Suppress("[") + DelimitedList(quoted_string()) + Suppress("]")
+    ).set_parse_action(lambda t: f"[{','.join(t)}]")
+    value = single_value | array_value
     expr = Group(key + operator + value)
     query = ZeroOrMore(expr)
-    parsed = query.parseString(qstr)
+    parsed = query.parse_string(qstr)
 
     toPass = []
 
@@ -86,12 +88,13 @@ def queryParser(kwargs):
 
   return (state, kwargs)
 
-def queryFormatter(state, obj):
+def queryFormatter(state, obj, instance):
   # This algo is explicitly designed for skypilot to add 
   # depth to our catalog offerings
   cutoff = {
     'cpu_ram': 64 * 1024,
-    'cpu_cores': 32
+    'cpu_cores': 32,
+    'min_bid': 0
   }
 
   upper = lambda amount: amount & (0xffff << max(amount.bit_length() - 1,1))
@@ -106,11 +109,14 @@ def queryFormatter(state, obj):
     if state['chunked']:
       good = True
 
-      for k,v in cutoff.items():
-        if res[k] < cutoff[k]:
-          good = False
-        else:
-          res[k] = cutoff[k]
+      try:
+        for k,v in cutoff.items():
+          if res[k] is not None and (res[k] < cutoff[k]):
+            good = False
+          else:
+            res[k] = cutoff[k]
+      except:
+        good = False
 
       if not good:
         continue
@@ -123,9 +129,14 @@ def queryFormatter(state, obj):
     filtered.append(res)
 
   return filtered
+
+def lastOutput(state, obj, instance):
+    return instance.last_output
   
 _hooks = {
-    'search__offers': [queryParser, queryFormatter]
+    'search__offers': [queryParser, queryFormatter],
+    'logs': [None, lastOutput],
+    'execute': [None, lastOutput]
 }
 
 class VastAI(VastAIBase):
@@ -139,6 +150,7 @@ class VastAI(VastAIBase):
         raw=True,
         explain=False,
         quiet=False,
+        curl=False
     ):
         if not api_key:
             if os.path.exists(APIKEY_FILE):
@@ -158,6 +170,7 @@ class VastAI(VastAIBase):
         self.raw = raw
         self.explain = explain
         self.quiet = quiet
+        self.curl = curl
         self.imported_methods = {}
         self.last_output = None
         self.import_cli_functions()
@@ -273,29 +286,37 @@ class VastAI(VastAIBase):
             kwargs.setdefault("raw", self.raw)
             kwargs.setdefault("explain", self.explain)
             kwargs.setdefault("quiet", self.quiet)
+            kwargs.setdefault("curl", self.curl)
 
             # if we specified hooks we get that now
-            if func.__name__ in _hooks:
-              state, kwargs = _hooks[func.__name__][0](kwargs)
+            state = None
+            if func.__name__ in _hooks and _hooks[func.__name__][0] is not None:
+              state, kwargs = _hooks[func.__name__][0](kwargs, self)
 
             args = argparse.Namespace(**kwargs)
+            _vast.ARGS = args
 
             if logger.isEnabledFor(logging.DEBUG):
-               kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
-               logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
+                kwargs_repr = {key: repr(value) for key, value in kwargs.items()}
+                logging.debug(f"Calling {func.__name__} with arguments: kwargs={kwargs_repr}")
+            else:
+                out_b = io.StringIO()
+                out_o = sys.stdout
+                sys.stdout = out_b
 
-            out_b = io.StringIO()
-            out_o = sys.stdout
-            sys.stdout = out_b
+            res = ''
+            try:
+                res = func(args) 
+            except:
+                pass
 
-            res = func(args) 
+            if not logger.isEnabledFor(logging.DEBUG):
+                sys.stdout = out_o
+                self.last_output = out_b.getvalue()
+                out_b.close()
 
             if func.__name__ in _hooks:
-              res = _hooks[func.__name__][1](state, res)
-
-            sys.stdout = out_o
-            self.last_output = out_b.getvalue()
-            out_b.close()
+              res = _hooks[func.__name__][1](state, res, self)
 
             if hasattr(res, 'json'):
                logging.debug(f" └-> {res.json()}")
@@ -327,18 +348,21 @@ class VastAI(VastAIBase):
 
         sig = getattr(func, "mysignature", None)
         sig_help = getattr(func, "mysignature_help", None)
+
         if sig:
             wrapper.__signature__, docappend = self.generate_signature_from_argparse(sig)
-            epi = None
 
-            if sig.epilog:
-                epi = re.sub('Example.?:.*', '', sig.epilog, flags=re.DOTALL|re.M).strip()
-                wrapper.__doc__ += epi
-
-            if not (epi or hasDoc) and sig_help:
-                wrapper.__doc__ += sig_help
+            # append epilog if exists
+            if getattr(sig, "epilog", None):
+                wrapper.__doc__ = f"{wrapper.__doc__.rstrip()}\n\n{sig.epilog.strip()}\n"
             
-            wrapper.__doc__ = '\n\n'.join([ wrapper.__doc__.rstrip(), docappend ])
+            # if no epilog or func docstring, fall back to parser help text
+            elif sig_help and not hasDoc:
+                wrapper.__doc__ += f"\n\n{sig_help}"
+
+            # finally append the arg details
+            wrapper.__doc__ = f"{wrapper.__doc__.rstrip()}\n\n{docappend}"
+
         return wrapper
 
     def credentials_on_disk(self):
