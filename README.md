@@ -1,75 +1,72 @@
-# 🪄 Vast.ai Magic Comes To Python!
-It's everything you love from the [Vast.ai CLI](https://github.com/vast-ai/vast-cli) tool, wrapped neatly in an easy-to-use Python interface!
+# Vast.ai Python SDK
 
-[![PyPI version](https://badge.fury.io/py/vastai-sdk.svg)](https://badge.fury.io/py/vastai-sdk)
+> **This repo is deprecated.** It has been merged into [vast-ai/vast-cli](https://github.com/vast-ai/vast-cli). `pip install vastai` now installs both the SDK and CLI in a single package. `pip install vastai-sdk` still works and installs the same package. For issues and PRs, go to [vast-ai/vast-cli](https://github.com/vast-ai/vast-cli).
 
-## 📦 What's in the pip?
-Why, it’s not just an SDK—it’s an entire development philosophy in a single import statement! With just a humble `pip install`, you unlock:
+## Install
 
- * ⚡ **Lightning-fast integrations**: So easy, it practically writes your code for you.
- * 🛡️ **Error-free operations**: Bugs? Banished. Exceptions? Extinct. Our SDK makes them a thing of the past!
- * 🌍 **Infinite scalability**: Whether you’re running on a potato or the world’s fastest supercomputer, we’ve got you covered!
-
-## 👀 Let's Sneak A Peek!
-Under the hood we are using what the [CLI tool](https://github.com/vast-ai/vast-cli) uses and so the documentation is the same. The arguments are the same. 
-
-🐚 shell: `vastai cast --spell='abracadabra'` 
-
-🐍 python: `vastai.cast(spell='abracadabra')`
-
-Just a little something like this and we're ready to roll!
-```python
-import vastai_sdk
-vastai = vastai_sdk.VastAI()
+```bash
+pip install vastai-sdk
 ```
 
-In fact, try this right now. I'll wait!
+## Quickstart
 
+1. Get your API key from [https://cloud.vast.ai/manage-keys/](https://cloud.vast.ai/manage-keys/)
+
+2. Set your API key:
 ```python
-$ pip install vastai-sdk
-$ python
-Python 3.11.2 (main, Aug 26 2024, 07:20:54) [GCC 12.2.0] on linux
-Type "help", "copyright", "credits" or "license" for more information.
->>> import vastai_sdk
->>> v = vastai_sdk.VastAI()
->>> v.search_offers()
-````
-This is easy, you got this! 
-
-### What about the return values?
-JSONable objects, exactly as `--raw` would send to your pretty terminal. It's really the same.
-
-### Alright, but what about an API key, what's the catch?
-You can provide it in the class instantiation: `vastai.VastAI("My-magnificent-key")`
-
-OR, if you leave it blank it will look for a key in the same place as the CLI, right there in your friendly `$HOME` directory.
-
-The `creds_source` @property will tell you where what's being used came from. Example:
-
-```python
->>> v=vastai_sdk.VastAI("Not-My-Real-Key-Don't-Worry!")
->>> v.creds_source
-'CODE'
->>> v.api_key
-"Not-My-Real-Key-Don't-Worry!"
->>>
+from vastai_sdk import VastAI
+vast = VastAI(api_key="YOUR_API_KEY")
 ```
 
-### Introspection, `__doc__`, `__sig__`?
-Yes, yes, and yes. It's all in there. Try this at the handy python prompt
-
+Or set the `VAST_API_KEY` environment variable and just use:
 ```python
->>> help(v.create_instance)
-```
-Pretty nice, right? Now do this! (No Spoilers!)
-
-```python
->>> help(v.<tab>
+vast = VastAI()
 ```
 
-All the helpers are there so your vscode, emacs, ipython, and neovim sessions will fly as your fingertips tab away.
+## SDK Usage
 
-### Help, support, all that stuff?
-Sure. Just head over to GitHub issues.
+```python
+from vastai_sdk import VastAI
 
-Thanks for using [Vast.ai](https://vast.ai). We 💖 you!
+vast = VastAI()
+
+vast.search_offers(query='gpu_name=RTX_4090 num_gpus>=4')
+vast.show_instances()
+vast.start_instance(id=12345)
+vast.stop_instance(id=12345)
+```
+
+Use `help(vast.search_offers)` to view documentation for any method.
+
+## Using the Serverless Client
+
+1. Create the client
+```python
+from vastai_sdk.serverless.client.client import Serverless
+serverless = Serverless() # or, Serverless("YOUR_API_KEY")
+```
+2. Get an endpoint
+```python
+endpoint = await serverless.get_endpoint("my-endpoint")
+```
+3. Make a request
+```python
+request_body = {
+    "model": "Qwen/Qwen3-8B",
+    "prompt" : "Who are you?",
+    "max_tokens" : 100,
+    "temperature" : 0.7
+}
+response = await serverless.request("/v1/completions", request_body)
+```
+4. Read the response
+```python
+text = response["response"]["choices"][0]["text"]
+print(text)
+```
+
+Find more examples in the `examples/` directory.
+
+## Contributing
+
+This repo is deprecated. For issues, PRs, and documentation, go to [vast-ai/vast-cli](https://github.com/vast-ai/vast-cli).
