@@ -3113,7 +3113,7 @@ def destroy__instance(args):
 
     :param argparse.Namespace args: should supply all the command-line options
     """
-    destroy_instance(args.id,args)
+    return destroy_instance(args.id,args)
 
 @parser.command(
     argument("ids", help="ids of instance to destroy", type=int, nargs='+'),
@@ -3924,7 +3924,7 @@ def start__instance(args):
     :param argparse.Namespace args: should supply all the command-line options
     :rtype:
     """
-    start_instance(args.id,args)
+    return start_instance(args.id,args)
 
 
 @parser.command(
@@ -3990,7 +3990,7 @@ def stop__instance(args):
     :param argparse.Namespace args: should supply all the command-line options
     :rtype:
     """
-    stop_instance(args.id,args)
+    return stop_instance(args.id,args)
 
 @parser.command(
     argument("ids", help="ids of instance to stop", type=int, nargs='+'),
@@ -7196,7 +7196,7 @@ def cleanup__machine(args):
     :param argparse.Namespace args: should supply all the command-line options
     :rtype:
     """
-    cleanup_machine(args, args.id)
+    return cleanup_machine(args, args.id)
 
 
 @parser.command(
