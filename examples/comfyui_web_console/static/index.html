@@ -117,6 +117,8 @@
     font-family: var(--mono); font-size: 12px;
   }
   .entry-head .id    { color: var(--muted); font-size: 11px; }
+  .entry-head .via   { color: var(--muted); font-size: 11px; }
+  .entry-head .via b { color: var(--text); font-weight: normal; }
   .entry-head .grow  { flex: 1; }
   .entry-head button {
     background: transparent; color: var(--text); border: 1px solid var(--border);
@@ -528,6 +530,7 @@ function entryCard(entry) {
     <span>${entry.ts.toLocaleTimeString()}</span>
     <span class="id">#${entry.id}</span>
     <span class="duration"></span>
+    <span class="via"></span>
     <span class="grow"></span>
     <button class="reload" title="Load this payload back into the editor">Reload workflow</button>
     <button class="remove" title="Remove this entry from the feed (frees memory)" aria-label="Remove">×</button>
@@ -564,7 +567,17 @@ function entryCard(entry) {
   entry._outputs  = outputsEl;
   entry._raw      = raw.querySelector('pre');
   entry._duration = head.querySelector('.duration');
+  entry._via      = head.querySelector('.via');
   return card;
+}
+
+// host[:port] from a full URL — best-effort, returns null on parse
+// failure. Used to annotate completed entries with the worker the
+// SDK actually routed to.
+function workerHost(url) {
+  if (!url || typeof url !== 'string') return null;
+  try { return new URL(url).host || null; }
+  catch { return null; }
 }
 
 function updateEntry(entry) {
@@ -574,6 +587,14 @@ function updateEntry(entry) {
   pill.textContent = entry.status;
   entry._duration.textContent = entry.duration != null
     ? `· ${entry.duration.toFixed(1)}s` : '';
+
+  // Worker URL comes back on the SDK's per-request result dict (as
+  // `url`); show its host so the operator can correlate entries with
+  // the worker pool. Workers don't expose host/url in the autoscaler's
+  // worker listing, so we can't map this to a numeric worker.id —
+  // host is the most stable identifier we have here.
+  const host = workerHost(entry.response?.url);
+  entry._via.innerHTML = host ? `via <b>${escapeHtml(host)}</b>` : '';
 
   // Render the way this request was *submitted*. Each entry remembers
   // whether the operator opted into inline base64, so reusing the
