@@ -1,9 +1,10 @@
-"""Local web console for Vast.ai serverless ComfyUI endpoints.
+"""ComfyUI Web Console — local UI for Vast.ai serverless ComfyUI endpoints.
 
 A small FastAPI app that wraps the Vast SDK and serves a single-page UI.
-Lets you paste an API key + endpoint id, submit a ComfyUI workflow, and
-watch the worker pool's state in real time. Intended for local
-development — no auth, no TLS — bind to 127.0.0.1 only.
+Lets you paste an API key + endpoint id, submit a ComfyUI workflow,
+watch the worker pool's state in real time, and replay past requests
+with modifications. Intended for local development — no auth, no TLS
+— bind to 127.0.0.1 only.
 
 Run:
     pip install -r requirements.txt
@@ -29,7 +30,7 @@ from vastai import Serverless
 from vastai.serverless.client.endpoint import Endpoint
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("web_console")
+log = logging.getLogger("comfyui_web_console")
 
 # Quieter SDK chatter on the steady-state poll path. Connection
 # lifecycle and endpoint listings still log on first use.
@@ -37,7 +38,7 @@ logging.getLogger("vastai").setLevel(logging.WARNING)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="Vast Serverless Web Console")
+app = FastAPI(title="ComfyUI Web Console")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -190,7 +191,7 @@ async def submit_request(req: Request) -> JSONResponse:
 def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
-    log.info("starting web console at http://%s:%d", host, port)
+    log.info("ComfyUI Web Console listening at http://%s:%d", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
