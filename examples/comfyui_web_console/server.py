@@ -16,6 +16,7 @@ holding it in memory, so multiple users on the same host don't share
 credentials.
 """
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -129,12 +130,41 @@ async def list_endpoints(req: Request) -> JSONResponse:
     return JSONResponse([{"id": ep.id, "name": ep.name} for ep in endpoints])
 
 
+def _parse_429_retry_after(msg: str, default: int = 5) -> int:
+    """Pull retry_after seconds out of the SDK's 429 RuntimeError text.
+
+    The SDK serialises upstream 429s as
+        ``RuntimeError: ... HTTP 429 - {"retry_after": 1, ...}``
+    so we can recover the suggested wait without re-issuing the call.
+    """
+    try:
+        payload = json.loads(msg.split(" - ", 1)[1])
+        return max(1, int(payload.get("retry_after", default)))
+    except Exception:
+        return default
+
+
 @app.post("/api/workers")
 async def get_workers(req: Request) -> JSONResponse:
     """Snapshot of the workers behind an endpoint. UI polls this."""
     body = await req.json()
     endpoint = await _endpoint(_api_key(body), body["endpoint_id"])
-    workers = await endpoint.get_workers()
+    try:
+        workers = await endpoint.get_workers()
+    except RuntimeError as ex:
+        # The autoscaler rate-limits get_endpoint_workers at ~1 req/s.
+        # Surface 429s to the caller as 429 with a Retry-After header
+        # so the browser's poll loop can back off cleanly instead of
+        # treating it as a generic error.
+        msg = str(ex)
+        if "HTTP 429" in msg:
+            retry = _parse_429_retry_after(msg)
+            return JSONResponse(
+                status_code=429,
+                content={"retry_after": retry, "message": "rate limited by autoscaler"},
+                headers={"Retry-After": str(retry)},
+            )
+        raise
     return JSONResponse(
         [
             {

@@ -247,7 +247,14 @@ const $ = sel => document.querySelector(sel);
 // several MB of inline base64 output blobs; eviction explicitly
 // revokes their object URLs so the browser can reclaim memory.
 const MAX_HISTORY = 20;
-const POLL_INTERVAL_MS = 3000;
+
+// Worker poll cadence. The autoscaler rate-limits
+// get_endpoint_workers at ~1 req/s — go a bit slower than that to
+// leave headroom for other API calls (Load endpoints, etc) sharing
+// the same per-key budget. On 429s we back off exponentially up to
+// MAX_BACKOFF and respect the server's Retry-After hint.
+const POLL_INTERVAL_MS  = 5000;
+const POLL_MAX_BACKOFF  = 60000;
 
 // ---- persistence: keep the operator's inputs across reloads ---------
 const STORAGE_KEY = 'vast.comfyui_web_console.v1';
@@ -303,7 +310,10 @@ async function postJSON(url, body) {
   });
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`${resp.status}: ${text}`);
+    const err = new Error(`${resp.status}: ${text}`);
+    err.status = resp.status;
+    err.retryAfter = parseInt(resp.headers.get('Retry-After'), 10) || 0;
+    throw err;
   }
   return resp.json();
 }
@@ -371,11 +381,20 @@ $('#endpointId').addEventListener('change', () => {
 });
 
 // ---- worker polling ---------------------------------------------------
-let pollTimer = null;
+//
+// Recursive setTimeout rather than setInterval so each cycle's delay
+// reflects the latest backoff state, and so a slow tab can't queue
+// up overlapping in-flight pollers.
+let pollTimer    = null;
+let pollDelayMs  = POLL_INTERVAL_MS;
+
 async function pollOnce() {
   const apiKey = $('#apiKey').value.trim();
   const epId   = $('#endpointId').value;
-  if (!apiKey || !epId) return;
+  if (!apiKey || !epId) {
+    schedulePoll(POLL_INTERVAL_MS);
+    return;
+  }
   try {
     const workers = await postJSON('/api/workers', {
       api_key: apiKey, endpoint_id: parseInt(epId, 10),
@@ -383,10 +402,29 @@ async function pollOnce() {
     renderWorkers(workers);
     $('#workersStamp').textContent = new Date().toLocaleTimeString();
     $('#workersStamp').className = 'status ok';
+    pollDelayMs = POLL_INTERVAL_MS;       // reset on success
   } catch (err) {
-    $('#workersStamp').textContent = `error: ${err.message.slice(0, 60)}`;
-    $('#workersStamp').className = 'status err';
+    if (err.status === 429) {
+      // Server-supplied Retry-After is authoritative; pad slightly
+      // and still cap at the configured backoff ceiling so a
+      // pathological response can't park polling forever.
+      const wait = Math.min(POLL_MAX_BACKOFF, Math.max(1000, (err.retryAfter || 1) * 1000 + 250));
+      pollDelayMs = wait;
+      $('#workersStamp').textContent = `rate limited — retrying in ${(wait/1000).toFixed(0)}s`;
+      $('#workersStamp').className = 'status warn';
+    } else {
+      pollDelayMs = Math.min(POLL_MAX_BACKOFF, pollDelayMs * 2);
+      $('#workersStamp').textContent = `error: ${err.message.slice(0, 60)}`;
+      $('#workersStamp').className = 'status err';
+    }
+  } finally {
+    schedulePoll(pollDelayMs);
   }
+}
+
+function schedulePoll(delayMs) {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(pollOnce, delayMs);
 }
 
 // The autoscaler reports `status` as a *lifecycle* label (LOADING ->
@@ -421,9 +459,9 @@ function renderWorkers(workers) {
 }
 
 function startWorkerPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollOnce();
-  pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
+  if (pollTimer) clearTimeout(pollTimer);
+  pollDelayMs = POLL_INTERVAL_MS;
+  pollOnce();   // schedules the next tick from its own finally{}
 }
 
 // ---- history feed -----------------------------------------------------
@@ -461,7 +499,17 @@ function renderHistory() {
   feed.innerHTML = '';
   for (const entry of history) feed.appendChild(entry.element);
   $('#historyEmpty').style.display = history.length ? 'none' : 'block';
-  $('#historyCount').textContent = history.length ? String(history.length) : '';
+  refreshHistoryCount();
+}
+
+// Counter-only refresh — called from updateEntry() when an entry
+// transitions in/out of the in-flight state, without re-attaching the
+// whole feed.
+function refreshHistoryCount() {
+  const inFlight = history.filter(e => e.status === 'in-flight').length;
+  $('#historyCount').textContent = history.length
+    ? (inFlight ? `${history.length} (${inFlight} in flight)` : String(history.length))
+    : '';
 }
 
 $('#clearHistory').addEventListener('click', () => {
@@ -552,6 +600,8 @@ function updateEntry(entry) {
     response: entry.response,
     error:    entry.error,
   }, null, 2);
+
+  refreshHistoryCount();
 }
 
 function summarisePayload(payload) {
