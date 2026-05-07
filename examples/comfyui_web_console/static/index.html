@@ -90,6 +90,11 @@
     color: var(--muted); font-size: 12px; display: flex;
     align-items: center; gap: 4px;
   }
+  .submit-row input[type=number] {
+    width: 56px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 3px 6px; font: inherit;
+  }
   .status   { font-family: var(--mono); font-size: 12px; color: var(--muted); }
   .status.ok   { color: var(--green); }
   .status.warn { color: var(--amber); }
@@ -170,8 +175,9 @@
   }
   table.workers th { color: var(--muted); font-weight: 500;
                      text-transform: uppercase; font-size: 10px; }
-  .pill.LOADED      { background: rgba(74, 222, 128, 0.15); color: var(--green); }
-  .pill.LOADING     { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
+  .pill.LOADED, .pill.READY  { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .pill.LOADING              { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
+  .pill.BUSY                 { background: rgba(58, 139, 255, 0.15); color: var(--accent); }
   .pill.UNKNOWN, .pill.ERROR { background: rgba(248, 113, 113, 0.15); color: var(--red); }
 
   .empty { color: var(--muted); font-style: italic; padding: 16px 0; text-align: center; }
@@ -197,6 +203,9 @@
       <textarea id="workflow" spellcheck="false"></textarea>
       <div class="submit-row">
         <button id="submit">Submit /generate/sync</button>
+        <label title="Number of identical requests to fire concurrently. Useful for watching the autoscaler bring up workers under load.">
+          × <input type="number" id="burstN" min="1" max="100" step="1" value="1">
+        </label>
         <label title="Inline output assets as base64 in the response. Off by default — relies on the worker's S3 upload instead. Enable only if the endpoint has no S3 configured.">
           <input type="checkbox" id="base64"> inline base64 outputs (no S3)
         </label>
@@ -248,6 +257,7 @@ const saveState = () => {
     endpointId: $('#endpointId').value,
     workflow:   $('#workflow').value,
     base64:     $('#base64').checked,
+    burstN:     $('#burstN').value,
   }));
 };
 const loadState = () => {
@@ -256,10 +266,11 @@ const loadState = () => {
     if (s.apiKey)   $('#apiKey').value   = s.apiKey;
     if (s.workflow) $('#workflow').value = s.workflow;
     if (s.base64 !== undefined) $('#base64').checked = !!s.base64;
+    if (s.burstN)   $('#burstN').value   = s.burstN;
     return s.endpointId || '';
   } catch { return ''; }
 };
-['apiKey', 'workflow', 'base64'].forEach(id => {
+['apiKey', 'workflow', 'base64', 'burstN'].forEach(id => {
   document.getElementById(id).addEventListener('input', saveState);
   document.getElementById(id).addEventListener('change', saveState);
 });
@@ -378,15 +389,29 @@ async function pollOnce() {
   }
 }
 
+// The autoscaler reports `status` as a *lifecycle* label (LOADING ->
+// LOADED) that doesn't flip when the worker starts serving traffic —
+// a worker chewing through 4 in-flight jobs still says LOADED, which
+// reads as "idle" at a glance. Synthesise a single state column from
+// (status, reqs_working): BUSY when work is in flight, READY when
+// loaded and idle, otherwise the lifecycle label as-is. Original
+// status surfaces in a tooltip for debugging.
+function workerState(w) {
+  if (w.reqs_working > 0) return 'BUSY';
+  if (w.status === 'LOADED') return 'READY';
+  return w.status || 'UNKNOWN';
+}
+
 function renderWorkers(workers) {
   const tbody = $('#workersTable tbody');
   tbody.innerHTML = '';
   $('#workersEmpty').style.display = workers.length ? 'none' : 'block';
   for (const w of workers) {
+    const state = workerState(w);
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${w.id}</td>
-      <td><span class="pill ${escapeHtml(w.status)}">${escapeHtml(w.status)}</span></td>
+      <td><span class="pill ${escapeHtml(state)}" title="status=${escapeHtml(w.status)}">${escapeHtml(state)}</span></td>
       <td>${w.cur_load.toFixed(2)}</td>
       <td>${(w.measured_perf || w.cur_perf || w.perf || 0).toFixed(2)}</td>
       <td>${w.reqs_working}</td>
@@ -436,9 +461,7 @@ function renderHistory() {
   feed.innerHTML = '';
   for (const entry of history) feed.appendChild(entry.element);
   $('#historyEmpty').style.display = history.length ? 'none' : 'block';
-  $('#historyCount').textContent = history.length
-    ? `${history.length}/${MAX_HISTORY}`
-    : '';
+  $('#historyCount').textContent = history.length ? String(history.length) : '';
 }
 
 $('#clearHistory').addEventListener('click', () => {
@@ -599,24 +622,17 @@ function renderOutput(item, blobUrls, preferBase64) {
 }
 
 // ---- submit -----------------------------------------------------------
-$('#submit').addEventListener('click', async () => {
-  const apiKey = $('#apiKey').value.trim();
-  const epId   = $('#endpointId').value;
-  if (!apiKey || !epId) { setSubmit('pick an endpoint first', 'warn'); return; }
+//
+// One submission per entry. Burst mode fires N independently — each
+// gets its own entry and its own fetch, so the feed shows them
+// completing in arrival order and the autoscaler panel can be
+// watched filling out under load.
 
-  let payload;
-  try { payload = JSON.parse($('#workflow').value); }
-  catch (e) { setSubmit(`invalid JSON: ${e.message}`, 'err'); return; }
-
-  if ($('#base64').checked) {
-    payload.input = payload.input || {};
-    payload.input.return_outputs_as_base64 = true;
-  }
-
-  // Snapshot a deep copy so future edits to the textarea don't
-  // mutate this entry's recorded payload.
+async function submitOne(apiKey, endpointId, payload) {
+  // Each submission gets its OWN deep-cloned snapshot — otherwise N
+  // concurrent fetches all reference the same dict and the in-flight
+  // mutations leak across entries.
   const snapshot = JSON.parse(JSON.stringify(payload));
-
   const entry = {
     id:       nextId++,
     ts:       new Date(),
@@ -631,25 +647,59 @@ $('#submit').addEventListener('click', async () => {
   updateEntry(entry);
   pushEntry(entry);
 
-  $('#submit').disabled = true;
-  setSubmit('submitting…');
   const t0 = Date.now();
   try {
     const data = await postJSON('/api/submit', {
-      api_key: apiKey, endpoint_id: parseInt(epId, 10), payload,
+      api_key: apiKey, endpoint_id: endpointId, payload: snapshot,
     });
     entry.duration = (Date.now() - t0) / 1000;
     entry.response = data.response;
     entry.status   = 'completed';
-    setSubmit(`completed in ${entry.duration.toFixed(1)}s`, 'ok');
   } catch (err) {
     entry.duration = (Date.now() - t0) / 1000;
     entry.error    = err.message;
     entry.status   = 'failed';
-    setSubmit(`error: ${err.message}`, 'err');
   } finally {
     updateEntry(entry);
-    $('#submit').disabled = false;
+  }
+  return entry;
+}
+
+$('#submit').addEventListener('click', async () => {
+  const apiKey = $('#apiKey').value.trim();
+  const epId   = $('#endpointId').value;
+  if (!apiKey || !epId) { setSubmit('pick an endpoint first', 'warn'); return; }
+
+  let payload;
+  try { payload = JSON.parse($('#workflow').value); }
+  catch (e) { setSubmit(`invalid JSON: ${e.message}`, 'err'); return; }
+
+  if ($('#base64').checked) {
+    payload.input = payload.input || {};
+    payload.input.return_outputs_as_base64 = true;
+  }
+
+  const n = Math.max(1, Math.min(100, parseInt($('#burstN').value, 10) || 1));
+  const endpointId = parseInt(epId, 10);
+
+  setSubmit(n === 1 ? 'submitting…' : `firing ${n} concurrent…`);
+
+  const promises = [];
+  for (let i = 0; i < n; i++) {
+    promises.push(submitOne(apiKey, endpointId, payload));
+  }
+
+  const t0 = Date.now();
+  const results = await Promise.allSettled(promises);
+  const dt = ((Date.now() - t0) / 1000).toFixed(1);
+  const ok   = results.filter(r => r.status === 'fulfilled' && r.value.status === 'completed').length;
+  const fail = results.length - ok;
+  if (fail === 0) {
+    setSubmit(`${ok} completed in ${dt}s`, 'ok');
+  } else if (ok === 0) {
+    setSubmit(`${fail} failed in ${dt}s`, 'err');
+  } else {
+    setSubmit(`${ok} ok, ${fail} failed in ${dt}s`, 'warn');
   }
 });
 
