@@ -504,10 +504,16 @@ function updateEntry(entry) {
   entry._duration.textContent = entry.duration != null
     ? `· ${entry.duration.toFixed(1)}s` : '';
 
+  // Render the way this request was *submitted*. Each entry remembers
+  // whether the operator opted into inline base64, so reusing the
+  // toggle setting after submission can't override the original
+  // intent.
+  const preferBase64 = !!entry.payload?.input?.return_outputs_as_base64;
+
   entry._outputs.innerHTML = '';
   const outputs = extractOutputs(entry.response);
   for (const item of outputs) {
-    entry._outputs.appendChild(renderOutput(item, entry.blobUrls));
+    entry._outputs.appendChild(renderOutput(item, entry.blobUrls, preferBase64));
   }
   if (entry.error) {
     const err = document.createElement('div');
@@ -539,17 +545,23 @@ function extractOutputs(response) {
   return (response?.response?.output) || (response?.output) || [];
 }
 
-function renderOutput(item, blobUrls) {
+function renderOutput(item, blobUrls, preferBase64) {
   const card = document.createElement('div');
   card.className = 'card';
 
   const filename = item.filename || item.name || '(unnamed)';
   const mime     = mimeFor(filename);
+
+  // Source preference follows the operator's submit-time choice:
+  //   - if base64 was requested, the operator wants the inline copy
+  //     even when S3 also produced a URL. Honour that.
+  //   - otherwise prefer the worker-side URL (e.g. S3) so we don't
+  //     re-decode multi-MB data: blobs we never asked for.
   let src = null;
-  if (item.url) {
-    // Prefer the worker-side URL (e.g. S3) — already addressable, no
-    // megabyte payload through this server, browser can stream
-    // <video>/<audio> rather than holding the whole file in memory.
+  if (preferBase64 && item.data) {
+    src = base64ToBlobUrl(item.data, mime);
+    blobUrls.push(src);
+  } else if (item.url) {
     src = item.url;
   } else if (item.data) {
     src = base64ToBlobUrl(item.data, mime);
@@ -564,9 +576,6 @@ function renderOutput(item, blobUrls) {
     else                                media = Object.assign(document.createElement('a'),     { href: src, textContent: 'download', target: '_blank' });
     card.appendChild(media);
   } else {
-    // Worker returned a metadata entry with no addressable source —
-    // S3 isn't configured and base64 wasn't requested. Make it obvious
-    // rather than leaving an empty card.
     const note = document.createElement('div');
     note.className = 'status warn';
     note.style.padding = '12px 0';
@@ -579,7 +588,9 @@ function renderOutput(item, blobUrls) {
   meta.textContent = filename;
   card.appendChild(meta);
 
-  if (item.url && item.data) {
+  // When the operator opted into base64 *and* S3 is also configured,
+  // surface the URL as a side link so it's still reachable.
+  if (preferBase64 && item.url && item.data) {
     const a = document.createElement('a');
     a.href = item.url; a.target = '_blank'; a.textContent = 'open S3 url';
     card.appendChild(a);
