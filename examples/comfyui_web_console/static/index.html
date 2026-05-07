@@ -118,6 +118,10 @@
     border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer;
   }
   .entry-head button:hover { background: var(--panel-2); }
+  .entry-head button.remove {
+    color: var(--muted); padding: 1px 7px; font-size: 14px; line-height: 1;
+  }
+  .entry-head button.remove:hover { color: var(--red); border-color: var(--red); }
   .entry-summary {
     color: var(--muted); font-size: 12px; margin-top: 6px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -266,7 +270,11 @@ if (!$('#workflow').value) {
       "modifier": "Text2Image",
       "modifications": {
         "prompt": "a cat on a windowsill at sunset",
-        "width": 512, "height": 512, "steps": 20, "seed": 42
+        "width": 512, "height": 512, "steps": 20,
+        // The worker's BaseModifier replaces "__RANDOM_INT__" with a
+        // fresh random int per submission, so repeat-submits get a
+        // new seed (and thus skip ComfyUI's prompt cache).
+        "seed": "__RANDOM_INT__"
       }
     }
   }, null, 2);
@@ -451,11 +459,18 @@ function entryCard(entry) {
     <span class="duration"></span>
     <span class="grow"></span>
     <button class="reload" title="Load this payload back into the editor">Reload workflow</button>
+    <button class="remove" title="Remove this entry from the feed (frees memory)" aria-label="Remove">×</button>
   `;
   head.querySelector('.reload').addEventListener('click', () => {
     $('#workflow').value = JSON.stringify(entry.payload, null, 2);
     saveState();
     $('#workflow').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  head.querySelector('.remove').addEventListener('click', () => {
+    const idx = history.indexOf(entry);
+    if (idx >= 0) history.splice(idx, 1);
+    revokeEntry(entry);
+    renderHistory();
   });
   card.appendChild(head);
 
