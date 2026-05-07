@@ -193,7 +193,9 @@
       <textarea id="workflow" spellcheck="false"></textarea>
       <div class="submit-row">
         <button id="submit">Submit /generate/sync</button>
-        <label><input type="checkbox" id="base64" checked> request base64 outputs</label>
+        <label title="Inline output assets as base64 in the response. Off by default — relies on the worker's S3 upload instead. Enable only if the endpoint has no S3 configured.">
+          <input type="checkbox" id="base64"> inline base64 outputs (no S3)
+        </label>
         <span id="submitState" class="status"></span>
       </div>
     </div>
@@ -529,11 +531,14 @@ function renderOutput(item, blobUrls) {
   const filename = item.filename || item.name || '(unnamed)';
   const mime     = mimeFor(filename);
   let src = null;
-  if (item.data) {
+  if (item.url) {
+    // Prefer the worker-side URL (e.g. S3) — already addressable, no
+    // megabyte payload through this server, browser can stream
+    // <video>/<audio> rather than holding the whole file in memory.
+    src = item.url;
+  } else if (item.data) {
     src = base64ToBlobUrl(item.data, mime);
     blobUrls.push(src);
-  } else if (item.url) {
-    src = item.url;
   }
 
   if (src) {
@@ -543,6 +548,15 @@ function renderOutput(item, blobUrls) {
     else if (mime.startsWith('audio/')) media = Object.assign(document.createElement('audio'), { src, controls: true });
     else                                media = Object.assign(document.createElement('a'),     { href: src, textContent: 'download', target: '_blank' });
     card.appendChild(media);
+  } else {
+    // Worker returned a metadata entry with no addressable source —
+    // S3 isn't configured and base64 wasn't requested. Make it obvious
+    // rather than leaving an empty card.
+    const note = document.createElement('div');
+    note.className = 'status warn';
+    note.style.padding = '12px 0';
+    note.textContent = 'no source — enable "inline base64 outputs" or configure S3 on the worker';
+    card.appendChild(note);
   }
 
   const meta = document.createElement('div');

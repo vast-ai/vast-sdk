@@ -26,10 +26,20 @@ In the UI:
    throughput per worker. The completed request lands at the top of
    the request feed below.
 
-The "request base64 outputs" checkbox adds
-`input.return_outputs_as_base64=true` so generated assets come back
-inline without needing S3 set up. Toggle it off if your endpoint
-already uploads to S3 and you'd rather load from there.
+By default the console expects the worker to upload outputs to S3 and
+pulls the assets directly from the returned URL — much cheaper than
+shipping a base64-encoded video back through the local server.
+
+If your endpoint has no S3 configured, tick **inline base64 outputs**.
+That sets `input.return_outputs_as_base64=true` so the worker stuffs
+each asset into the response as a base64 string, which the console
+turns into a `Blob` + object URL for display. Useful for one-off
+local demos; avoid for video-heavy workflows where the encoding
+overhead is noticeable.
+
+When an output entry comes back without either a `url` or inline
+`data` (i.e. neither S3 nor base64), the card surfaces a hint instead
+of rendering blank.
 
 ## Outputs
 
