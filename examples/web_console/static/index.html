@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vast Serverless Web Console</title>
+<style>
+  :root {
+    --bg:        #0f1115;
+    --panel:     #1a1d24;
+    --border:    #262a33;
+    --text:      #e5e7eb;
+    --muted:     #8b91a0;
+    --accent:    #3a8bff;
+    --green:     #4ade80;
+    --amber:     #fbbf24;
+    --red:       #f87171;
+    --mono:      'SFMono-Regular', Menlo, Monaco, Consolas, 'Courier New', monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+  a { color: var(--accent); }
+  button { font: inherit; }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { font-size: 14px; font-weight: 600; margin: 0; flex: 0 0 auto; }
+  header .grow { flex: 1; }
+  header label { color: var(--muted); margin-right: 4px; font-size: 12px; }
+  header input, header select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font: inherit;
+  }
+  header input[type=text] { width: 240px; }
+  header input[type=password] { width: 280px; }
+  header button {
+    background: var(--accent); color: white; border: 0; border-radius: 4px;
+    padding: 5px 12px; cursor: pointer;
+  }
+  header button.ghost {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+  }
+  header button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  main {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    grid-template-rows: 1fr;
+    height: calc(100vh - 50px);
+  }
+  .work    { padding: 12px; overflow: auto; }
+  .sidebar { padding: 12px; border-left: 1px solid var(--border); overflow: auto; background: var(--panel); }
+
+  .section h2 {
+    margin: 0 0 8px 0; font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--muted); font-weight: 600;
+  }
+  .section { margin-bottom: 16px; }
+
+  textarea#workflow {
+    width: 100%; height: 240px; min-height: 160px; resize: vertical;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 8px; font-family: var(--mono); font-size: 12px;
+  }
+
+  .submit-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .submit-row button {
+    background: var(--accent); color: white; border: 0; border-radius: 4px;
+    padding: 6px 14px; cursor: pointer;
+  }
+  .submit-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .submit-row label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 4px; }
+  .status {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    margin-left: auto;
+  }
+  .status.ok    { color: var(--green); }
+  .status.warn  { color: var(--amber); }
+  .status.err   { color: var(--red); }
+
+  .outputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+  .outputs .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .outputs .card img, .outputs .card video, .outputs .card audio { width: 100%; border-radius: 2px; }
+  .outputs .card .meta { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .outputs .card a { font-size: 11px; }
+
+  details.raw {
+    margin-top: 12px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 8px;
+  }
+  details.raw pre {
+    font-family: var(--mono); font-size: 11px; margin: 6px 0 0 0; max-height: 280px; overflow: auto;
+    color: var(--muted);
+  }
+
+  table.workers {
+    width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px;
+  }
+  table.workers th, table.workers td {
+    padding: 4px 6px; text-align: left; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.workers th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 10px; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; }
+  .pill.LOADED      { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .pill.LOADING     { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
+  .pill.UNKNOWN, .pill.ERROR { background: rgba(248, 113, 113, 0.15); color: var(--red); }
+
+  .empty { color: var(--muted); font-style: italic; padding: 16px 0; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Vast Web Console</h1>
+  <label>API key</label>
+  <input type="password" id="apiKey" placeholder="VAST_API_KEY" autocomplete="off">
+  <label>Endpoint</label>
+  <select id="endpointId"><option value="">— pick —</option></select>
+  <button id="loadEndpoints" class="ghost">Load endpoints</button>
+  <span class="grow"></span>
+  <span id="connState" class="status">idle</span>
+</header>
+
+<main>
+  <section class="work">
+    <div class="section">
+      <h2>Workflow payload</h2>
+      <textarea id="workflow" spellcheck="false"></textarea>
+      <div class="submit-row">
+        <button id="submit">Submit /generate/sync</button>
+        <label><input type="checkbox" id="base64" checked> request base64 outputs</label>
+        <span id="submitState" class="status"></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Outputs</h2>
+      <div id="outputs" class="outputs"></div>
+      <div id="outputsEmpty" class="empty">No outputs yet — submit a workflow above.</div>
+      <details class="raw"><summary>Raw response</summary><pre id="rawResponse"></pre></details>
+    </div>
+  </section>
+
+  <aside class="sidebar">
+    <div class="section">
+      <h2>Workers <span id="workersStamp" class="status" style="float:right;"></span></h2>
+      <table class="workers" id="workersTable">
+        <thead>
+          <tr>
+            <th>id</th><th>status</th><th>load</th><th>perf</th><th>reqs</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="workersEmpty" class="empty">Pick an endpoint to start polling.</div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = sel => document.querySelector(sel);
+
+// ---- persistence: keep the operator's inputs across reloads ----------
+const STORAGE_KEY = 'vast.web_console.v1';
+const saveState = () => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    apiKey:     $('#apiKey').value,
+    endpointId: $('#endpointId').value,
+    workflow:   $('#workflow').value,
+    base64:     $('#base64').checked,
+  }));
+};
+const loadState = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    if (s.apiKey)   $('#apiKey').value = s.apiKey;
+    if (s.workflow) $('#workflow').value = s.workflow;
+    if (s.base64 !== undefined) $('#base64').checked = !!s.base64;
+    return s.endpointId || '';
+  } catch { return ''; }
+};
+['apiKey', 'workflow', 'base64'].forEach(id => {
+  document.getElementById(id).addEventListener('input', saveState);
+  document.getElementById(id).addEventListener('change', saveState);
+});
+
+// ---- default workflow placeholder ------------------------------------
+if (!$('#workflow').value) {
+  $('#workflow').value = JSON.stringify({
+    "input": {
+      "modifier": "Text2Image",
+      "modifications": {
+        "prompt": "a cat on a windowsill at sunset",
+        "width": 512, "height": 512, "steps": 20, "seed": 42
+      }
+    }
+  }, null, 2);
+}
+
+// ---- helpers ----------------------------------------------------------
+const setConn   = (msg, cls = '')  => { const el = $('#connState');   el.textContent = msg; el.className = 'status ' + cls; };
+const setSubmit = (msg, cls = '')  => { const el = $('#submitState'); el.textContent = msg; el.className = 'status ' + cls; };
+
+async function postJSON(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
+// ---- endpoint listing -------------------------------------------------
+$('#loadEndpoints').addEventListener('click', async () => {
+  const apiKey = $('#apiKey').value.trim();
+  if (!apiKey) { setConn('enter an API key first', 'warn'); return; }
+  try {
+    setConn('loading endpoints…');
+    const eps = await postJSON('/api/endpoints', { api_key: apiKey });
+    const sel = $('#endpointId');
+    sel.innerHTML = '<option value="">— pick —</option>';
+    for (const e of eps) {
+      const opt = document.createElement('option');
+      opt.value = e.id;
+      opt.textContent = `${e.name} (id=${e.id})`;
+      sel.appendChild(opt);
+    }
+    setConn(`${eps.length} endpoint(s)`, 'ok');
+    // restore prior selection if it's still in the list
+    const wanted = loadState();
+    if (wanted && [...sel.options].some(o => o.value == wanted)) {
+      sel.value = wanted;
+      sel.dispatchEvent(new Event('change'));
+    }
+  } catch (err) {
+    setConn(`error: ${err.message}`, 'err');
+  }
+});
+
+$('#endpointId').addEventListener('change', () => {
+  saveState();
+  startWorkerPolling();
+});
+
+// ---- worker polling ---------------------------------------------------
+let pollTimer = null;
+async function pollOnce() {
+  const apiKey = $('#apiKey').value.trim();
+  const epId   = $('#endpointId').value;
+  if (!apiKey || !epId) return;
+  try {
+    const workers = await postJSON('/api/workers', {
+      api_key: apiKey, endpoint_id: parseInt(epId, 10),
+    });
+    renderWorkers(workers);
+    $('#workersStamp').textContent = new Date().toLocaleTimeString();
+    $('#workersStamp').className = 'status ok';
+  } catch (err) {
+    $('#workersStamp').textContent = `error: ${err.message.slice(0, 60)}`;
+    $('#workersStamp').className = 'status err';
+  }
+}
+
+function renderWorkers(workers) {
+  const tbody = $('#workersTable tbody');
+  tbody.innerHTML = '';
+  $('#workersEmpty').style.display = workers.length ? 'none' : 'block';
+  for (const w of workers) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${w.id}</td>
+      <td><span class="pill ${escapeHtml(w.status)}">${escapeHtml(w.status)}</span></td>
+      <td>${w.cur_load.toFixed(2)}</td>
+      <td>${(w.measured_perf || w.cur_perf || w.perf || 0).toFixed(2)}</td>
+      <td>${w.reqs_working}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function startWorkerPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollOnce();
+  pollTimer = setInterval(pollOnce, 3000);
+}
+
+// ---- submit -----------------------------------------------------------
+$('#submit').addEventListener('click', async () => {
+  const apiKey = $('#apiKey').value.trim();
+  const epId   = $('#endpointId').value;
+  if (!apiKey || !epId) { setSubmit('pick an endpoint first', 'warn'); return; }
+
+  let payload;
+  try { payload = JSON.parse($('#workflow').value); }
+  catch (e) { setSubmit(`invalid JSON: ${e.message}`, 'err'); return; }
+
+  // Inject base64 opt-in into the worker payload — keeps localhost
+  // demos self-contained without an S3 setup. Operator can opt out.
+  if ($('#base64').checked) {
+    payload.input = payload.input || {};
+    payload.input.return_outputs_as_base64 = true;
+  }
+
+  $('#submit').disabled = true;
+  setSubmit('submitting…');
+  const t0 = Date.now();
+  try {
+    const data = await postJSON('/api/submit', {
+      api_key: apiKey, endpoint_id: parseInt(epId, 10), payload,
+    });
+    const dt = ((Date.now() - t0) / 1000).toFixed(1);
+    setSubmit(`completed in ${dt}s`, 'ok');
+    renderResponse(data.response);
+  } catch (err) {
+    setSubmit(`error: ${err.message}`, 'err');
+  } finally {
+    $('#submit').disabled = false;
+  }
+});
+
+// ---- response rendering ----------------------------------------------
+function renderResponse(response) {
+  $('#rawResponse').textContent = JSON.stringify(response, null, 2);
+
+  // Outputs come back at response.response.output for the standard
+  // Vast worker shape; tolerate other layouts too.
+  const outputs =
+    (response?.response?.output) ||
+    (response?.output) ||
+    [];
+
+  const grid = $('#outputs');
+  grid.innerHTML = '';
+  $('#outputsEmpty').style.display = outputs.length ? 'none' : 'block';
+
+  for (const item of outputs) {
+    grid.appendChild(renderOutput(item));
+  }
+}
+
+function renderOutput(item) {
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  const filename = item.filename || item.name || '(unnamed)';
+  const data     = item.data;        // base64 (when return_outputs_as_base64)
+  const url      = item.url;         // remote (S3 / webhook)
+  const ext      = (filename.split('.').pop() || '').toLowerCase();
+
+  const mime = (
+    ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif'].includes(ext) ? `image/${ext === 'jpg' ? 'jpeg' : ext}` :
+    ['mp4', 'webm', 'mov'].includes(ext)                        ? `video/${ext === 'mov' ? 'quicktime' : ext}` :
+    ['mp3', 'wav', 'ogg', 'flac'].includes(ext)                 ? `audio/${ext}` :
+    ''
+  );
+
+  let media;
+  const src = data ? `data:${mime || 'application/octet-stream'};base64,${data}` : url;
+  if (src) {
+    if (mime.startsWith('image/'))      media = Object.assign(document.createElement('img'),   { src });
+    else if (mime.startsWith('video/')) media = Object.assign(document.createElement('video'), { src, controls: true, autoplay: false });
+    else if (mime.startsWith('audio/')) media = Object.assign(document.createElement('audio'), { src, controls: true });
+    else                                media = Object.assign(document.createElement('a'),     { href: src, textContent: 'download', target: '_blank' });
+    card.appendChild(media);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = filename;
+  card.appendChild(meta);
+
+  if (url && data) {  // both — give the operator a link to the S3 copy
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.textContent = 'open S3 url';
+    card.appendChild(a);
+  }
+  return card;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// ---- bootstrap --------------------------------------------------------
+loadState();
+</script>
+</body>
+</html>
