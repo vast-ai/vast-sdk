@@ -40,7 +40,6 @@ if (_SDK_ROOT / "vastai" / "__init__.py").is_file():
 
 from vastai import Serverless
 from vastai.serverless.client.endpoint import Endpoint
-from vastai.serverless.client.request_status import RequestStatus as _SdkRequestStatus
 
 # Bound on a single /api/submit, in seconds. Without this the SDK
 # retries 5xx (e.g. a worker that errors on every request because the
@@ -63,27 +62,6 @@ log = logging.getLogger("comfyui_web_console")
 # Quieter SDK chatter on the steady-state poll path. Connection
 # lifecycle and endpoint listings still log on first use.
 logging.getLogger("vastai").setLevel(logging.WARNING)
-
-# Diagnostic at startup: confirm which SDK source the import system
-# resolved (auto-detected local checkout vs. installed wheel) and
-# whether it supports the tracker.worker_url field the
-# /api/status endpoint reads. Saves a head-scratch when a stale
-# wheel is winning the import race.
-#
-# Plain print() — the python logging tree gets reconfigured by
-# uvicorn at startup and our `comfyui_web_console` logger output
-# was getting swallowed before uvicorn took over. print() is
-# bulletproof against that.
-import vastai as _vastai
-_HAS_WORKER_URL = "worker_url" in _SdkRequestStatus.__dataclass_fields__
-print(
-    f"[comfyui_web_console] vastai SDK loaded from: "
-    f"{Path(_vastai.__file__).parent}  "
-    f"(tracker.worker_url support: "
-    f"{'yes' if _HAS_WORKER_URL else 'NO — install / source needs updating'})",
-    file=sys.stderr,
-    flush=True,
-)
 
 STATIC_DIR = Path(__file__).parent / "static"
 

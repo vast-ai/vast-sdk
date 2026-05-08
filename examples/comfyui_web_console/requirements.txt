@@ -1,6 +1,7 @@
-vastai-sdk>=0.3.0
-# Listed explicitly even though current SDK main pulls them as direct
-# deps — published wheels lag, and pinning here keeps the example
-# self-contained against whatever SDK release is on PyPI.
+vastai-sdk
+# Listed explicitly because current published vastai-sdk wheels
+# don't pull these in transitively. Once a future SDK release
+# declares them as direct deps these lines become redundant —
+# harmless to leave.
 fastapi>=0.110
 uvicorn[standard]>=0.24
