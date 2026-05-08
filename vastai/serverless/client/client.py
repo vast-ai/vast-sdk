@@ -92,6 +92,14 @@ class ServerlessRequest(asyncio.Future):
     def req_idx(self, value):
         self.tracker.req_idx = value
 
+    @property
+    def worker_url(self):
+        return self.tracker.worker_url
+
+    @worker_url.setter
+    def worker_url(self, value):
+        self.tracker.worker_url = value
+
     def then(self, callback) -> "ServerlessRequest":
         def _done(fut):
             if fut.exception() is not None:
@@ -732,6 +740,13 @@ class _ServerlessBase(Generic[R]):
                         worker_url = session.url
                         auth_data = session.auth_data
                         session_id = session.session_id
+
+                # Publish the worker URL on the tracker so observers
+                # (progress UIs, dashboards) can see which worker is
+                # handling the request before the worker's response
+                # comes back. Re-publishes on retry so a re-routed
+                # request shows the new worker.
+                tracker.worker_url = worker_url
 
                 payload = worker_payload
                 worker_request_body = {

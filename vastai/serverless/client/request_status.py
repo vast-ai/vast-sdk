@@ -11,3 +11,8 @@ class RequestStatus:
     start_time: Optional[float] = None
     complete_time: Optional[float] = None
     req_idx: int = 0
+    # Worker URL once the autoscaler has allocated one. Updated each
+    # time the request lands on a worker, including on retry. Lets
+    # observers (e.g. dashboards / progress UIs) show which worker
+    # picked up the job before the response itself comes back.
+    worker_url: Optional[str] = None
