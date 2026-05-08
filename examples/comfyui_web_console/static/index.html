@@ -682,13 +682,23 @@ function updateEntry(entry) {
     entry._duration.textContent = '';
   }
 
-  // Worker URL comes back on the SDK's per-request result dict (as
-  // `url`); show its host so the operator can correlate entries with
-  // the worker pool. Workers don't expose host/url in the autoscaler's
-  // worker listing, so we can't map this to a numeric worker.id —
-  // host is the most stable identifier we have here.
-  const host = workerHost(entry.response?.url);
-  entry._via.innerHTML = host ? `via <b>${escapeHtml(host)}</b>` : '';
+  // Worker URL: prefer the early signal from the in-flight status
+  // poller (`entry.workerUrl`, set as soon as the autoscaler routes
+  // the job), then fall back to the URL on the completed response.
+  // While in-flight with no URL yet, show "waiting for worker" so
+  // the operator sees the request hasn't been silently lost.
+  // Workers don't expose host/url in the autoscaler's worker
+  // listing, so we can't map this to a numeric worker.id — host is
+  // the most stable identifier we have here.
+  const url  = entry.workerUrl || entry.response?.url;
+  const host = workerHost(url);
+  if (host) {
+    entry._via.innerHTML = `via <b>${escapeHtml(host)}</b>`;
+  } else if (entry.status === 'in-flight') {
+    entry._via.innerHTML = `<i>waiting for worker…</i>`;
+  } else {
+    entry._via.innerHTML = '';
+  }
 
   // Render the way this request was *submitted*. Each entry remembers
   // whether the operator opted into inline base64, so reusing the
@@ -813,26 +823,41 @@ async function submitOne(apiKey, endpointId, payload) {
   // mutations leak across entries.
   const snapshot = JSON.parse(JSON.stringify(payload));
   const abort = new AbortController();
+  // Browser-supplied id the server registers as the tracking key for
+  // /api/status. Doesn't have to be globally unique — just unique
+  // for the lifetime of this submission.
+  const tracking_id = `c${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const entry = {
-    id:       nextId++,
-    ts:       new Date(),
-    payload:  snapshot,
-    status:   'in-flight',
-    duration: null,
-    response: null,
-    error:    null,
-    blobUrls: [],
-    abort,                  // exposed for the per-entry Cancel button
+    id:           nextId++,
+    tracking_id,
+    ts:           new Date(),
+    payload:      snapshot,
+    status:       'in-flight',
+    duration:     null,
+    response:     null,
+    error:        null,
+    blobUrls:     [],
+    workerUrl:    null,        // populated by the status poller
+    abort,                     // exposed for the per-entry Cancel button
   };
   entryCard(entry);
   updateEntry(entry);
   pushEntry(entry);
 
+  // Poll /api/status while in-flight to learn the worker URL the
+  // moment the autoscaler routes the job (rather than waiting for
+  // the whole response). Stops itself when the entry leaves
+  // in-flight or once we've captured a URL.
+  pollWorkerUrl(entry);
+
   const t0 = Date.now();
   try {
     const data = await postJSON(
       '/api/submit',
-      { api_key: apiKey, endpoint_id: endpointId, payload: snapshot },
+      {
+        api_key: apiKey, endpoint_id: endpointId, payload: snapshot,
+        tracking_id,
+      },
       { signal: abort.signal },
     );
     entry.duration = (Date.now() - t0) / 1000;
@@ -851,6 +876,27 @@ async function submitOne(apiKey, endpointId, payload) {
     updateEntry(entry);
   }
   return entry;
+}
+
+async function pollWorkerUrl(entry) {
+  // Cheap poll cadence — workers usually route within a few seconds,
+  // and once we've captured the URL we stop. Skips when older SDKs
+  // don't populate worker_url (the field comes back null and we just
+  // keep showing "waiting for worker" until the response lands).
+  while (entry.status === 'in-flight' && !entry.workerUrl) {
+    await new Promise(r => setTimeout(r, 1000));
+    if (entry.status !== 'in-flight') return;
+    try {
+      const r = await fetch(`/api/status?id=${encodeURIComponent(entry.tracking_id)}`);
+      if (!r.ok) continue;          // 404 = no longer registered (terminal soon)
+      const data = await r.json();
+      if (data.worker_url) {
+        entry.workerUrl = data.worker_url;
+        updateEntry(entry);
+        return;
+      }
+    } catch { /* network blip — try again next tick */ }
+  }
 }
 
 $('#submit').addEventListener('click', async () => {

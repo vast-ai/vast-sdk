@@ -38,6 +38,14 @@ from vastai.serverless.client.endpoint import Endpoint
 # Configurable so long-running workflows aren't capped.
 SUBMIT_TIMEOUT_S = float(os.getenv("SUBMIT_TIMEOUT_S", "300"))
 
+# Per-process registry of in-flight ServerlessRequest objects keyed
+# by a browser-supplied tracking_id. The submit endpoint stashes the
+# request here for the duration of the call; /api/status reads
+# tracker.worker_url out of it so the UI can show "via <host>" the
+# moment the autoscaler routes the job, rather than waiting for the
+# response. Cleared on completion to keep memory bounded.
+_inflight: Dict[str, "object"] = {}
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("comfyui_web_console")
 
@@ -203,7 +211,10 @@ async def submit_request(req: Request) -> JSONResponse:
             "endpoint_id": 12345,
             "route":       "/generate/sync",     # optional, defaults shown
             "payload":     { ... worker JSON ... },
-            "cost":        100                   # optional
+            "cost":        100,                  # optional
+            "tracking_id": "abc123"              # optional, browser-supplied
+                                                  # — exposes the in-flight tracker
+                                                  # via /api/status?id=...
         }
     """
     body         = await req.json()
@@ -212,15 +223,29 @@ async def submit_request(req: Request) -> JSONResponse:
     route        = body.get("route", "/generate/sync")
     payload      = body.get("payload") or {}
     cost         = int(body.get("cost", 100))
+    tracking_id  = body.get("tracking_id")
 
     endpoint = await _endpoint(api_key, endpoint_id)
     log.info("submit -> endpoint=%s route=%s", endpoint.name, route)
+
+    # Hand the SDK a ServerlessRequest we control so we can read
+    # tracker.worker_url out of it while we're awaiting the result.
+    # `endpoint.request` accepts a `serverless_request=` parameter
+    # for exactly this kind of observation.
+    from vastai.serverless.client.client import ServerlessRequest
+    sreq = ServerlessRequest()
+    if tracking_id:
+        _inflight[tracking_id] = sreq
+
     try:
         # Pass timeout through to the SDK so a worker that
         # consistently errors (5xx => retryable) can't park us in an
         # unbounded retry loop. asyncio.TimeoutError surfaces as 504
         # so the browser entry transitions to failed cleanly.
-        response = await endpoint.request(route, payload, cost=cost, timeout=SUBMIT_TIMEOUT_S)
+        response = await endpoint.request(
+            route, payload, cost=cost, timeout=SUBMIT_TIMEOUT_S,
+            serverless_request=sreq,
+        )
     except asyncio.TimeoutError:
         log.warning("submit timed out after %.0fs", SUBMIT_TIMEOUT_S)
         raise HTTPException(
@@ -230,7 +255,35 @@ async def submit_request(req: Request) -> JSONResponse:
     except Exception as exc:
         log.exception("submit failed")
         raise HTTPException(status_code=502, detail=f"endpoint request failed: {exc}")
+    finally:
+        if tracking_id:
+            _inflight.pop(tracking_id, None)
     return JSONResponse({"response": response})
+
+
+@app.get("/api/status")
+async def request_status(id: str) -> JSONResponse:
+    """Snapshot of an in-flight submission's tracker.
+
+    The browser polls this while a request is in-flight to surface
+    the worker URL the moment the autoscaler routes the job — the
+    `tracker.worker_url` field is written by `_do_request` before
+    the SDK posts to the worker, so the UI can replace its
+    "waiting for worker" placeholder with "via <host>" without
+    waiting for the response itself.
+
+    Returns 404 once the request completes (or was never registered)
+    — terminal worker_url comes back inside the submit response.
+    """
+    sreq = _inflight.get(id)
+    if sreq is None:
+        raise HTTPException(status_code=404, detail="not in-flight")
+    return JSONResponse({
+        "status":     getattr(sreq, "status", None),
+        # `worker_url` is None on SDK builds older than the
+        # `RequestStatus.worker_url` change; the UI tolerates that.
+        "worker_url": getattr(sreq, "worker_url", None),
+    })
 
 
 # ---------- main ------------------------------------------------------------
