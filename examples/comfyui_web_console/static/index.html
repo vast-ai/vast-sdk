@@ -614,6 +614,30 @@ function entryCard(entry) {
   return card;
 }
 
+// Walk parents until we find one whose computed `overflow-y` is
+// `auto` or `scroll` and whose content overflows. Used by media
+// elements to manually forward wheel events when their native
+// controls would otherwise eat them.
+function findScrollingAncestor(el) {
+  let n = el && el.parentElement;
+  while (n) {
+    const oy = getComputedStyle(n).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) {
+      return n;
+    }
+    n = n.parentElement;
+  }
+  return null;
+}
+
+function forwardWheelToScroller(e) {
+  if (e.deltaY === 0 && e.deltaX === 0) return;
+  const scroller = findScrollingAncestor(e.currentTarget);
+  if (!scroller) return;
+  e.preventDefault();
+  scroller.scrollBy({ top: e.deltaY, left: e.deltaX, behavior: 'auto' });
+}
+
 // host[:port] from a full URL — best-effort, returns null on parse
 // failure. Used to annotate completed entries with the worker the
 // SDK actually routed to.
@@ -744,6 +768,14 @@ function renderOutput(item, blobUrls, preferBase64) {
     else if (mime.startsWith('video/')) media = Object.assign(document.createElement('video'), { src, controls: true });
     else if (mime.startsWith('audio/')) media = Object.assign(document.createElement('audio'), { src, controls: true });
     else                                media = Object.assign(document.createElement('a'),     { href: src, textContent: 'download', target: '_blank' });
+    if (media.tagName === 'VIDEO' || media.tagName === 'AUDIO') {
+      // Some browsers (notably Chrome / Safari on macOS) let the
+      // native media-element controls swallow wheel events, so a
+      // scroll over a video doesn't reach the .history container
+      // and the page appears stuck. Forward the wheel manually to
+      // the nearest scrolling ancestor.
+      media.addEventListener('wheel', forwardWheelToScroller, { passive: false });
+    }
     card.appendChild(media);
   } else {
     const note = document.createElement('div');
