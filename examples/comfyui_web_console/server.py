@@ -20,13 +20,23 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+# When running from a vast-sdk checkout, prefer the local SDK source
+# over whatever's on the PYPI index. Lets the example pick up
+# in-progress SDK changes (e.g. tracker.worker_url) without the
+# operator having to remember to `pip install -e` first. Skipped
+# when the example is shipped standalone (no sibling vastai/ dir).
+_SDK_ROOT = Path(__file__).parent.parent.parent
+if (_SDK_ROOT / "vastai" / "__init__.py").is_file():
+    sys.path.insert(0, str(_SDK_ROOT))
 
 from vastai import Serverless
 from vastai.serverless.client.endpoint import Endpoint
@@ -261,29 +271,39 @@ async def submit_request(req: Request) -> JSONResponse:
     return JSONResponse({"response": response})
 
 
-@app.get("/api/status")
-async def request_status(id: str) -> JSONResponse:
-    """Snapshot of an in-flight submission's tracker.
+@app.post("/api/status")
+async def request_status_batch(req: Request) -> JSONResponse:
+    """Batched snapshot of in-flight submissions' trackers.
 
-    The browser polls this while a request is in-flight to surface
-    the worker URL the moment the autoscaler routes the job — the
-    `tracker.worker_url` field is written by `_do_request` before
-    the SDK posts to the worker, so the UI can replace its
+    Body shape:  {"ids": ["c1...", "c2..."]}
+
+    The browser polls this while *any* request is in-flight to
+    surface the worker URL the moment the autoscaler routes the job
+    — `tracker.worker_url` is written by `_do_request` before the
+    SDK posts to the worker, so the UI can replace its
     "waiting for worker" placeholder with "via <host>" without
     waiting for the response itself.
 
-    Returns 404 once the request completes (or was never registered)
-    — terminal worker_url comes back inside the submit response.
+    Single batched call rather than one-per-entry so a 50-burst
+    doesn't generate 50 polls/sec; entries that have completed
+    between the browser preparing the list and the server seeing
+    the request are simply absent from the response (terminal
+    worker_url comes back inside the submit response itself).
     """
-    sreq = _inflight.get(id)
-    if sreq is None:
-        raise HTTPException(status_code=404, detail="not in-flight")
-    return JSONResponse({
-        "status":     getattr(sreq, "status", None),
-        # `worker_url` is None on SDK builds older than the
-        # `RequestStatus.worker_url` change; the UI tolerates that.
-        "worker_url": getattr(sreq, "worker_url", None),
-    })
+    body = await req.json()
+    ids: List[str] = list(body.get("ids", []))
+    out: Dict[str, dict] = {}
+    for tid in ids:
+        sreq = _inflight.get(tid)
+        if sreq is None:
+            continue
+        out[tid] = {
+            "status":     getattr(sreq, "status", None),
+            # `worker_url` is None on SDK builds older than the
+            # tracker.worker_url change; the UI tolerates that.
+            "worker_url": getattr(sreq, "worker_url", None),
+        }
+    return JSONResponse(out)
 
 
 # ---------- main ------------------------------------------------------------

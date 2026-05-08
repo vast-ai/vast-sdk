@@ -844,11 +844,10 @@ async function submitOne(apiKey, endpointId, payload) {
   updateEntry(entry);
   pushEntry(entry);
 
-  // Poll /api/status while in-flight to learn the worker URL the
-  // moment the autoscaler routes the job (rather than waiting for
-  // the whole response). Stops itself when the entry leaves
-  // in-flight or once we've captured a URL.
-  pollWorkerUrl(entry);
+  // Poke the shared in-flight poller — kicks off a single batched
+  // /api/status loop that covers every in-flight entry, rather than
+  // a per-entry timer (a 50-burst would otherwise mean 50 fetches/s).
+  ensureStatusPoller();
 
   const t0 = Date.now();
   try {
@@ -878,25 +877,44 @@ async function submitOne(apiKey, endpointId, payload) {
   return entry;
 }
 
-async function pollWorkerUrl(entry) {
-  // Cheap poll cadence — workers usually route within a few seconds,
-  // and once we've captured the URL we stop. Skips when older SDKs
-  // don't populate worker_url (the field comes back null and we just
-  // keep showing "waiting for worker" until the response lands).
-  while (entry.status === 'in-flight' && !entry.workerUrl) {
-    await new Promise(r => setTimeout(r, 1000));
-    if (entry.status !== 'in-flight') return;
+// Single shared status poller. Asks the server about every entry
+// that's still in-flight and hasn't yet captured a worker URL. Runs
+// only while there's work to track; sleeps the loop otherwise.
+const STATUS_POLL_INTERVAL_MS = 2000;
+let statusPollerActive = false;
+
+function ensureStatusPoller() {
+  if (statusPollerActive) return;
+  statusPollerActive = true;
+  (async () => {
     try {
-      const r = await fetch(`/api/status?id=${encodeURIComponent(entry.tracking_id)}`);
-      if (!r.ok) continue;          // 404 = no longer registered (terminal soon)
-      const data = await r.json();
-      if (data.worker_url) {
-        entry.workerUrl = data.worker_url;
-        updateEntry(entry);
-        return;
+      while (true) {
+        const pending = history.filter(e =>
+          e.status === 'in-flight' && !e.workerUrl && e.tracking_id);
+        if (pending.length === 0) return;
+        try {
+          const r = await fetch('/api/status', {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json'},
+            body:    JSON.stringify({ ids: pending.map(e => e.tracking_id) }),
+          });
+          if (r.ok) {
+            const data = await r.json();
+            for (const e of pending) {
+              const s = data[e.tracking_id];
+              if (s && s.worker_url && !e.workerUrl) {
+                e.workerUrl = s.worker_url;
+                updateEntry(e);
+              }
+            }
+          }
+        } catch { /* network blip — try again next tick */ }
+        await new Promise(r => setTimeout(r, STATUS_POLL_INTERVAL_MS));
       }
-    } catch { /* network blip — try again next tick */ }
-  }
+    } finally {
+      statusPollerActive = false;
+    }
+  })();
 }
 
 $('#submit').addEventListener('click', async () => {
