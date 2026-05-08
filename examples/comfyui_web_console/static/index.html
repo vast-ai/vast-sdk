@@ -580,13 +580,37 @@ function workerHost(url) {
   catch { return null; }
 }
 
+// Surfaces the api-wrapper's `Result.timings` field as a compact
+// label like `2.0s (pre 0.0 · gen 1.5 · post 0.5)`. Older api-wrappers
+// don't populate this; the helper returns null and the caller falls
+// back to the browser-side fetch duration.
+function entryTimingsLabel(entry) {
+  // Server response is double-nested: FastAPI wraps SDK's dict, SDK
+  // wraps the model's body. Try both shapes for robustness.
+  const t = entry.response?.response?.timings || entry.response?.timings;
+  if (!t || typeof t.total_ms !== 'number') return null;
+  const sec = ms => (ms / 1000).toFixed(1);
+  return `${sec(t.total_ms)}s (pre ${sec(t.preprocess_ms || 0)} · ` +
+         `gen ${sec(t.generation_ms || 0)} · post ${sec(t.postprocess_ms || 0)})`;
+}
+
 function updateEntry(entry) {
   entry.element.className = 'entry ' + entry.status;
   const pill = entry._head.querySelector('.pill');
   pill.className   = 'pill ' + entry.status;
   pill.textContent = entry.status;
-  entry._duration.textContent = entry.duration != null
-    ? `· ${entry.duration.toFixed(1)}s` : '';
+  // Prefer the api-wrapper's server-side stage breakdown when
+  // available — it's authoritative and shows where the time went.
+  // Fall back to the browser-side fetch duration for older wrappers
+  // (or in-flight entries that haven't completed yet).
+  const timings = entryTimingsLabel(entry);
+  if (timings) {
+    entry._duration.textContent = `· ${timings}`;
+  } else if (entry.duration != null) {
+    entry._duration.textContent = `· ${entry.duration.toFixed(1)}s`;
+  } else {
+    entry._duration.textContent = '';
+  }
 
   // Worker URL comes back on the SDK's per-request result dict (as
   // `url`); show its host so the operator can correlate entries with
