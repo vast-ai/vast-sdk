@@ -245,10 +245,13 @@
 const $ = sel => document.querySelector(sel);
 
 // ---- configuration ---------------------------------------------------
-// Cap on how many past requests stay rendered. Each entry can hold
-// several MB of inline base64 output blobs; eviction explicitly
-// revokes their object URLs so the browser can reclaim memory.
-const MAX_HISTORY = 20;
+// Cap on how many *completed* past requests stay rendered. Each entry
+// can hold several MB of inline base64 output blobs; eviction
+// explicitly revokes their object URLs so the browser can reclaim
+// memory. In-flight entries are exempt — they haven't allocated any
+// blobs yet, and dropping them mid-burst would erase the operator's
+// only signal that work is in progress.
+const MAX_HISTORY = 50;
 
 // Worker poll cadence. The autoscaler rate-limits
 // get_endpoint_workers at ~1 req/s — go a bit slower than that to
@@ -479,10 +482,33 @@ const history = [];
 
 function pushEntry(entry) {
   history.unshift(entry);
-  while (history.length > MAX_HISTORY) {
-    revokeEntry(history.pop());
+  // Insert at the top of the feed directly rather than re-rendering
+  // the entire history — bursts of 50+ requests would otherwise mean
+  // 50 full DOM rebuilds.
+  const feed = $('#historyFeed');
+  feed.insertBefore(entry.element, feed.firstChild);
+  $('#historyEmpty').style.display = 'none';
+  refreshHistoryCount();
+  // Eviction only counts completed entries (see _trim_completed).
+  // New in-flight pushes are no-ops; only a completion transition
+  // can push us over the cap.
+  _trim_completed();
+}
+
+function _trim_completed() {
+  let completed = 0;
+  for (const e of history) if (e.status !== 'in-flight') completed++;
+  if (completed <= MAX_HISTORY) return;
+  // Walk from the oldest end (history is newest-first), evicting
+  // completed entries until we're at the cap. In-flight entries are
+  // skipped so a 50-burst stays fully visible during the burst.
+  for (let i = history.length - 1; i >= 0 && completed > MAX_HISTORY; i--) {
+    if (history[i].status !== 'in-flight') {
+      const [evicted] = history.splice(i, 1);
+      revokeEntry(evicted);  // also detaches the DOM node
+      completed--;
+    }
   }
-  renderHistory();
 }
 
 function revokeEntry(entry) {
@@ -647,6 +673,12 @@ function updateEntry(entry) {
   }, null, 2);
 
   refreshHistoryCount();
+  // An entry transitioning out of in-flight may push the completed
+  // count over the cap; trim now that the just-completed entry is
+  // counted. Cheap no-op when we're under the cap.
+  if (entry.status !== 'in-flight') {
+    _trim_completed();
+  }
 }
 
 function summarisePayload(payload) {
