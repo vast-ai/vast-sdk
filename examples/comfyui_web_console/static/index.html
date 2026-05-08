@@ -95,6 +95,13 @@
     border: 1px solid var(--border); border-radius: 4px;
     padding: 3px 6px; font: inherit;
   }
+  .submit-hint {
+    margin-top: 6px; color: var(--muted); font-size: 11px;
+  }
+  .submit-hint code {
+    background: var(--panel-2); padding: 1px 4px; border-radius: 3px;
+    font-family: var(--mono); font-size: 10px; color: var(--text);
+  }
   .status   { font-family: var(--mono); font-size: 12px; color: var(--muted); }
   .status.ok   { color: var(--green); }
   .status.warn { color: var(--amber); }
@@ -212,6 +219,10 @@
           <input type="checkbox" id="base64"> inline base64 outputs (no S3)
         </label>
         <span id="submitState" class="status"></span>
+      </div>
+      <div class="submit-hint">
+        Paste a full payload (<code>{"input": {…}}</code>) or just a bare ComfyUI API workflow.
+        Bare workflows are auto-wrapped as <code>{"input": {"workflow_json": …}}</code>.
       </div>
     </div>
 
@@ -801,6 +812,17 @@ $('#submit').addEventListener('click', async () => {
   try { payload = JSON.parse($('#workflow').value); }
   catch (e) { setSubmit(`invalid JSON: ${e.message}`, 'err'); return; }
 
+  // Auto-wrap bare ComfyUI workflows. The SDK expects
+  // `{input: {workflow_json: ...}}` (or `{input: {modifier: ...}}` for
+  // built-in modifiers); pasting just the workflow nodes is by far
+  // the more common operator action, so detect that shape and wrap
+  // automatically.
+  let autoWrapped = false;
+  if (typeof payload.input !== 'object' || payload.input === null) {
+    payload = { input: { workflow_json: payload } };
+    autoWrapped = true;
+  }
+
   if ($('#base64').checked) {
     payload.input = payload.input || {};
     payload.input.return_outputs_as_base64 = true;
@@ -809,7 +831,8 @@ $('#submit').addEventListener('click', async () => {
   const n = Math.max(1, Math.min(100, parseInt($('#burstN').value, 10) || 1));
   const endpointId = parseInt(epId, 10);
 
-  setSubmit(n === 1 ? 'submitting…' : `firing ${n} concurrent…`);
+  const wrappedTag = autoWrapped ? ' [auto-wrapped]' : '';
+  setSubmit((n === 1 ? 'submitting…' : `firing ${n} concurrent…`) + wrappedTag);
 
   const promises = [];
   for (let i = 0; i < n; i++) {
