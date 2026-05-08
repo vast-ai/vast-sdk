@@ -16,6 +16,7 @@ holding it in memory, so multiple users on the same host don't share
 credentials.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -29,6 +30,13 @@ from fastapi.staticfiles import StaticFiles
 
 from vastai import Serverless
 from vastai.serverless.client.endpoint import Endpoint
+
+# Bound on a single /api/submit, in seconds. Without this the SDK
+# retries 5xx (e.g. a worker that errors on every request because the
+# payload was sent to the wrong queue) until eternity, and the
+# browser fetch never resolves — entries stay "in-flight" forever.
+# Configurable so long-running workflows aren't capped.
+SUBMIT_TIMEOUT_S = float(os.getenv("SUBMIT_TIMEOUT_S", "300"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("comfyui_web_console")
@@ -208,7 +216,17 @@ async def submit_request(req: Request) -> JSONResponse:
     endpoint = await _endpoint(api_key, endpoint_id)
     log.info("submit -> endpoint=%s route=%s", endpoint.name, route)
     try:
-        response = await endpoint.request(route, payload, cost=cost)
+        # Pass timeout through to the SDK so a worker that
+        # consistently errors (5xx => retryable) can't park us in an
+        # unbounded retry loop. asyncio.TimeoutError surfaces as 504
+        # so the browser entry transitions to failed cleanly.
+        response = await endpoint.request(route, payload, cost=cost, timeout=SUBMIT_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.warning("submit timed out after %.0fs", SUBMIT_TIMEOUT_S)
+        raise HTTPException(
+            status_code=504,
+            detail=f"endpoint request timed out after {SUBMIT_TIMEOUT_S:.0f}s",
+        )
     except Exception as exc:
         log.exception("submit failed")
         raise HTTPException(status_code=502, detail=f"endpoint request failed: {exc}")

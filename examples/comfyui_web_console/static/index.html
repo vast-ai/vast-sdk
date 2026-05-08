@@ -147,6 +147,7 @@
   .pill.completed { background: rgba(74, 222, 128, 0.15); color: var(--green); }
   .pill.in-flight { background: rgba(58, 139, 255, 0.15); color: var(--accent); }
   .pill.failed    { background: rgba(248, 113, 113, 0.15); color: var(--red); }
+  .pill.cancelled { background: rgba(139, 145, 160, 0.15); color: var(--muted); }
 
   .outputs {
     display: grid;
@@ -318,11 +319,12 @@ if (!$('#workflow').value) {
 const setConn   = (msg, cls = '')  => { const el = $('#connState');   el.textContent = msg; el.className = 'status ' + cls; };
 const setSubmit = (msg, cls = '')  => { const el = $('#submitState'); el.textContent = msg; el.className = 'status ' + cls; };
 
-async function postJSON(url, body) {
+async function postJSON(url, body, opts = {}) {
   const resp = await fetch(url, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
+    signal: opts.signal,
   });
   if (!resp.ok) {
     const text = await resp.text();
@@ -569,6 +571,7 @@ function entryCard(entry) {
     <span class="duration"></span>
     <span class="via"></span>
     <span class="grow"></span>
+    <button class="cancel" title="Abort this in-flight request (browser side; the worker may still finish processing)">Cancel</button>
     <button class="reload" title="Load this payload back into the editor">Reload workflow</button>
     <button class="remove" title="Remove this entry from the feed (frees memory)" aria-label="Remove">×</button>
   `;
@@ -576,6 +579,9 @@ function entryCard(entry) {
     $('#workflow').value = JSON.stringify(entry.payload, null, 2);
     saveState();
     $('#workflow').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  head.querySelector('.cancel').addEventListener('click', () => {
+    if (entry.abort) entry.abort.abort();
   });
   head.querySelector('.remove').addEventListener('click', () => {
     const idx = history.indexOf(entry);
@@ -636,6 +642,9 @@ function updateEntry(entry) {
   const pill = entry._head.querySelector('.pill');
   pill.className   = 'pill ' + entry.status;
   pill.textContent = entry.status;
+  // Cancel button is meaningful only while in-flight.
+  const cancelBtn = entry._head.querySelector('.cancel');
+  if (cancelBtn) cancelBtn.style.display = entry.status === 'in-flight' ? '' : 'none';
   // Prefer the api-wrapper's server-side stage breakdown when
   // available — it's authoritative and shows where the time went.
   // Fall back to the browser-side fetch duration for older wrappers
@@ -771,6 +780,7 @@ async function submitOne(apiKey, endpointId, payload) {
   // concurrent fetches all reference the same dict and the in-flight
   // mutations leak across entries.
   const snapshot = JSON.parse(JSON.stringify(payload));
+  const abort = new AbortController();
   const entry = {
     id:       nextId++,
     ts:       new Date(),
@@ -780,6 +790,7 @@ async function submitOne(apiKey, endpointId, payload) {
     response: null,
     error:    null,
     blobUrls: [],
+    abort,                  // exposed for the per-entry Cancel button
   };
   entryCard(entry);
   updateEntry(entry);
@@ -787,16 +798,23 @@ async function submitOne(apiKey, endpointId, payload) {
 
   const t0 = Date.now();
   try {
-    const data = await postJSON('/api/submit', {
-      api_key: apiKey, endpoint_id: endpointId, payload: snapshot,
-    });
+    const data = await postJSON(
+      '/api/submit',
+      { api_key: apiKey, endpoint_id: endpointId, payload: snapshot },
+      { signal: abort.signal },
+    );
     entry.duration = (Date.now() - t0) / 1000;
     entry.response = data.response;
     entry.status   = 'completed';
   } catch (err) {
     entry.duration = (Date.now() - t0) / 1000;
-    entry.error    = err.message;
-    entry.status   = 'failed';
+    if (err.name === 'AbortError') {
+      entry.error  = 'cancelled by operator';
+      entry.status = 'cancelled';
+    } else {
+      entry.error  = err.message;
+      entry.status = 'failed';
+    }
   } finally {
     updateEntry(entry);
   }
