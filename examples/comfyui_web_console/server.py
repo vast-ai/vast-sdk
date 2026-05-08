@@ -69,12 +69,20 @@ logging.getLogger("vastai").setLevel(logging.WARNING)
 # whether it supports the tracker.worker_url field the
 # /api/status endpoint reads. Saves a head-scratch when a stale
 # wheel is winning the import race.
+#
+# Plain print() — the python logging tree gets reconfigured by
+# uvicorn at startup and our `comfyui_web_console` logger output
+# was getting swallowed before uvicorn took over. print() is
+# bulletproof against that.
 import vastai as _vastai
 _HAS_WORKER_URL = "worker_url" in _SdkRequestStatus.__dataclass_fields__
-log.info(
-    "vastai SDK loaded from: %s  (tracker.worker_url support: %s)",
-    Path(_vastai.__file__).parent,
-    "yes" if _HAS_WORKER_URL else "NO — install / source needs updating",
+print(
+    f"[comfyui_web_console] vastai SDK loaded from: "
+    f"{Path(_vastai.__file__).parent}  "
+    f"(tracker.worker_url support: "
+    f"{'yes' if _HAS_WORKER_URL else 'NO — install / source needs updating'})",
+    file=sys.stderr,
+    flush=True,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
